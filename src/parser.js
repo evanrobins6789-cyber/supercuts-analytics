@@ -84,18 +84,22 @@ export async function parseWeeklyReport(file) {
   let dateRangeLabel = null;
   const stores = [];
 
+  const isSummaryRow = text => /^(grand\s*)?total\s*:?$/i.test(String(text || '').trim());
+
   for (let r = 1; r < grid.length; r++) {
     const row = grid[r];
     if (!rowHasData(row)) continue;
     const firstCellText = cellText(row[0]);
     const rawName = cellText(row[col.name]);
-    // The file's own summary row can show "Grand Total" in the first column,
-    // in the Location Name column, or both depending on the export — check all of it.
-    if (/grand\s*total/i.test(firstCellText) || /grand\s*total/i.test(rawName)) continue;
+    // The file's own summary row can be labeled "Total" or "Grand Total", and
+    // can show up in the first column, the Location Name column, or both
+    // depending on the export — check both, and match the label exactly
+    // (not just "contains total") so a real store name is never excluded.
+    if (isSummaryRow(firstCellText) || isSummaryRow(rawName)) continue;
     if (!rawName) continue;
 
-    // Strip a leading store-code prefix like "8150 - " so only the readable name shows.
-    const name = rawName.replace(/^\s*\d+\s*-\s*/, '').trim() || rawName;
+    // Strip a leading store-code prefix like "8150 - " or "8150-" so only the readable name shows.
+    const name = rawName.replace(/^\s*\d+\s*-?\s*/, '').trim() || rawName;
 
     if (!dateRangeLabel) {
       const start = cellText(row[col.startDate]);
