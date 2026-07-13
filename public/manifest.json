@@ -1,0 +1,13 @@
+{
+  "short_name": "Store Scoreboard",
+  "name": "Supercuts Store Scoreboard",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "start_url": "/",
+  "display": "standalone",
+  "theme_color": "#142A4A",
+  "background_color": "#F4F6F8",
+  "orientation": "portrait-primary"
+}
