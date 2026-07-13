@@ -87,9 +87,15 @@ export async function parseWeeklyReport(file) {
   for (let r = 1; r < grid.length; r++) {
     const row = grid[r];
     if (!rowHasData(row)) continue;
-    const name = cellText(row[col.name]);
-    if (!name) continue;
-    if (/^grand\s*total\s*:?$/i.test(name)) continue; // skip the file's own (invalid) summary row
+    const firstCellText = cellText(row[0]);
+    const rawName = cellText(row[col.name]);
+    // The file's own summary row can show "Grand Total" in the first column,
+    // in the Location Name column, or both depending on the export — check all of it.
+    if (/grand\s*total/i.test(firstCellText) || /grand\s*total/i.test(rawName)) continue;
+    if (!rawName) continue;
+
+    // Strip a leading store-code prefix like "8150 - " so only the readable name shows.
+    const name = rawName.replace(/^\s*\d+\s*-\s*/, '').trim() || rawName;
 
     if (!dateRangeLabel) {
       const start = cellText(row[col.startDate]);

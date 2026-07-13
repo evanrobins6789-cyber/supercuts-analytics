@@ -12,33 +12,41 @@ const fmtInt = n => Number(n || 0).toLocaleString('en-US');
 const fmtRate = n => (n == null || isNaN(n) ? '—' : `$${n.toFixed(2)}`);
 const fmtNum = (n, d = 2) => (n == null || isNaN(n) ? '—' : Number(n).toFixed(d));
 
-const SORT_OPTIONS = [
-  { value: 'tsth', label: 'TSTH', dir: -1 },
-  { value: 'netSales', label: 'Net Sales', dir: -1 },
-  { value: 'cph', label: 'CPH', dir: -1 },
-  { value: 'ticketAvg', label: 'Ticket Average', dir: -1 },
-  { value: 'visits', label: 'Customer Visits', dir: -1 },
-  { value: 'haircuts', label: 'Hair Cuts', dir: -1 },
-  { value: 'totalHours', label: 'Total Hours', dir: -1 },
-  { value: 'name', label: 'Name (A–Z)', dir: 1 },
+// The 8 metrics the site focuses on, in display order.
+const METRICS = [
+  { key: 'visits', label: 'Guest Count', fmt: fmtInt },
+  { key: 'netSales', label: 'Net Sales', fmt: fmt$ },
+  { key: 'tsth', label: 'TSTH', fmt: fmtRate },
+  { key: 'totalHours', label: 'Total Hours', fmt: n => fmtNum(n, 0) },
+  { key: 'colorNet', label: 'Color Net', fmt: fmt$ },
+  { key: 'cpc', label: 'CPC', fmt: fmtNum },
+  { key: 'productNet', label: 'Product Net', fmt: fmt$ },
+  { key: 'rpc', label: 'RPC', fmt: fmtNum },
 ];
 
-function sortStores(stores, key) {
-  const opt = SORT_OPTIONS.find(o => o.value === key) || SORT_OPTIONS[0];
+const SORT_OPTIONS = [
+  ...METRICS.map(m => ({ value: m.key, label: m.label })),
+  { value: 'name', label: 'Name (A–Z)' },
+];
+
+function sortStores(stores, key, order = 'desc') {
   const arr = [...stores];
   if (key === 'name') {
-    arr.sort((a, b) => a.name.localeCompare(b.name));
+    arr.sort((a, b) => a.name.localeCompare(b.name) * (order === 'desc' ? -1 : 1));
   } else {
-    arr.sort((a, b) => ((b[key] ?? -Infinity) - (a[key] ?? -Infinity)) * (opt.dir === -1 ? 1 : -1));
+    arr.sort((a, b) => ((a[key] ?? 0) - (b[key] ?? 0)) * (order === 'desc' ? -1 : 1));
   }
   return arr;
 }
 
 // ─── Leaderboard (signature element) ───────────────────────────────────────
-function Leaderboard({ stores, metric = 'tsth', metricLabel = 'TSTH', formatter = fmtRate, title }) {
-  const ranked = useMemo(() => sortStores(stores, metric).slice(0, 8), [stores, metric]);
-  const maxVal = Math.max(...ranked.map(s => s[metric] || 0), 1);
-  const medalClass = i => (i === 0 ? 'rank-gold' : i === 1 ? 'rank-silver' : i === 2 ? 'rank-bronze' : 'rank-plain');
+function Leaderboard({ stores, metric, formatter, title, count = 8, order = 'desc' }) {
+  const ranked = useMemo(() => sortStores(stores, metric, order).slice(0, count), [stores, metric, count, order]);
+  const maxVal = Math.max(...ranked.map(s => Math.abs(s[metric] || 0)), 1);
+  const medalClass = i => {
+    if (order !== 'desc') return 'rank-plain';
+    return i === 0 ? 'rank-gold' : i === 1 ? 'rank-silver' : i === 2 ? 'rank-bronze' : 'rank-plain';
+  };
 
   return (
     <div className="leaderboard">
@@ -52,7 +60,7 @@ function Leaderboard({ stores, metric = 'tsth', metricLabel = 'TSTH', formatter 
               <span className="leaderboard-value">{formatter(s[metric])}</span>
             </div>
             <div className="leaderboard-bar-track">
-              <div className="leaderboard-bar-fill" style={{ width: `${Math.max(4, ((s[metric] || 0) / maxVal) * 100)}%` }} />
+              <div className="leaderboard-bar-fill" style={{ width: `${Math.max(4, (Math.abs(s[metric] || 0) / maxVal) * 100)}%` }} />
             </div>
           </div>
         </div>
@@ -88,49 +96,45 @@ function UploadSlot({ fileInfo, uploading, onFile }) {
   );
 }
 
-// ─── Overview tab ───────────────────────────────────────────────────────────
-function OverviewTab({ report }) {
-  const t = report.totals;
+function UploadTab({ report, uploading, onFile, onClear }) {
   return (
     <div className="tab-content">
+      <UploadSlot
+        fileInfo={report ? { fileName: report.fileName, sub: `${report.storeCount} stores · ${fmt$(report.totals.netSales)} total net sales` } : null}
+        uploading={uploading}
+        onFile={onFile}
+      />
+      {report && (
+        <button className="btn-ghost btn-danger" onClick={onClear}>Clear this report</button>
+      )}
+    </div>
+  );
+}
+
+// ─── Overview tab ───────────────────────────────────────────────────────────
+function OverviewTab({ report, selected, onSelect }) {
+  const t = report.totals;
+  const metric = METRICS.find(m => m.key === selected) || METRICS[0];
+
+  return (
+    <div className="tab-content">
+      <p className="section-hint">Tap any metric to see the top 10 and bottom 10 stores for it.</p>
       <div className="summary-grid">
-        <div className="summary-tile">
-          <p className="summary-tile-label">Net Sales</p>
-          <p className="summary-tile-value">{fmt$(t.netSales)}</p>
-        </div>
-        <div className="summary-tile summary-tile--accent">
-          <p className="summary-tile-label">TSTH</p>
-          <p className="summary-tile-value">{fmtRate(t.tsth)}</p>
-        </div>
-        <div className="summary-tile">
-          <p className="summary-tile-label">CPH</p>
-          <p className="summary-tile-value">{fmtNum(t.cph)}</p>
-        </div>
-        <div className="summary-tile">
-          <p className="summary-tile-label">Ticket Average</p>
-          <p className="summary-tile-value">{fmtRate(t.ticketAvg)}</p>
-        </div>
-        <div className="summary-tile">
-          <p className="summary-tile-label">Customer Visits</p>
-          <p className="summary-tile-value">{fmtInt(t.visits)}</p>
-        </div>
-        <div className="summary-tile">
-          <p className="summary-tile-label">Hair Cuts</p>
-          <p className="summary-tile-value">{fmtInt(t.haircuts)}</p>
-        </div>
-        <div className="summary-tile">
-          <p className="summary-tile-label">Total Hours</p>
-          <p className="summary-tile-value">{fmtNum(t.totalHours, 0)}</p>
-        </div>
-        <div className="summary-tile">
-          <p className="summary-tile-label">Stores Reporting</p>
-          <p className="summary-tile-value">{report.storeCount}</p>
-        </div>
+        {METRICS.map(m => (
+          <button
+            key={m.key}
+            className={`summary-tile ${selected === m.key ? 'summary-tile--active' : ''}`}
+            onClick={() => onSelect(m.key)}
+          >
+            <p className="summary-tile-label">{m.label}</p>
+            <p className="summary-tile-value">{m.fmt(t[m.key])}</p>
+          </button>
+        ))}
       </div>
 
       <div className="leaderboard-grid">
-        <Leaderboard stores={report.stores} metric="tsth" metricLabel="TSTH" formatter={fmtRate} title="Top stores — TSTH" />
-        <Leaderboard stores={report.stores} metric="netSales" metricLabel="Net Sales" formatter={fmt$} title="Top stores — Net Sales" />
+        <Leaderboard stores={report.stores} metric={metric.key} formatter={metric.fmt} title={`Top 10 — ${metric.label}`} count={10} order="desc" />
+        <Leaderboard stores={report.stores} metric={metric.key} formatter={metric.fmt} title={`Bottom 10 — ${metric.label}`} count={10} order="asc" />
       </div>
     </div>
   );
@@ -139,9 +143,9 @@ function OverviewTab({ report }) {
 // ─── Stores tab ─────────────────────────────────────────────────────────────
 function StoresTab({ report }) {
   const [sortBy, setSortBy] = useState('tsth');
-  const sorted = useMemo(() => sortStores(report.stores, sortBy), [report.stores, sortBy]);
+  const sorted = useMemo(() => sortStores(report.stores, sortBy, 'desc'), [report.stores, sortBy]);
 
-  const chartRows = useMemo(() => sortStores(report.stores, 'netSales').slice(0, 15), [report.stores]);
+  const chartRows = useMemo(() => sortStores(report.stores, 'netSales', 'desc').slice(0, 15), [report.stores]);
   const chartData = {
     labels: chartRows.map(s => s.name),
     datasets: [{ label: 'TSTH', data: chartRows.map(s => Math.round(s.tsth * 100) / 100), backgroundColor: '#C23B3B', borderRadius: 4 }],
@@ -181,9 +185,8 @@ function StoresTab({ report }) {
           <thead>
             <tr>
               <th className="ledger-name-col">Store</th>
-              <th>Visits</th><th>Hair Cuts</th><th>CPH</th><th>Net Sales</th><th>Ticket Avg</th><th>TSTH</th>
-              <th>Total Hrs</th><th>Prod Hrs</th><th>Non-Prod Hrs</th>
-              <th>Color Net</th><th>CPC</th><th>Product Net</th><th>RPC</th><th>Other Net</th><th>OPC</th>
+              <th>Guest Count</th><th>Net Sales</th><th>TSTH</th><th>Total Hours</th>
+              <th>Color Net</th><th>CPC</th><th>Product Net</th><th>RPC</th>
             </tr>
           </thead>
           <tbody>
@@ -191,20 +194,13 @@ function StoresTab({ report }) {
               <tr key={s.name}>
                 <td className="ledger-name-col">{s.name}</td>
                 <td>{fmtInt(s.visits)}</td>
-                <td>{fmtInt(s.haircuts)}</td>
-                <td>{fmtNum(s.cph)}</td>
                 <td>{fmt$(s.netSales)}</td>
-                <td>{fmtRate(s.ticketAvg)}</td>
                 <td className="ledger-rate">{fmtRate(s.tsth)}</td>
                 <td>{fmtNum(s.totalHours, 0)}</td>
-                <td>{fmtNum(s.prodHours, 0)}</td>
-                <td>{fmtNum(s.nonProdHours, 0)}</td>
                 <td>{fmt$(s.colorNet)}</td>
                 <td>{fmtNum(s.cpc)}</td>
                 <td>{fmt$(s.productNet)}</td>
                 <td>{fmtNum(s.rpc)}</td>
-                <td>{fmt$(s.otherNet)}</td>
-                <td>{fmtNum(s.opc)}</td>
               </tr>
             ))}
           </tbody>
@@ -212,25 +208,18 @@ function StoresTab({ report }) {
             <tr className="ledger-avg-row">
               <td className="ledger-name-col">Company (weighted)</td>
               <td>{fmtInt(t.visits)}</td>
-              <td>{fmtInt(t.haircuts)}</td>
-              <td>{fmtNum(t.cph)}</td>
               <td>{fmt$(t.netSales)}</td>
-              <td>{fmtRate(t.ticketAvg)}</td>
               <td className="ledger-rate">{fmtRate(t.tsth)}</td>
               <td>{fmtNum(t.totalHours, 0)}</td>
-              <td>{fmtNum(t.prodHours, 0)}</td>
-              <td>{fmtNum(t.nonProdHours, 0)}</td>
               <td>{fmt$(t.colorNet)}</td>
               <td>{fmtNum(t.cpc)}</td>
               <td>{fmt$(t.productNet)}</td>
               <td>{fmtNum(t.rpc)}</td>
-              <td>{fmt$(t.otherNet)}</td>
-              <td>{fmtNum(t.opc)}</td>
             </tr>
           </tfoot>
         </table>
       </div>
-      <p className="ledger-footnote">Company row is a true weighted total (e.g. TSTH = total net sales ÷ total hours) — not a plain average of each store's TSTH, which would overweight small stores.</p>
+      <p className="ledger-footnote">Company row is a true weighted total (e.g. TSTH = total net sales ÷ total hours) — not a plain average of each store's TSTH, which would overweight small stores. Ratio metrics (TSTH, CPC, RPC) are never simply summed.</p>
     </div>
   );
 }
@@ -239,8 +228,8 @@ function StoresTab({ report }) {
 function SetupTab({ configured }) {
   const steps = [
     { n: 1, title: 'Export this week\u2019s report', body: 'Run your weekly store performance report — one row per store, covering the week you want to see.' },
-    { n: 2, title: 'Upload it', body: 'Tap + on the Weekly Report slot above. The date range fills in automatically from the file.' },
-    { n: 3, title: 'Read the scoreboard', body: 'Overview shows company-wide totals and a leaderboard of top stores. Stores shows every location with the full set of metrics, sortable by any column.' },
+    { n: 2, title: 'Upload it', body: 'Go to the Upload tab and drop the file in. The date range fills in automatically from the file.' },
+    { n: 3, title: 'Read the scoreboard', body: 'Overview lets you tap any of 8 key metrics to see the top 10 and bottom 10 stores for it. Stores shows every location side by side, sortable by any column.' },
     { n: 4, title: 'Next week', body: 'Just upload the new file the same way \u2014 it replaces this week\u2019s data for everyone viewing the site.' },
   ];
   return (
@@ -285,7 +274,7 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;`}<
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Overview', 'Stores', 'Setup'];
+const TABS = ['Overview', 'Stores', 'Upload', 'Setup'];
 
 export default function App() {
   const [report, setReport] = useState(null);
@@ -294,11 +283,15 @@ export default function App() {
   const [tab, setTab] = useState('Overview');
   const [toast, setToast] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [panelOpen, setPanelOpen] = useState(true);
+  const [selectedMetric, setSelectedMetric] = useState('tsth');
 
   useEffect(() => {
     loadReport().then(({ data, source, error }) => {
-      if (data) { setReport(data); setPanelOpen(false); }
+      if (data) {
+        setReport(data);
+      } else {
+        setTab('Upload');
+      }
       setLoading(false);
       if (isConfigured() && source === 'local') {
         showToast(`Couldn't reach Supabase (${error || 'unknown error'}) — showing this device's local data only`, 'error');
@@ -323,6 +316,7 @@ export default function App() {
       } else {
         showToast(`Loaded ${file.name} — ${parsed.storeCount} stores found`);
       }
+      setTab('Overview');
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -335,7 +329,7 @@ export default function App() {
     await clearReport();
     setReport(null);
     setLabel('');
-    setPanelOpen(true);
+    setTab('Upload');
     showToast('Report cleared');
   };
 
@@ -350,41 +344,23 @@ export default function App() {
           <h1 className="app-title">Store Scoreboard</h1>
           <p className="app-subtitle">{label || 'Weekly performance across every location'}</p>
         </div>
-        <div className="header-right">
-          {report && <button className="btn-ghost" onClick={handleClearAll}>Clear</button>}
-        </div>
       </header>
 
-      {(!report || panelOpen) && (
-        <section className="upload-center">
-          <UploadSlot
-            fileInfo={report ? { fileName: report.fileName, sub: `${report.storeCount} stores · ${fmt$(report.totals.netSales)} total net sales` } : null}
-            uploading={uploading}
-            onFile={handleFile}
-          />
-          {report && <button className="btn-ghost btn-collapse" onClick={() => setPanelOpen(false)}>Hide file panel ↑</button>}
-        </section>
-      )}
-      {report && !panelOpen && (
-        <button className="manage-files-bar" onClick={() => setPanelOpen(true)}>Manage the uploaded report ↓</button>
-      )}
-
-      {report ? (
-        <>
-          <nav className="tab-nav">
-            {TABS.map(t => (
-              <button key={t} className={`tab-btn ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>{t}</button>
-            ))}
-          </nav>
-          <main className="app-main">
-            {tab === 'Overview' && <OverviewTab report={report} />}
-            {tab === 'Stores' && <StoresTab report={report} />}
-            {tab === 'Setup' && <SetupTab configured={isConfigured()} />}
-          </main>
-        </>
-      ) : (
-        <main className="app-main"><SetupTab configured={isConfigured()} /></main>
-      )}
+      <nav className="tab-nav">
+        {TABS.map(t => (
+          <button key={t} className={`tab-btn ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>{t}</button>
+        ))}
+      </nav>
+      <main className="app-main">
+        {tab === 'Overview' && (report
+          ? <OverviewTab report={report} selected={selectedMetric} onSelect={setSelectedMetric} />
+          : <div className="empty-state"><p className="empty-title">No report yet</p><p>Go to the Upload tab to add this week's report.</p></div>)}
+        {tab === 'Stores' && (report
+          ? <StoresTab report={report} />
+          : <div className="empty-state"><p className="empty-title">No report yet</p><p>Go to the Upload tab to add this week's report.</p></div>)}
+        {tab === 'Upload' && <UploadTab report={report} uploading={uploading} onFile={handleFile} onClear={handleClearAll} />}
+        {tab === 'Setup' && <SetupTab configured={isConfigured()} />}
+      </main>
     </div>
   );
 }
