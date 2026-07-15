@@ -185,6 +185,26 @@
 .empty-note { font-size: 12.5px; color: var(--ink-soft); }
 .empty-state { text-align: center; padding: 40px 20px; color: var(--ink-soft); }
 .empty-title { font-family: 'Barlow Condensed', sans-serif; font-size: 20px; font-weight: 600; color: var(--navy); margin-bottom: 4px; }
+
+/* ─── DL tab ─────────────────────────────────────────────────────────── */
+.dl-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+.dl-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
+.dl-card-head {
+  width: 100%; text-align: left; background: none; border: none; cursor: pointer;
+  padding: 14px 16px; font-family: inherit; display: flex; flex-direction: column; gap: 10px;
+}
+.dl-card-head:hover { background: rgba(194,59,59,0.04); }
+.dl-card-name-wrap { display: flex; align-items: center; gap: 8px; }
+.dl-chevron { color: var(--red); font-size: 13px; transition: transform 0.15s ease; display: inline-block; }
+.dl-chevron--open { transform: rotate(90deg); }
+.dl-card-name { font-family: 'Barlow Condensed', sans-serif; font-size: 18px; font-weight: 600; color: var(--navy); }
+.dl-card-count { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); margin-left: auto; }
+.dl-card-stats { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+@media (max-width: 760px) { .dl-card-stats { grid-template-columns: repeat(3, 1fr); } }
+.dl-stat { display: flex; flex-direction: column; }
+.dl-stat-label { font-size: 9.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.02em; }
+.dl-stat-value { font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 600; color: var(--navy); }
+.dl-store-table { border: none; box-shadow: none; border-top: 1px solid var(--line); border-radius: 0; }
 .app-loading { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
 .spinner { border: 2px solid var(--line); border-top-color: var(--red); border-radius: 50%; animation: spin 0.7s linear infinite; }
 .spinner.small { width: 14px; height: 14px; }

@@ -3,6 +3,7 @@ import { Bar } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip, Legend } from 'chart.js';
 import { loadReport, saveReport, clearReport, isConfigured } from './db';
 import { parseStylistReport } from './parser';
+import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import './App.css';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend);
@@ -42,6 +43,56 @@ function sortByMetric(rows, key, order = 'desc') {
     arr.sort((a, b) => ((a[key] ?? 0) - (b[key] ?? 0)) * (order === 'desc' ? -1 : 1));
   }
   return arr;
+}
+
+// Re-aggregate a set of already-rolled-up rows (stores, or store totals) one
+// level higher (e.g. up to a District Leader). Sums the additive fields and
+// recomputes the ratio fields from those sums — never averages ratios directly.
+function rollupRows(rows) {
+  const sum = key => rows.reduce((s, r) => s + (r[key] || 0), 0);
+  const totalSales = sum('sales');
+  const totalHours = sum('totalHours');
+  const totalColor = sum('colorSales');
+  const totalRetail = sum('retail');
+  const totalHaircuts = sum('haircuts');
+  return {
+    sales: totalSales,
+    totalHours,
+    colorSales: totalColor,
+    retail: totalRetail,
+    haircuts: totalHaircuts,
+    tsth: totalHours > 0 ? totalSales / totalHours : null,
+    cpc: totalHaircuts > 0 ? totalColor / totalHaircuts : null,
+    rpc: totalHaircuts > 0 ? totalRetail / totalHaircuts : null,
+  };
+}
+
+// Groups store rows (each needs a `code` and `name`) under their District
+// Leader / Area Supervisor, in the roster's own order. Stores with no match
+// in the roster land in a trailing "Unassigned" group instead of vanishing.
+function groupStoresByLeader(storeRows) {
+  const order = [];
+  LEADER_ROSTER_SECTIONS.forEach(sec => sec.leaders.forEach(l => order.push({ name: l.name, role: sec.role })));
+
+  const withLeader = storeRows.map(r => {
+    const info = getLeaderForStoreCode(r.code);
+    return { ...r, leaderName: info ? info.leaderName : 'Unassigned', role: info ? info.role : 'Unassigned' };
+  });
+
+  const byLeader = new Map();
+  withLeader.forEach(r => {
+    if (!byLeader.has(r.leaderName)) byLeader.set(r.leaderName, []);
+    byLeader.get(r.leaderName).push(r);
+  });
+
+  const groups = order
+    .map(o => ({ leaderName: o.name, role: o.role, stores: byLeader.get(o.name) || [] }))
+    .filter(g => g.stores.length > 0);
+
+  if (byLeader.has('Unassigned')) {
+    groups.push({ leaderName: 'Unassigned', role: 'Unassigned', stores: byLeader.get('Unassigned') });
+  }
+  return groups;
 }
 
 // ─── Search ─────────────────────────────────────────────────────────────────
@@ -133,7 +184,7 @@ function OverviewTab({ report, selected, onSelect, query, onQuery }) {
   const t = report.companyTotals;
   const metric = STORE_METRICS.find(m => m.key === selected) || STORE_METRICS[0];
   const storeRows = useMemo(() => {
-    const rows = report.stores.map(s => ({ name: s.name, ...s.totals }));
+    const rows = report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals }));
     if (!query.trim()) return rows;
     const q = query.trim().toLowerCase();
     return rows.filter(r => r.name.toLowerCase().includes(q));
@@ -167,7 +218,7 @@ function OverviewTab({ report, selected, onSelect, query, onQuery }) {
 // ─── Stores tab ─────────────────────────────────────────────────────────────
 function StoresTab({ report, query, onQuery }) {
   const [sortBy, setSortBy] = useState('tsth');
-  const rows = useMemo(() => report.stores.map(s => ({ name: s.name, ...s.totals })), [report.stores]);
+  const rows = useMemo(() => report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })), [report.stores]);
   const filtered = useMemo(() => {
     if (!query.trim()) return rows;
     const q = query.trim().toLowerCase();
@@ -358,47 +409,78 @@ function ByStoreTab({ report, query, onQuery }) {
   );
 }
 
-// ─── Single-focus store tabs (Retail, Color Sales) ─────────────────────────
+// ─── Single-focus store tabs (Retail, Color Sales) — grouped by DL ─────────
 function StoreMetricTab({ report, query, onQuery, title, metricA, metricB }) {
   const [sortBy, setSortBy] = useState(metricA.key);
-  const rows = useMemo(() => report.stores.map(s => ({ name: s.name, ...s.totals })), [report.stores]);
-  const filtered = useMemo(() => {
-    if (!query.trim()) return rows;
+  const rows = useMemo(() => report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })), [report.stores]);
+  const groups = useMemo(() => groupStoresByLeader(rows), [rows]);
+
+  const filteredGroups = useMemo(() => {
+    if (!query.trim()) return groups;
     const q = query.trim().toLowerCase();
-    return rows.filter(r => r.name.toLowerCase().includes(q));
-  }, [rows, query]);
-  const sorted = useMemo(() => sortByMetric(filtered, sortBy, 'desc'), [filtered, sortBy]);
+    return groups
+      .map(g => {
+        const leaderMatches = g.leaderName.toLowerCase().includes(q);
+        const stores = leaderMatches ? g.stores : g.stores.filter(s => s.name.toLowerCase().includes(q));
+        return { ...g, stores };
+      })
+      .filter(g => g.stores.length > 0);
+  }, [groups, query]);
+
   const t = report.companyTotals;
+  const totalStoresShown = filteredGroups.reduce((n, g) => n + g.stores.length, 0);
 
   return (
     <div className="tab-content">
-      <SearchBox value={query} onChange={onQuery} placeholder="Search stores…" />
+      <SearchBox value={query} onChange={onQuery} placeholder="Search stores or DL…" />
       <div className="ledger-head-row">
-        <p className="section-label">{title} — {filtered.length} of {report.storeCount} stores</p>
+        <p className="section-label">{title} — {totalStoresShown} of {report.storeCount} stores, grouped by DL</p>
         <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
           <option value={metricA.key}>Sort: {metricA.label}</option>
           <option value={metricB.key}>Sort: {metricB.label}</option>
           <option value="name">Sort: Name (A–Z)</option>
         </select>
       </div>
+
+      {filteredGroups.map(g => {
+        const groupTotals = rollupRows(g.stores);
+        const sortedStores = sortByMetric(g.stores, sortBy, 'desc');
+        return (
+          <div key={g.leaderName} className="store-group">
+            <p className="store-group-title">
+              {g.leaderName} <span className="store-group-count">{g.role} · {g.stores.length} store{g.stores.length !== 1 ? 's' : ''}</span>
+            </p>
+            <div className="ledger-scroll">
+              <table className="ledger-table">
+                <thead>
+                  <tr><th className="ledger-name-col">Store</th><th>{metricA.label}</th><th>{metricB.label}</th></tr>
+                </thead>
+                <tbody>
+                  {sortedStores.map(s => (
+                    <tr key={s.name}>
+                      <td className="ledger-name-col">{s.name}</td>
+                      <td>{metricA.fmt(s[metricA.key])}</td>
+                      <td>{metricB.fmt(s[metricB.key])}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="ledger-avg-row">
+                    <td className="ledger-name-col">{g.leaderName} total / weighted avg</td>
+                    <td>{metricA.fmt(groupTotals[metricA.key])}</td>
+                    <td>{metricB.fmt(groupTotals[metricB.key])}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+
+      {!filteredGroups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
+
       <div className="ledger-scroll">
         <table className="ledger-table">
-          <thead>
-            <tr>
-              <th className="ledger-name-col">Store</th>
-              <th>{metricA.label}</th>
-              <th>{metricB.label}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map(s => (
-              <tr key={s.name}>
-                <td className="ledger-name-col">{s.name}</td>
-                <td>{metricA.fmt(s[metricA.key])}</td>
-                <td>{metricB.fmt(s[metricB.key])}</td>
-              </tr>
-            ))}
-          </tbody>
           <tfoot>
             <tr className="ledger-avg-row">
               <td className="ledger-name-col">Company (weighted)</td>
@@ -408,7 +490,101 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB }) {
           </tfoot>
         </table>
       </div>
-      {!sorted.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
+    </div>
+  );
+}
+
+// ─── DL tab ─────────────────────────────────────────────────────────────────
+function DLTab({ report, query, onQuery }) {
+  const [expanded, setExpanded] = useState({});
+  const rows = useMemo(() => report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })), [report.stores]);
+  const groups = useMemo(() => groupStoresByLeader(rows), [rows]);
+
+  const filteredGroups = useMemo(() => {
+    if (!query.trim()) return groups;
+    const q = query.trim().toLowerCase();
+    return groups
+      .map(g => {
+        const leaderMatches = g.leaderName.toLowerCase().includes(q);
+        const stores = leaderMatches ? g.stores : g.stores.filter(s => s.name.toLowerCase().includes(q));
+        return { ...g, stores };
+      })
+      .filter(g => g.stores.length > 0);
+  }, [groups, query]);
+
+  const grouped = useMemo(() => {
+    const byRole = new Map();
+    filteredGroups.forEach(g => {
+      if (!byRole.has(g.role)) byRole.set(g.role, []);
+      byRole.get(g.role).push(g);
+    });
+    return Array.from(byRole.entries());
+  }, [filteredGroups]);
+
+  const toggle = name => setExpanded(prev => ({ ...prev, [name]: !prev[name] }));
+
+  return (
+    <div className="tab-content">
+      <SearchBox value={query} onChange={onQuery} placeholder="Search DLs or stores…" />
+      {!filteredGroups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No matches for "{query}".</p>}
+
+      {grouped.map(([role, roleGroups]) => (
+        <div key={role}>
+          <p className="section-label" style={{ marginBottom: 4 }}>{role}</p>
+          <div className="dl-list">
+            {roleGroups.map(g => {
+              const t = rollupRows(g.stores);
+              const isOpen = !!expanded[g.leaderName];
+              return (
+                <div key={g.leaderName} className="dl-card">
+                  <button className="dl-card-head" onClick={() => toggle(g.leaderName)}>
+                    <div className="dl-card-name-wrap">
+                      <span className={`dl-chevron ${isOpen ? 'dl-chevron--open' : ''}`}>▸</span>
+                      <span className="dl-card-name">{g.leaderName}</span>
+                      <span className="dl-card-count">{g.stores.length} store{g.stores.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div className="dl-card-stats">
+                      <div className="dl-stat"><span className="dl-stat-label">Sales</span><span className="dl-stat-value">{fmt$(t.sales)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">TSTH</span><span className="dl-stat-value">{fmtRate(t.tsth)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Hours</span><span className="dl-stat-value">{fmtNum(t.totalHours, 0)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Color</span><span className="dl-stat-value">{fmt$(t.colorSales)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">CPC</span><span className="dl-stat-value">{fmtNum(t.cpc)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Retail</span><span className="dl-stat-value">{fmt$(t.retail)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(t.rpc)}</span></div>
+                    </div>
+                  </button>
+                  {isOpen && (
+                    <div className="ledger-scroll dl-store-table">
+                      <table className="ledger-table">
+                        <thead>
+                          <tr>
+                            <th className="ledger-name-col">Store</th>
+                            <th>Sales</th><th>TSTH</th><th>Total Hours</th><th>Color Sales</th><th>CPC</th><th>Retail</th><th>RPC</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sortByMetric(g.stores, 'sales', 'desc').map(s => (
+                            <tr key={s.name}>
+                              <td className="ledger-name-col">{s.name}</td>
+                              <td>{fmt$(s.sales)}</td>
+                              <td className="ledger-rate">{fmtRate(s.tsth)}</td>
+                              <td>{fmtNum(s.totalHours, 0)}</td>
+                              <td>{fmt$(s.colorSales)}</td>
+                              <td>{fmtNum(s.cpc)}</td>
+                              <td>{fmt$(s.retail)}</td>
+                              <td>{fmtNum(s.rpc)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -463,7 +639,7 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;`}<
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Overview', 'Stores', 'Employees', 'By Store', 'Retail', 'Color Sales', 'Upload', 'Setup'];
+const TABS = ['Overview', 'Stores', 'Employees', 'By Store', 'Retail', 'Color Sales', 'DL', 'Upload', 'Setup'];
 
 export default function App() {
   const [report, setReport] = useState(null);
@@ -473,7 +649,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [selectedMetric, setSelectedMetric] = useState('tsth');
-  const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', 'By Store': '', Retail: '', 'Color Sales': '' });
+  const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', 'By Store': '', Retail: '', 'Color Sales': '', DL: '' });
 
   useEffect(() => {
     loadReport().then(({ data, source, error }) => {
@@ -566,6 +742,9 @@ export default function App() {
             report={report} query={queries['Color Sales']} onQuery={v => setQuery('Color Sales', v)}
             title="Color Sales" metricA={{ key: 'colorSales', label: 'Color Sales', fmt: fmt$ }} metricB={{ key: 'cpc', label: 'CPC', fmt: fmtNum }}
           />
+        )}
+        {!needsReport && tab === 'DL' && report && (
+          <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} />
         )}
         {tab === 'Upload' && <UploadTab report={report} uploading={uploading} onFile={handleFile} onClear={handleClearAll} />}
         {tab === 'Setup' && <SetupTab configured={isConfigured()} />}

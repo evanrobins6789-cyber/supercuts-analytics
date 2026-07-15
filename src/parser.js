@@ -129,7 +129,8 @@ export async function parseStylistReport(file) {
 
     if (locationRaw && !first && !last) {
       // Store header row — starts a new store section.
-      current = { name: cleanStoreName(locationRaw), employees: [] };
+      const codeMatch = locationRaw.match(/^\s*(\d+)/);
+      current = { name: cleanStoreName(locationRaw), code: codeMatch ? String(parseInt(codeMatch[1], 10)) : null, employees: [] };
       stores.push(current);
       if (!dateRangeLabel) {
         const start = cellText(row[col.startDate]);
