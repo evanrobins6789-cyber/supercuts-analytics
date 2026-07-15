@@ -235,3 +235,25 @@ export async function parseEmployeeStartDates(file) {
 
   return { employees, fileName: file.name };
 }
+
+// ─── Goal file (DL | Salon | Goal amount) ──────────────────────────────────
+// Read by column position rather than header text, since the goal column's
+// header changes every time (e.g. "July 26 Goal") — always DL, Store, Goal.
+export async function parseGoalFile(file) {
+  const grid = await readWorkbookGrid(file);
+  if (grid.length < 2) throw new Error('This file does not have any goal rows in it.');
+
+  const periodLabel = cellText(grid[0][2]) || 'Goal';
+  const entries = [];
+  for (let r = 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (!rowHasData(row)) continue;
+    const storeName = cellText(row[1]);
+    if (!storeName) continue;
+    const amount = numOf(row[2]);
+    entries.push({ storeName, amount });
+  }
+  if (!entries.length) throw new Error('No store goal rows found in this file.');
+
+  return { entries, periodLabel, fileName: file.name };
+}

@@ -1,12 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Bar } from 'react-chartjs-2';
-import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip, Legend } from 'chart.js';
 import { loadData, saveData, clearData, isConfigured } from './db';
-import { parseStylistReport, parseEmployeeStartDates, normalizeName } from './parser';
+import { parseStylistReport, parseEmployeeStartDates, parseGoalFile, normalizeName } from './parser';
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
+import { getCodeForStoreName } from './storeDirectory';
 import './App.css';
-
-ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend);
 
 const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 const fmtInt = n => Number(n || 0).toLocaleString('en-US');
@@ -244,33 +241,12 @@ function StoresTab({ report, query, onQuery }) {
   }, [storeRows, query, isSearching]);
   const sorted = useMemo(() => sortByMetric(filtered, sortBy, 'desc'), [filtered, sortBy]);
 
-  const chartRows = useMemo(() => sortByMetric(storeRows, 'sales', 'desc').slice(0, 15), [storeRows]);
-  const chartData = {
-    labels: chartRows.map(s => s.name),
-    datasets: [{ label: 'TSTH', data: chartRows.map(s => Math.round((s.tsth || 0) * 100) / 100), backgroundColor: '#C23B3B', borderRadius: 4 }],
-  };
-  const chartOpts = {
-    indexAxis: 'y', responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` TSTH: ${fmtRate(ctx.parsed.x)}` } } },
-    scales: {
-      x: { grid: { color: 'rgba(20,42,74,0.06)' }, ticks: { color: '#4A5A70', font: { size: 10, family: 'IBM Plex Mono' } } },
-      y: { grid: { display: false }, ticks: { color: '#142A4A', font: { size: 11, family: 'Inter' } } },
-    },
-  };
-
   const t = report.companyTotals;
   const toggle = name => setExpanded(prev => ({ ...prev, [name]: !prev[name] }));
 
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores or employees…" />
-
-      <div className="chart-card">
-        <p className="chart-title">TSTH by store (top 15 by sales)</p>
-        <div style={{ height: Math.max(240, chartRows.length * 26 + 40) }}>
-          <Bar data={chartData} options={chartOpts} />
-        </div>
-      </div>
 
       <div className="ledger-head-row">
         <p className="section-label">{filtered.length} of {report.storeCount} stores</p>
@@ -412,11 +388,14 @@ function EmployeesTab({ report, query, onQuery }) {
 }
 
 // ─── Single-focus store tabs (Retail, Color Sales) — grouped by DL ─────────
-function StoreMetricTab({ report, query, onQuery, title, metricA, metricB }) {
+function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals }) {
   const [sortBy, setSortBy] = useState(metricA.key);
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
   const rows = useMemo(() => report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })), [report.stores]);
   const groups = useMemo(() => groupStoresByLeader(rows), [rows]);
+
+  const getGoal = code => (goalType && goals?.[code]?.[goalType] != null ? goals[code][goalType] : null);
+  const showGoals = !!goalType;
 
   const filteredGroups = useMemo(() => {
     if (!query.trim()) return groups;
@@ -442,6 +421,9 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB }) {
     ? filteredGroups.reduce((n, g) => n + g.stores.length, 0)
     : filteredFlat.length;
 
+  const groupGoalTotal = storesArr => storesArr.reduce((s, st) => s + (getGoal(st.code) ?? 0), 0);
+  const companyGoalTotal = rows.reduce((s, st) => s + (getGoal(st.code) ?? 0), 0);
+
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
@@ -463,6 +445,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB }) {
       {viewMode === 'dl' && filteredGroups.map(g => {
         const groupTotals = rollupRows(g.stores);
         const sortedStores = sortByMetric(g.stores, sortBy, 'desc');
+        const goalTotal = groupGoalTotal(g.stores);
         return (
           <div key={g.leaderName} className="store-group">
             <p className="store-group-title">
@@ -471,22 +454,43 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB }) {
             <div className="ledger-scroll">
               <table className="ledger-table">
                 <thead>
-                  <tr><th className="ledger-name-col">Store</th><th>{metricA.label}</th><th>{metricB.label}</th></tr>
+                  <tr>
+                    <th className="ledger-name-col">Store</th><th>{metricA.label}</th><th>{metricB.label}</th>
+                    {showGoals && <><th>Goal</th><th>vs Goal</th></>}
+                  </tr>
                 </thead>
                 <tbody>
-                  {sortedStores.map(s => (
-                    <tr key={s.name}>
-                      <td className="ledger-name-col">{s.name}</td>
-                      <td>{metricA.fmt(s[metricA.key])}</td>
-                      <td>{metricB.fmt(s[metricB.key])}</td>
-                    </tr>
-                  ))}
+                  {sortedStores.map(s => {
+                    const goal = getGoal(s.code);
+                    const diff = goal != null ? s[metricA.key] - goal : null;
+                    return (
+                      <tr key={s.name}>
+                        <td className="ledger-name-col">{s.name}</td>
+                        <td>{metricA.fmt(s[metricA.key])}</td>
+                        <td>{metricB.fmt(s[metricB.key])}</td>
+                        {showGoals && (
+                          <>
+                            <td>{goal != null ? fmt$(goal) : '—'}</td>
+                            <td className={diff != null && diff < 0 ? 'ledger-margin-neg' : ''}>{diff != null ? `${diff >= 0 ? '+' : ''}${fmt$(diff)}` : '—'}</td>
+                          </>
+                        )}
+                      </tr>
+                    );
+                  })}
                 </tbody>
                 <tfoot>
                   <tr className="ledger-avg-row">
                     <td className="ledger-name-col">{g.leaderName} total / weighted avg</td>
                     <td>{metricA.fmt(groupTotals[metricA.key])}</td>
                     <td>{metricB.fmt(groupTotals[metricB.key])}</td>
+                    {showGoals && (
+                      <>
+                        <td>{goalTotal > 0 ? fmt$(goalTotal) : '—'}</td>
+                        <td className={goalTotal > 0 && groupTotals[metricA.key] - goalTotal < 0 ? 'ledger-margin-neg' : ''}>
+                          {goalTotal > 0 ? `${groupTotals[metricA.key] - goalTotal >= 0 ? '+' : ''}${fmt$(groupTotals[metricA.key] - goalTotal)}` : '—'}
+                        </td>
+                      </>
+                    )}
                   </tr>
                 </tfoot>
               </table>
@@ -499,22 +503,43 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB }) {
         <div className="ledger-scroll">
           <table className="ledger-table">
             <thead>
-              <tr><th className="ledger-name-col">Store</th><th>{metricA.label}</th><th>{metricB.label}</th></tr>
+              <tr>
+                <th className="ledger-name-col">Store</th><th>{metricA.label}</th><th>{metricB.label}</th>
+                {showGoals && <><th>Goal</th><th>vs Goal</th></>}
+              </tr>
             </thead>
             <tbody>
-              {sortedFlat.map(s => (
-                <tr key={s.name}>
-                  <td className="ledger-name-col">{s.name}</td>
-                  <td>{metricA.fmt(s[metricA.key])}</td>
-                  <td>{metricB.fmt(s[metricB.key])}</td>
-                </tr>
-              ))}
+              {sortedFlat.map(s => {
+                const goal = getGoal(s.code);
+                const diff = goal != null ? s[metricA.key] - goal : null;
+                return (
+                  <tr key={s.name}>
+                    <td className="ledger-name-col">{s.name}</td>
+                    <td>{metricA.fmt(s[metricA.key])}</td>
+                    <td>{metricB.fmt(s[metricB.key])}</td>
+                    {showGoals && (
+                      <>
+                        <td>{goal != null ? fmt$(goal) : '—'}</td>
+                        <td className={diff != null && diff < 0 ? 'ledger-margin-neg' : ''}>{diff != null ? `${diff >= 0 ? '+' : ''}${fmt$(diff)}` : '—'}</td>
+                      </>
+                    )}
+                  </tr>
+                );
+              })}
             </tbody>
             <tfoot>
               <tr className="ledger-avg-row">
                 <td className="ledger-name-col">Company (weighted)</td>
                 <td>{metricA.fmt(t[metricA.key])}</td>
                 <td>{metricB.fmt(t[metricB.key])}</td>
+                {showGoals && (
+                  <>
+                    <td>{companyGoalTotal > 0 ? fmt$(companyGoalTotal) : '—'}</td>
+                    <td className={companyGoalTotal > 0 && t[metricA.key] - companyGoalTotal < 0 ? 'ledger-margin-neg' : ''}>
+                      {companyGoalTotal > 0 ? `${t[metricA.key] - companyGoalTotal >= 0 ? '+' : ''}${fmt$(t[metricA.key] - companyGoalTotal)}` : '—'}
+                    </td>
+                  </>
+                )}
               </tr>
             </tfoot>
           </table>
@@ -770,6 +795,132 @@ function NewHireTab({ report, employeeRoster, query, onQuery }) {
   );
 }
 
+// ─── Goals tab (password protected) ────────────────────────────────────────
+const GOALS_PASSWORD = '2124';
+
+function GoalsTab({ report, goals, onSaveGoal, onImportGoals }) {
+  const [unlocked, setUnlocked] = useState(false);
+  const [pwInput, setPwInput] = useState('');
+  const [pwError, setPwError] = useState(false);
+  const [query, setQuery] = useState('');
+  const [drafts, setDrafts] = useState({}); // { code: { colorGoal, retailGoal } } — in-progress edits
+  const [importing, setImporting] = useState(null); // 'colorGoal' | 'retailGoal' | null
+
+  const tryUnlock = () => {
+    if (pwInput === GOALS_PASSWORD) { setUnlocked(true); setPwError(false); }
+    else { setPwError(true); }
+  };
+
+  const handleImportFile = async (field, file) => {
+    setImporting(field);
+    await onImportGoals(field, file);
+    setImporting(null);
+  };
+
+  if (!report) {
+    return <div className="empty-state"><p className="empty-title">No report yet</p><p>Upload a stylist report first, so there's a store list to set goals for.</p></div>;
+  }
+
+  if (!unlocked) {
+    return (
+      <div className="tab-content">
+        <div className="password-gate">
+          <p className="password-gate-title">🔒 Goals</p>
+          <p className="password-gate-hint">This section is password protected. Enter the password to continue.</p>
+          <input
+            type="password" className="password-input" placeholder="Password" value={pwInput}
+            onChange={e => { setPwInput(e.target.value); setPwError(false); }}
+            onKeyDown={e => { if (e.key === 'Enter') tryUnlock(); }}
+          />
+          <button className="btn-primary" onClick={tryUnlock}>Unlock</button>
+          {pwError && <p className="password-error">Incorrect password.</p>}
+        </div>
+      </div>
+    );
+  }
+
+  const stores = report.stores
+    .map(s => ({ name: s.name, code: s.code }))
+    .filter(s => !query.trim() || s.name.toLowerCase().includes(query.trim().toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const getVal = (code, field) => {
+    if (drafts[code]?.[field] !== undefined) return drafts[code][field];
+    return goals?.[code]?.[field] ?? '';
+  };
+
+  const handleChange = (code, field, value) => {
+    setDrafts(prev => ({ ...prev, [code]: { ...prev[code], [field]: value } }));
+  };
+
+  const handleBlur = (code, field) => {
+    const raw = drafts[code]?.[field];
+    if (raw === undefined) return;
+    const num = raw === '' ? null : Number(raw);
+    onSaveGoal(code, field, isNaN(num) ? null : num);
+  };
+
+  return (
+    <div className="tab-content">
+      <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
+      <p className="section-hint">Set a weekly Color and Retail sales goal per store. These show up as "Goal" and "vs Goal" columns on the Retail and Color Sales tabs.</p>
+
+      <div className="goal-import-row">
+        <label className="goal-import-btn">
+          <input
+            type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+            onChange={e => { if (e.target.files[0]) handleImportFile('colorGoal', e.target.files[0]); e.target.value = ''; }}
+          />
+          {importing === 'colorGoal' ? <span className="spinner small" /> : '📥'} Import Color Goals from file
+        </label>
+        <label className="goal-import-btn">
+          <input
+            type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+            onChange={e => { if (e.target.files[0]) handleImportFile('retailGoal', e.target.files[0]); e.target.value = ''; }}
+          />
+          {importing === 'retailGoal' ? <span className="spinner small" /> : '📥'} Import Retail Goals from file
+        </label>
+      </div>
+
+      <div className="ledger-scroll">
+        <table className="ledger-table">
+          <thead>
+            <tr>
+              <th className="ledger-name-col">Store</th>
+              <th>Color Goal</th>
+              <th>Retail Goal</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stores.map(s => (
+              <tr key={s.code}>
+                <td className="ledger-name-col">{s.name}</td>
+                <td>
+                  <input
+                    type="number" className="goal-input" placeholder="$0"
+                    value={getVal(s.code, 'colorGoal')}
+                    onChange={e => handleChange(s.code, 'colorGoal', e.target.value)}
+                    onBlur={() => handleBlur(s.code, 'colorGoal')}
+                  />
+                </td>
+                <td>
+                  <input
+                    type="number" className="goal-input" placeholder="$0"
+                    value={getVal(s.code, 'retailGoal')}
+                    onChange={e => handleChange(s.code, 'retailGoal', e.target.value)}
+                    onBlur={() => handleBlur(s.code, 'retailGoal')}
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {!stores.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
+    </div>
+  );
+}
+
 // ─── Setup tab ──────────────────────────────────────────────────────────────
 function SetupTab({ configured }) {
   const steps = [
@@ -821,11 +972,12 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;`}<
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Upload', 'Setup'];
+const TABS = ['Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Goals', 'Upload', 'Setup'];
 
 export default function App() {
   const [report, setReport] = useState(null);
   const [employeeRoster, setEmployeeRoster] = useState(null);
+  const [goals, setGoals] = useState({});
   const [label, setLabel] = useState('');
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('Overview');
@@ -836,12 +988,13 @@ export default function App() {
   const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', Retail: '', 'Color Sales': '', DL: '', '60 Day Employee': '' });
 
   useEffect(() => {
-    Promise.all([loadData('stylist_report'), loadData('employee_start_dates')]).then(([reportRes, rosterRes]) => {
+    Promise.all([loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals')]).then(([reportRes, rosterRes, goalsRes]) => {
       if (reportRes.data) setReport(reportRes.data); else setTab('Upload');
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
+      if (goalsRes.data) setGoals(goalsRes.data);
       setLoading(false);
-      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local')) {
-        const err = reportRes.error || rosterRes.error;
+      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local')) {
+        const err = reportRes.error || rosterRes.error || goalsRes.error;
         showToast(`Couldn't reach Supabase (${err || 'unknown error'}) — showing this device's local data only`, 'error');
       }
     }).catch(() => setLoading(false));
@@ -908,9 +1061,47 @@ export default function App() {
     showToast('Start-date list cleared');
   };
 
+  const handleSaveGoal = useCallback((storeCode, field, value) => {
+    setGoals(prev => {
+      const next = { ...prev, [storeCode]: { ...prev[storeCode], [field]: value } };
+      saveData('store_goals', next).then(result => {
+        if (isConfigured() && !result.ok) {
+          showToast(`Goal saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+        }
+      });
+      return next;
+    });
+  }, []);
+
+  const handleImportGoals = useCallback(async (field, file) => {
+    try {
+      const parsed = await parseGoalFile(file);
+      const next = { ...goals };
+      let matched = 0;
+      const unmatched = [];
+      parsed.entries.forEach(e => {
+        const code = getCodeForStoreName(e.storeName);
+        if (code) { next[code] = { ...next[code], [field]: e.amount }; matched++; }
+        else unmatched.push(e.storeName);
+      });
+      setGoals(next);
+      const result = await saveData('store_goals', next);
+      const label = field === 'colorGoal' ? 'color' : 'retail';
+      if (isConfigured() && !result.ok) {
+        showToast(`Imported ${matched} ${label} goals, but couldn't sync to Supabase (${result.error})`, 'error');
+      } else if (unmatched.length) {
+        showToast(`Imported ${matched} ${label} goals from ${file.name} — ${unmatched.length} store name${unmatched.length > 1 ? 's' : ''} not recognized: ${unmatched.slice(0, 3).join(', ')}${unmatched.length > 3 ? '…' : ''}`, 'error');
+      } else {
+        showToast(`Imported ${matched} ${label} goals from ${file.name} (${parsed.periodLabel.trim()})`);
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }, [goals]);
+
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
-  const needsReport = !report && tab !== 'Upload' && tab !== 'Setup' && tab !== '60 Day Employee';
+  const needsReport = !report && tab !== 'Upload' && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Goals';
 
   return (
     <div className="app">
@@ -943,12 +1134,14 @@ export default function App() {
           <StoreMetricTab
             report={report} query={queries.Retail} onQuery={v => setQuery('Retail', v)}
             title="Retail" metricA={{ key: 'retail', label: 'Retail', fmt: fmt$ }} metricB={{ key: 'rpc', label: 'RPC', fmt: fmtNum }}
+            goalType="retailGoal" goals={goals}
           />
         )}
         {!needsReport && tab === 'Color Sales' && report && (
           <StoreMetricTab
             report={report} query={queries['Color Sales']} onQuery={v => setQuery('Color Sales', v)}
             title="Color Sales" metricA={{ key: 'colorSales', label: 'Color Sales', fmt: fmt$ }} metricB={{ key: 'cpc', label: 'CPC', fmt: fmtNum }}
+            goalType="colorGoal" goals={goals}
           />
         )}
         {!needsReport && tab === 'DL' && report && (
@@ -956,6 +1149,9 @@ export default function App() {
         )}
         {tab === '60 Day Employee' && (
           <NewHireTab report={report} employeeRoster={employeeRoster} query={queries['60 Day Employee']} onQuery={v => setQuery('60 Day Employee', v)} />
+        )}
+        {tab === 'Goals' && (
+          <GoalsTab report={report} goals={goals} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} />
         )}
         {tab === 'Upload' && (
           <UploadTab
