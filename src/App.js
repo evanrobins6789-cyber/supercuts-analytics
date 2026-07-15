@@ -24,7 +24,7 @@ const STORE_METRICS = [
   { key: 'rpc', label: 'RPC', fmt: fmtNum },
 ];
 
-// Employee-level metrics shown on Employees / By Store.
+// Employee-level metrics shown on Employees and within each Stores card.
 const EMPLOYEE_METRICS = [
   { key: 'totalHours', label: 'Hours', fmt: n => fmtNum(n, 1) },
   { key: 'sales', label: 'Sales', fmt: fmt$ },
@@ -227,15 +227,24 @@ function OverviewTab({ report, selected, onSelect, query, onQuery }) {
 // ─── Stores tab ─────────────────────────────────────────────────────────────
 function StoresTab({ report, query, onQuery }) {
   const [sortBy, setSortBy] = useState('tsth');
-  const rows = useMemo(() => report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })), [report.stores]);
+  const [expanded, setExpanded] = useState({});
+  const storeRows = useMemo(() => report.stores.map(s => ({ name: s.name, code: s.code, employees: s.employees, ...s.totals })), [report.stores]);
+
+  const isSearching = !!query.trim();
   const filtered = useMemo(() => {
-    if (!query.trim()) return rows;
+    if (!isSearching) return storeRows;
     const q = query.trim().toLowerCase();
-    return rows.filter(r => r.name.toLowerCase().includes(q));
-  }, [rows, query]);
+    return storeRows
+      .map(s => {
+        const storeMatches = s.name.toLowerCase().includes(q);
+        const employees = storeMatches ? s.employees : s.employees.filter(e => e.name.toLowerCase().includes(q));
+        return { ...s, employees, _matched: storeMatches || employees.length > 0 };
+      })
+      .filter(s => s._matched);
+  }, [storeRows, query, isSearching]);
   const sorted = useMemo(() => sortByMetric(filtered, sortBy, 'desc'), [filtered, sortBy]);
 
-  const chartRows = useMemo(() => sortByMetric(rows, 'sales', 'desc').slice(0, 15), [rows]);
+  const chartRows = useMemo(() => sortByMetric(storeRows, 'sales', 'desc').slice(0, 15), [storeRows]);
   const chartData = {
     labels: chartRows.map(s => s.name),
     datasets: [{ label: 'TSTH', data: chartRows.map(s => Math.round((s.tsth || 0) * 100) / 100), backgroundColor: '#C23B3B', borderRadius: 4 }],
@@ -250,10 +259,11 @@ function StoresTab({ report, query, onQuery }) {
   };
 
   const t = report.companyTotals;
+  const toggle = name => setExpanded(prev => ({ ...prev, [name]: !prev[name] }));
 
   return (
     <div className="tab-content">
-      <SearchBox value={query} onChange={onQuery} placeholder="Search stores…" />
+      <SearchBox value={query} onChange={onQuery} placeholder="Search stores or employees…" />
 
       <div className="chart-card">
         <p className="chart-title">TSTH by store (top 15 by sales)</p>
@@ -269,29 +279,46 @@ function StoresTab({ report, query, onQuery }) {
         </select>
       </div>
 
+      <div className="dl-list">
+        {sorted.map(s => {
+          const isOpen = isSearching || !!expanded[s.name];
+          return (
+            <div key={s.name} className="dl-card">
+              <button className="dl-card-head" onClick={() => toggle(s.name)}>
+                <div className="dl-card-name-wrap">
+                  <span className={`dl-chevron ${isOpen ? 'dl-chevron--open' : ''}`}>▸</span>
+                  <span className="dl-card-name">{s.name}</span>
+                  <span className="dl-card-count">{s.employees.length} employee{s.employees.length !== 1 ? 's' : ''}</span>
+                </div>
+                <div className="dl-card-stats">
+                  <div className="dl-stat"><span className="dl-stat-label">Sales</span><span className="dl-stat-value">{fmt$(s.sales)}</span></div>
+                  <div className="dl-stat"><span className="dl-stat-label">TSTH</span><span className="dl-stat-value">{fmtRate(s.tsth)}</span></div>
+                  <div className="dl-stat"><span className="dl-stat-label">Hours</span><span className="dl-stat-value">{fmtNum(s.totalHours, 0)}</span></div>
+                  <div className="dl-stat"><span className="dl-stat-label">Color</span><span className="dl-stat-value">{fmt$(s.colorSales)}</span></div>
+                  <div className="dl-stat"><span className="dl-stat-label">CPC</span><span className="dl-stat-value">{fmtNum(s.cpc)}</span></div>
+                  <div className="dl-stat"><span className="dl-stat-label">Retail</span><span className="dl-stat-value">{fmt$(s.retail)}</span></div>
+                  <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(s.rpc)}</span></div>
+                </div>
+              </button>
+              {isOpen && (
+                <div className="dl-store-table">
+                  <EmployeeTable
+                    rows={sortByMetric(s.employees, 'sales', 'desc')}
+                    showStoreCol={false}
+                    footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours }}
+                    footerLabel="Store total / weighted avg"
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {!sorted.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
+
       <div className="ledger-scroll">
         <table className="ledger-table">
-          <thead>
-            <tr>
-              <th className="ledger-name-col">Store</th>
-              <th>Net Sales</th><th>TSTH</th><th>Total Hours</th>
-              <th>Color Sales</th><th>CPC</th><th>Retail</th><th>RPC</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map(s => (
-              <tr key={s.name}>
-                <td className="ledger-name-col">{s.name}</td>
-                <td>{fmt$(s.sales)}</td>
-                <td className="ledger-rate">{fmtRate(s.tsth)}</td>
-                <td>{fmtNum(s.totalHours, 0)}</td>
-                <td>{fmt$(s.colorSales)}</td>
-                <td>{fmtNum(s.cpc)}</td>
-                <td>{fmt$(s.retail)}</td>
-                <td>{fmtNum(s.rpc)}</td>
-              </tr>
-            ))}
-          </tbody>
           <tfoot>
             <tr className="ledger-avg-row">
               <td className="ledger-name-col">Company (weighted)</td>
@@ -306,7 +333,6 @@ function StoresTab({ report, query, onQuery }) {
           </tfoot>
         </table>
       </div>
-      {!sorted.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
       <p className="ledger-footnote">Company row is a true weighted total (e.g. TSTH = total sales ÷ total hours) — ratio metrics are never simply summed or averaged.</p>
     </div>
   );
@@ -385,42 +411,10 @@ function EmployeesTab({ report, query, onQuery }) {
   );
 }
 
-// ─── By Store tab ───────────────────────────────────────────────────────────
-function ByStoreTab({ report, query, onQuery }) {
-  const groups = useMemo(() => {
-    if (!query.trim()) return report.stores;
-    const q = query.trim().toLowerCase();
-    return report.stores
-      .map(s => {
-        const storeMatches = s.name.toLowerCase().includes(q);
-        const emps = storeMatches ? s.employees : s.employees.filter(e => e.name.toLowerCase().includes(q));
-        return { ...s, employees: emps };
-      })
-      .filter(s => s.employees.length > 0);
-  }, [report.stores, query]);
-
-  return (
-    <div className="tab-content">
-      <SearchBox value={query} onChange={onQuery} placeholder="Search stores or employees…" />
-      {!groups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No matches for "{query}".</p>}
-      {groups.map(s => (
-        <div key={s.name} className="store-group">
-          <p className="store-group-title">{s.name} <span className="store-group-count">{s.employees.length} employee{s.employees.length !== 1 ? 's' : ''} · {fmt$(s.totals.sales)} · {fmtRate(s.totals.tsth)} TSTH</span></p>
-          <EmployeeTable
-            rows={sortByMetric(s.employees, 'sales', 'desc')}
-            showStoreCol={false}
-            footer={s.totals}
-            footerLabel="Total / weighted avg"
-          />
-        </div>
-      ))}
-    </div>
-  );
-}
-
 // ─── Single-focus store tabs (Retail, Color Sales) — grouped by DL ─────────
 function StoreMetricTab({ report, query, onQuery, title, metricA, metricB }) {
   const [sortBy, setSortBy] = useState(metricA.key);
+  const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
   const rows = useMemo(() => report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })), [report.stores]);
   const groups = useMemo(() => groupStoresByLeader(rows), [rows]);
 
@@ -436,14 +430,29 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB }) {
       .filter(g => g.stores.length > 0);
   }, [groups, query]);
 
+  const filteredFlat = useMemo(() => {
+    if (!query.trim()) return rows;
+    const q = query.trim().toLowerCase();
+    return rows.filter(r => r.name.toLowerCase().includes(q));
+  }, [rows, query]);
+  const sortedFlat = useMemo(() => sortByMetric(filteredFlat, sortBy, 'desc'), [filteredFlat, sortBy]);
+
   const t = report.companyTotals;
-  const totalStoresShown = filteredGroups.reduce((n, g) => n + g.stores.length, 0);
+  const totalStoresShown = viewMode === 'dl'
+    ? filteredGroups.reduce((n, g) => n + g.stores.length, 0)
+    : filteredFlat.length;
 
   return (
     <div className="tab-content">
-      <SearchBox value={query} onChange={onQuery} placeholder="Search stores or DL…" />
+      <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
+
+      <div className="view-toggle">
+        <button className={`view-toggle-btn ${viewMode === 'dl' ? 'active' : ''}`} onClick={() => setViewMode('dl')}>Grouped by DL</button>
+        <button className={`view-toggle-btn ${viewMode === 'flat' ? 'active' : ''}`} onClick={() => setViewMode('flat')}>All Stores</button>
+      </div>
+
       <div className="ledger-head-row">
-        <p className="section-label">{title} — {totalStoresShown} of {report.storeCount} stores, grouped by DL</p>
+        <p className="section-label">{title} — {totalStoresShown} of {report.storeCount} stores{viewMode === 'dl' ? ', grouped by DL' : ''}</p>
         <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
           <option value={metricA.key}>Sort: {metricA.label}</option>
           <option value={metricB.key}>Sort: {metricB.label}</option>
@@ -451,7 +460,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB }) {
         </select>
       </div>
 
-      {filteredGroups.map(g => {
+      {viewMode === 'dl' && filteredGroups.map(g => {
         const groupTotals = rollupRows(g.stores);
         const sortedStores = sortByMetric(g.stores, sortBy, 'desc');
         return (
@@ -486,19 +495,48 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB }) {
         );
       })}
 
-      {!filteredGroups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
+      {viewMode === 'flat' && (
+        <div className="ledger-scroll">
+          <table className="ledger-table">
+            <thead>
+              <tr><th className="ledger-name-col">Store</th><th>{metricA.label}</th><th>{metricB.label}</th></tr>
+            </thead>
+            <tbody>
+              {sortedFlat.map(s => (
+                <tr key={s.name}>
+                  <td className="ledger-name-col">{s.name}</td>
+                  <td>{metricA.fmt(s[metricA.key])}</td>
+                  <td>{metricB.fmt(s[metricB.key])}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="ledger-avg-row">
+                <td className="ledger-name-col">Company (weighted)</td>
+                <td>{metricA.fmt(t[metricA.key])}</td>
+                <td>{metricB.fmt(t[metricB.key])}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
 
-      <div className="ledger-scroll">
-        <table className="ledger-table">
-          <tfoot>
-            <tr className="ledger-avg-row">
-              <td className="ledger-name-col">Company (weighted)</td>
-              <td>{metricA.fmt(t[metricA.key])}</td>
-              <td>{metricB.fmt(t[metricB.key])}</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
+      {viewMode === 'dl' && !filteredGroups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
+      {viewMode === 'flat' && !sortedFlat.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
+
+      {viewMode === 'dl' && (
+        <div className="ledger-scroll">
+          <table className="ledger-table">
+            <tfoot>
+              <tr className="ledger-avg-row">
+                <td className="ledger-name-col">Company (weighted)</td>
+                <td>{metricA.fmt(t[metricA.key])}</td>
+                <td>{metricB.fmt(t[metricB.key])}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -738,7 +776,7 @@ function SetupTab({ configured }) {
     { n: 1, title: 'Export this week\u2019s stylist report', body: 'Run the report with every store and every employee under it, covering the week you want to see.' },
     { n: 2, title: 'Upload it', body: 'Go to the Upload tab and drop it into the "Stylist Report" slot. The date range fills in automatically.' },
     { n: 3, title: 'Optionally upload employee start dates', body: 'A simple Employee Name + Start Date export. Drop it into the "Employee Start Dates" slot to power the "60 Day Employee" tab, which shows anyone hired in the last 60 days along with their store, DL, and sales — even if they don\u2019t have sales data yet.' },
-    { n: 4, title: 'Explore the tabs', body: 'Overview: tap a metric to see the top/bottom 10 stores. Stores: every location side by side. Employees / By Store: every stylist. Retail / Color Sales / DL: grouped by District Leader. 60 Day Employee: recent hires. Every tab has a search box.' },
+    { n: 4, title: 'Explore the tabs', body: 'Overview: tap a metric to see the top/bottom 10 stores. Stores: every location, click one to see its employees. Employees: every stylist company-wide. Retail / Color Sales: grouped by DL, or toggle to a flat list. DL: rolled-up totals per leader, click to expand their stores. 60 Day Employee: recent hires. Every tab has a search box.' },
     { n: 5, title: 'Next week', body: 'Just upload a new stylist report the same way \u2014 it replaces this week\u2019s data for everyone viewing the site.' },
   ];
   return (
@@ -783,7 +821,7 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;`}<
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Overview', 'Stores', 'Employees', 'By Store', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Upload', 'Setup'];
+const TABS = ['Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Upload', 'Setup'];
 
 export default function App() {
   const [report, setReport] = useState(null);
@@ -795,7 +833,7 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const [uploadingRoster, setUploadingRoster] = useState(false);
   const [selectedMetric, setSelectedMetric] = useState('tsth');
-  const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', 'By Store': '', Retail: '', 'Color Sales': '', DL: '', '60 Day Employee': '' });
+  const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', Retail: '', 'Color Sales': '', DL: '', '60 Day Employee': '' });
 
   useEffect(() => {
     Promise.all([loadData('stylist_report'), loadData('employee_start_dates')]).then(([reportRes, rosterRes]) => {
@@ -900,9 +938,6 @@ export default function App() {
         )}
         {!needsReport && tab === 'Employees' && report && (
           <EmployeesTab report={report} query={queries.Employees} onQuery={v => setQuery('Employees', v)} />
-        )}
-        {!needsReport && tab === 'By Store' && report && (
-          <ByStoreTab report={report} query={queries['By Store']} onQuery={v => setQuery('By Store', v)} />
         )}
         {!needsReport && tab === 'Retail' && report && (
           <StoreMetricTab
