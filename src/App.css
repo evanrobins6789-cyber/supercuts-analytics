@@ -121,6 +121,13 @@
 }
 .goal-import-btn:hover { border-color: var(--red); color: var(--red-deep); }
 
+.store-row-clickable { cursor: pointer; }
+.store-row-clickable:hover { background: rgba(194,59,59,0.08); }
+.mini-chevron { display: inline-block; font-size: 9px; color: var(--red); transition: transform 0.15s ease; }
+.mini-chevron--open { transform: rotate(90deg); }
+.store-expand-row td { padding: 0; background: var(--paper); }
+.store-expand-row .ledger-scroll { border: none; border-top: 1px solid var(--line); border-radius: 0; box-shadow: none; }
+
 /* ─── Search ─────────────────────────────────────────────────────────── */
 .search-box {
   display: flex; align-items: center; gap: 8px;

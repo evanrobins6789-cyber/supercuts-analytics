@@ -391,11 +391,14 @@ function EmployeesTab({ report, query, onQuery }) {
 function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals }) {
   const [sortBy, setSortBy] = useState(metricA.key);
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
-  const rows = useMemo(() => report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })), [report.stores]);
+  const [expanded, setExpanded] = useState({});
+  const rows = useMemo(() => report.stores.map(s => ({ name: s.name, code: s.code, employees: s.employees, ...s.totals })), [report.stores]);
   const groups = useMemo(() => groupStoresByLeader(rows), [rows]);
+  const toggleStore = code => setExpanded(prev => ({ ...prev, [code]: !prev[code] }));
 
   const getGoal = code => (goalType && goals?.[code]?.[goalType] != null ? goals[code][goalType] : null);
   const showGoals = !!goalType;
+  const colCount = 3 + (showGoals ? 2 : 0);
 
   const filteredGroups = useMemo(() => {
     if (!query.trim()) return groups;
@@ -463,18 +466,35 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                   {sortedStores.map(s => {
                     const goal = getGoal(s.code);
                     const diff = goal != null ? s[metricA.key] - goal : null;
+                    const isOpen = !!expanded[s.code];
                     return (
-                      <tr key={s.name}>
-                        <td className="ledger-name-col">{s.name}</td>
-                        <td>{metricA.fmt(s[metricA.key])}</td>
-                        <td>{metricB.fmt(s[metricB.key])}</td>
-                        {showGoals && (
-                          <>
-                            <td>{goal != null ? fmt$(goal) : '—'}</td>
-                            <td className={diff != null && diff < 0 ? 'ledger-margin-neg' : ''}>{diff != null ? `${diff >= 0 ? '+' : ''}${fmt$(diff)}` : '—'}</td>
-                          </>
+                      <React.Fragment key={s.name}>
+                        <tr className="store-row-clickable" onClick={() => toggleStore(s.code)}>
+                          <td className="ledger-name-col">
+                            <span className={`mini-chevron ${isOpen ? 'mini-chevron--open' : ''}`}>▸</span> {s.name}
+                          </td>
+                          <td>{metricA.fmt(s[metricA.key])}</td>
+                          <td>{metricB.fmt(s[metricB.key])}</td>
+                          {showGoals && (
+                            <>
+                              <td>{goal != null ? fmt$(goal) : '—'}</td>
+                              <td className={diff != null && diff < 0 ? 'ledger-margin-neg' : ''}>{diff != null ? `${diff >= 0 ? '+' : ''}${fmt$(diff)}` : '—'}</td>
+                            </>
+                          )}
+                        </tr>
+                        {isOpen && (
+                          <tr className="store-expand-row">
+                            <td colSpan={colCount}>
+                              <EmployeeTable
+                                rows={sortByMetric(s.employees, 'sales', 'desc')}
+                                showStoreCol={false}
+                                footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours }}
+                                footerLabel="Store total / weighted avg"
+                              />
+                            </td>
+                          </tr>
                         )}
-                      </tr>
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
@@ -512,18 +532,35 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
               {sortedFlat.map(s => {
                 const goal = getGoal(s.code);
                 const diff = goal != null ? s[metricA.key] - goal : null;
+                const isOpen = !!expanded[s.code];
                 return (
-                  <tr key={s.name}>
-                    <td className="ledger-name-col">{s.name}</td>
-                    <td>{metricA.fmt(s[metricA.key])}</td>
-                    <td>{metricB.fmt(s[metricB.key])}</td>
-                    {showGoals && (
-                      <>
-                        <td>{goal != null ? fmt$(goal) : '—'}</td>
-                        <td className={diff != null && diff < 0 ? 'ledger-margin-neg' : ''}>{diff != null ? `${diff >= 0 ? '+' : ''}${fmt$(diff)}` : '—'}</td>
-                      </>
+                  <React.Fragment key={s.name}>
+                    <tr className="store-row-clickable" onClick={() => toggleStore(s.code)}>
+                      <td className="ledger-name-col">
+                        <span className={`mini-chevron ${isOpen ? 'mini-chevron--open' : ''}`}>▸</span> {s.name}
+                      </td>
+                      <td>{metricA.fmt(s[metricA.key])}</td>
+                      <td>{metricB.fmt(s[metricB.key])}</td>
+                      {showGoals && (
+                        <>
+                          <td>{goal != null ? fmt$(goal) : '—'}</td>
+                          <td className={diff != null && diff < 0 ? 'ledger-margin-neg' : ''}>{diff != null ? `${diff >= 0 ? '+' : ''}${fmt$(diff)}` : '—'}</td>
+                        </>
+                      )}
+                    </tr>
+                    {isOpen && (
+                      <tr className="store-expand-row">
+                        <td colSpan={colCount}>
+                          <EmployeeTable
+                            rows={sortByMetric(s.employees, 'sales', 'desc')}
+                            showStoreCol={false}
+                            footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours }}
+                            footerLabel="Store total / weighted avg"
+                          />
+                        </td>
+                      </tr>
                     )}
-                  </tr>
+                  </React.Fragment>
                 );
               })}
             </tbody>
