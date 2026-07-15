@@ -399,7 +399,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   const rows = useMemo(() => report.stores.map(s => {
     const goal = getGoal(s.code);
     return { name: s.name, code: s.code, employees: s.employees, ...s.totals, vsGoal: goal != null ? s.totals[metricA.key] - goal : null };
-  }), [report.stores, goals, goalType]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [report.stores, goals, goalType]);
   const groups = useMemo(() => groupStoresByLeader(rows), [rows]);
   const toggleStore = code => setExpanded(prev => ({ ...prev, [code]: !prev[code] }));
 
