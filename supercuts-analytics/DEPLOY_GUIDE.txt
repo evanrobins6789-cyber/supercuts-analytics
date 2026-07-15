@@ -1,0 +1,500 @@
+================================================================
+SUPERCUTS STORE SCOREBOARD — STEP BY STEP DEPLOYMENT GUIDE
+================================================================
+Read this entire section before starting anything.
+
+WHAT YOU ARE DOING:
+You are setting up 3 free accounts on 3 websites.
+Each one does a specific job:
+
+  GitHub   = a place to store your app's code files
+  Supabase = a free online database that saves your store data
+  Vercel   = turns your code into a real live website/app
+
+You will go through them in order: GitHub → Supabase → Vercel.
+At the end you will have a real URL you can open on your phone.
+
+HOW LONG IT TAKES: About 25-35 minutes total.
+
+WHAT YOU NEED:
+  - A computer (not a phone — do this on a computer)
+  - An email address you can check
+  - The zip file you downloaded from this chat (supercuts-analytics.zip)
+
+================================================================
+STEP 1 — UNZIP THE FILES ON YOUR COMPUTER
+================================================================
+
+You downloaded a file called "supercuts-analytics.zip"
+It is probably in your Downloads folder.
+
+ON A MAC:
+  1. Open your Downloads folder
+  2. Find "supercuts-analytics.zip"
+  3. Double-click it
+  4. A new folder called "supercuts-analytics" will appear next to it
+  5. Leave that folder where it is for now
+
+ON A WINDOWS PC:
+  1. Open your Downloads folder
+  2. Find "supercuts-analytics.zip"
+  3. Right-click on it
+  4. Click "Extract All..."
+  5. Click "Extract" on the window that pops up
+  6. A new folder called "supercuts-analytics" will appear
+  7. Leave that folder where it is for now
+
+You should now have a folder called "supercuts-analytics" in your
+Downloads folder. If you open it you will see files inside like
+"package.json", "vercel.json", and folders like "src" and "public".
+That is correct. Do not move or rename anything inside.
+
+================================================================
+STEP 2 — CREATE A GITHUB ACCOUNT
+================================================================
+
+GitHub is just a website that stores your app's code files.
+Think of it like Google Drive but for code.
+
+  1. Open a web browser (Chrome, Safari, Edge — any of them)
+
+  2. Go to this exact website: https://github.com
+
+  3. Click the button that says "Sign up" in the top right corner
+
+  4. It will ask for your email address — type it in and click
+     "Continue"
+
+  5. It will ask you to create a password — make one up, type it
+     in, click "Continue"
+     (Write this password down somewhere so you don't forget it)
+
+  6. It will ask you to enter a username — this is like a nickname.
+     Try something simple like your first name + a number.
+     Example: "john1234"
+     Click "Continue"
+
+  7. It will ask "Would you like to receive product updates..."
+     Type the letter "n" for no, then click "Continue"
+
+  8. It will show you a puzzle to prove you are human — solve it
+     and click "Submit"
+
+  9. It will say "Enter the code we sent to your email"
+     Go to your email, find the email from GitHub, copy the 6-digit
+     code, and paste it back on the GitHub website
+
+  10. It will ask you some questions about how you plan to use it.
+      You can click "Skip personalization" at the bottom — do that.
+
+  11. You are now logged into GitHub. You will see a dashboard page.
+      Keep this tab open.
+
+----------------------------------------------------------------
+Now create a place to put your files (called a "repository"):
+----------------------------------------------------------------
+
+  12. Look at the top right corner of the page. You will see a
+      small "+" plus sign icon. Click it.
+
+  13. A small dropdown menu will appear. Click "New repository"
+
+  14. You will see a form. Fill it in like this:
+        - "Repository name" field: type   supercuts-analytics
+        - Everything else: leave it exactly as it is
+        - Do NOT check any of the checkboxes
+
+  15. Scroll down and click the green button that says
+      "Create repository"
+
+  16. You will now see a page with a lot of text and code on it.
+      This is normal. Do not worry about what it says.
+
+----------------------------------------------------------------
+Now upload your files to this repository:
+----------------------------------------------------------------
+
+  17. Look at the page carefully. Find the link that says
+      "uploading an existing file"
+      It is in a sentence that reads something like:
+      "...or import code from another repository. You can initialize
+      this repository with code. Get started by creating a new file
+      or uploading an existing file."
+      Click those words: "uploading an existing file"
+
+  18. You will see a big blank area with a dashed border and the
+      words "Drag files here to add them to your repository"
+
+  19. Open your Downloads folder in a separate window
+      Find the "supercuts-analytics" folder
+      Open it so you can see the files INSIDE it
+
+  20. You need to select everything inside the supercuts-analytics
+      folder. Here is how:
+
+      ON MAC:
+        Click on any file inside the folder, then press
+        Command + A to select all files and folders.
+        Then drag them all into the GitHub dashed box.
+
+      ON WINDOWS:
+        Click on any file inside the folder, then press
+        Ctrl + A to select all files and folders.
+        Then drag them all into the GitHub dashed box.
+
+      IMPORTANT: You are dragging the CONTENTS of the folder,
+      not the folder itself. The contents include files like
+      package.json, vercel.json, and folders like src, public.
+
+  21. Wait for the files to upload. You will see a list of file
+      names appear on the page as they upload.
+      This may take 30-60 seconds.
+
+  22. Once they all appear, scroll down to the bottom of the page
+
+  23. You will see a section called "Commit changes"
+      There is a green button that says "Commit changes"
+      Click that green button.
+
+  24. Wait a few seconds. The page will reload.
+
+  25. You should now see a list of your files on the page including
+      folders named "src" and "public" and files like "package.json"
+      If you can see those, the upload worked correctly.
+
+  ✓ GitHub is done. Keep this tab open.
+
+================================================================
+STEP 3 — CREATE A SUPABASE ACCOUNT (YOUR DATABASE)
+================================================================
+
+Supabase is a free online database. It will save all your store
+data so you can access it from any device at any time.
+
+  1. Open a new tab in your browser
+
+  2. Go to this exact website: https://supabase.com
+
+  3. Click the button that says "Start your project"
+     (it may also say "Sign up" — either one is fine)
+
+  4. You will see options to sign up. Click "Sign up with GitHub"
+     This uses your GitHub account you just created — convenient!
+
+  5. It will ask you to "Authorize supabase"
+     Click the green "Authorize supabase" button
+
+  6. You are now logged in. You will see the Supabase dashboard.
+
+----------------------------------------------------------------
+Now create your database project:
+----------------------------------------------------------------
+
+  7. Click the green button that says "New project"
+
+  8. You will see a form. Fill it in:
+       - Under "Organization" you will see your GitHub username —
+         leave that as is, do not change it
+       - "Name" field: type   supercuts-analytics
+       - "Database Password" field: make up a strong password
+         and type it in. WRITE THIS DOWN. You will not need it
+         often but it is important to save it.
+       - "Region" dropdown: click it and pick the option that is
+         closest to where you are located. If you are on the East
+         Coast of the US, choose "East US (North Virginia)".
+         If you are on the West Coast, choose "West US (Oregon)".
+
+  9. Click the green button "Create new project"
+
+  10. You will see a loading screen that says "Setting up project"
+      THIS IS NORMAL. Just wait. Do not click anything.
+      It takes about 1-2 minutes.
+
+  11. When it finishes you will see your project dashboard page
+      with the name "supercuts-analytics" at the top
+
+----------------------------------------------------------------
+Now create the table that stores your data:
+----------------------------------------------------------------
+
+  12. Look at the LEFT side of the page. You will see a column of
+      icons. Look for one that looks like a computer terminal /
+      command line. It may be labeled "SQL Editor" if you hover
+      over it. Click it.
+
+      If you are not sure which one it is, look for these icons
+      from top to bottom in the left sidebar:
+        - Home icon
+        - Table icon
+        - SQL Editor icon  ← click this one (looks like >_)
+        - Others below
+
+  13. You will see a blank white text area in the middle of the
+      screen. Click inside that blank area so your cursor is in it.
+
+  14. Type (or copy and paste) EXACTLY the following text into
+      that blank area. Copy it exactly, do not change anything:
+
+      create table weekly_report (
+        report_id text primary key,
+        payload jsonb not null,
+        updated_at timestamp with time zone default now()
+      );
+
+      alter table weekly_report enable row level security;
+
+      create policy "Allow all access"
+        on weekly_report for all
+        using (true)
+        with check (true);
+
+      grant usage on schema public to anon, authenticated;
+      grant select, insert, update, delete on weekly_report to anon, authenticated;
+
+  15. Now click the green "Run" button. It is usually in the
+      bottom right area of the SQL editor, or at the top.
+
+  16. Below the text area you should see a result that says:
+      "Success. No rows returned."
+      That means it worked perfectly.
+
+      If you see an error in red text, the most common reason is
+      a typo. Try copying and pasting the text again very carefully.
+
+----------------------------------------------------------------
+Now get your two secret keys (you need these for Vercel):
+----------------------------------------------------------------
+
+  17. Look at the left sidebar again. Scroll all the way to the
+      bottom of the sidebar. You will see a gear/settings icon.
+      Click it.
+
+  18. A settings menu will open. Look for and click "API"
+      (it is usually near the top of the settings list)
+
+  19. You will see a page with your project's API information.
+      You need to find and COPY two things from this page:
+
+      THING 1 — "Project URL"
+        It looks like: https://abcdefghijkl.supabase.co
+        It starts with https:// and ends with .supabase.co
+        Click on it to select it, then copy it.
+        Paste it into a Notepad/Notes document on your computer
+        and label it "Supabase URL"
+
+      THING 2 — "anon public" key
+        It is a very long string of random letters and numbers.
+        It is usually labeled "anon" or "anon public"
+        There may be two keys shown — you want the "anon" one,
+        NOT the "service_role" one.
+        Click the "Copy" button next to it.
+        Paste it into your Notepad/Notes document
+        and label it "Supabase Anon Key"
+
+  20. You should now have two things saved in your notes:
+        Supabase URL  =  https://something.supabase.co
+        Supabase Anon Key  =  a very long string of characters
+
+  ✓ Supabase is done. Keep the notes with your two keys handy.
+
+================================================================
+STEP 4 — CREATE A VERCEL ACCOUNT AND DEPLOY YOUR APP
+================================================================
+
+Vercel takes your code from GitHub and turns it into a real
+live website that anyone can open in a browser.
+
+  1. Open a new tab in your browser
+
+  2. Go to this exact website: https://vercel.com
+
+  3. Click "Sign Up" in the top right corner
+
+  4. It will ask how you want to sign up.
+     Click "Continue with GitHub"
+     This uses your GitHub account again.
+
+  5. It may ask you to "Authorize Vercel" — click that button.
+
+  6. It will ask what kind of use this is for.
+     Click "Personal" then click "Continue"
+
+  7. You are now in the Vercel dashboard.
+
+----------------------------------------------------------------
+Now import your code and deploy the app:
+----------------------------------------------------------------
+
+  8. You will see a button that says "Add New..." or "Import Project"
+     Click it, then click "Project"
+
+  9. You will see a list on the left that says "Import Git Repository"
+     and shows your GitHub repositories.
+     You should see "supercuts-analytics" in the list.
+     Click the "Import" button next to it.
+
+  10. You will see a configuration screen.
+      The "Framework Preset" should automatically say "Create React App"
+      If it does not, click the dropdown and select "Create React App"
+      Everything else leave as default.
+
+  11. *** THIS IS THE MOST IMPORTANT STEP — DO NOT SKIP IT ***
+
+      Look for a section on this page called "Environment Variables"
+      It may be collapsed. If so, click on it to expand it.
+
+      You need to add TWO environment variables.
+      This is how you connect your app to Supabase.
+
+      Adding the FIRST variable:
+        - Find a text field labeled "Name" — type in:
+          REACT_APP_SUPABASE_URL
+          (type it exactly like that, all caps, with underscores)
+        - Find the field next to it labeled "Value" — paste in
+          your Supabase URL from your notes
+          (the one that looks like https://something.supabase.co)
+        - Click "Add" or press Enter
+
+      Adding the SECOND variable:
+        - In the "Name" field type:
+          REACT_APP_SUPABASE_ANON_KEY
+          (type it exactly like that, all caps, with underscores)
+        - In the "Value" field paste in your Supabase Anon Key
+          from your notes (the very long string of characters)
+        - Click "Add" or press Enter
+
+      Double-check: you should now see both variables listed.
+
+  12. Now scroll down and click the big "Deploy" button
+
+  13. You will see a screen with a progress log scrolling by.
+      This is Vercel building your app. Just watch and wait.
+      It takes about 2-4 minutes.
+      Do not close the tab or click anything.
+
+  14. When it is done you will see a screen that says
+      "Congratulations!" with a preview image of your app.
+
+  15. Click the "Continue to Dashboard" button
+
+  16. On your dashboard you will see your app URL.
+      It will look something like:
+      supercuts-analytics-abc123.vercel.app
+      That is your app. It is live on the internet right now.
+
+  17. Click "Visit" or click the URL to open your app.
+      It should open and show the Store Scoreboard dashboard.
+
+  ✓ Your app is live!
+
+================================================================
+STEP 5 — ADD THE APP TO YOUR PHONE
+================================================================
+
+ON AN IPHONE:
+  1. On your iPhone, open the Safari app (the compass icon)
+     NOTE: It MUST be Safari. Chrome on iPhone will not work
+     for adding to home screen.
+  2. Type your app URL into the address bar and go to it
+     Example: supercuts-analytics-abc123.vercel.app
+  3. Wait for the page to fully load
+  4. At the bottom of the screen, tap the Share button
+     (it looks like a box with an arrow pointing up out of it)
+  5. Scroll down in the menu that pops up
+  6. Tap "Add to Home Screen"
+  7. It will show a name — you can change it to "Store Scoreboard"
+     or leave it as is
+  8. Tap "Add" in the top right corner
+  9. Press your Home button or swipe up to go to your home screen
+  10. You will see the Store Scoreboard icon on your home screen
+  11. Tap it — it opens like a real app, full screen, no browser bar
+
+ON AN ANDROID PHONE:
+  1. Open the Chrome app on your Android phone
+  2. Type your app URL into the address bar and go to it
+  3. Wait for the page to fully load
+  4. Tap the three vertical dots in the top right corner
+  5. Tap "Add to Home screen"
+  6. Tap "Add"
+  7. The icon will appear on your home screen
+
+================================================================
+STEP 6 — HOW TO USE THE APP
+================================================================
+
+This app shows one week at a time, across every store:
+
+  1. Run your weekly stylist report (stores with each employee listed underneath)
+  2. Open the Store Scoreboard app (from your home screen icon or by
+     going to your URL)
+  3. Upload that file into the single "Weekly Report" slot
+  4. The dashboard updates in seconds. You will see:
+       - Overview: company-wide totals (net sales, TSTH, CPH,
+         ticket average, etc.) and a leaderboard of top-performing
+         stores
+       - Stores: every location with the full set of metrics,
+         sortable by any column, plus a chart of TSTH by store
+  5. Next week, just upload the new file the same way — it
+     replaces this week's numbers for everyone viewing the site
+
+Your data is saved in Supabase. It will be there tomorrow,
+next week, next month. Every device that opens your URL will
+see the same data.
+
+================================================================
+IF SOMETHING GOES WRONG
+================================================================
+
+PROBLEM: I see a blank white or black screen when I open the app
+FIX: Wait 10 seconds and refresh the page. If still blank,
+     double check your environment variables in Vercel are spelled
+     correctly (Settings → Environment Variables in your project)
+
+PROBLEM: The app shows a tiny "local" badge in the top corner
+FIX: This means Supabase is not connected. Your environment
+     variables may have a typo or extra space.
+     Go to vercel.com → your project → Settings → Environment
+     Variables and check both values carefully.
+
+PROBLEM: I uploaded a file and got an error toast
+FIX: The file needs columns named "Location Name", "Employee First
+     Name", and "$EE Net no svs" (exactly like your weekly stylist
+     export). Make sure you're uploading the right report.
+
+PROBLEM: A store or employee I expect to see is missing
+FIX: Check that row in the original Excel file — a store needs a
+     value in "Location Name" with the employee columns blank, and
+     an employee needs a first/last name with "Location Name" blank
+     on their own row (that's how the file marks who belongs to
+     which store).
+
+PROBLEM: I can't find "uploading an existing file" on GitHub
+FIX: When you create a new empty repository, GitHub shows a
+     setup page. Look for the sentence that contains the words
+     "uploading an existing file" and click those words.
+     If you don't see it, there may already be a file in the
+     repo — click "Add file" → "Upload files" instead.
+
+PROBLEM: Vercel says "Build Failed"
+FIX: Go back and make sure ALL the files from the zip were
+     uploaded to GitHub, especially the "src" folder and
+     "package.json" file. Then in Vercel click "Redeploy".
+
+================================================================
+WRITE YOUR INFO HERE — KEEP THIS DOCUMENT
+================================================================
+
+GitHub username:    _______________________________
+
+Vercel app URL:     _______________________________
+
+Supabase project:   _______________________________
+
+Database password:  _______________________________
+(keep this private)
+
+================================================================
+DONE! You now have a live app.
+If you get stuck on any step, go back to Claude and say
+exactly which step number you are on and what you see on screen.
+================================================================

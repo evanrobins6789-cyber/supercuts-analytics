@@ -1,0 +1,185 @@
+# Supercuts Store Scoreboard — Deployment Guide
+## Complete step-by-step for beginners
+
+---
+
+## What you'll end up with
+- A live website at a URL like `your-app.vercel.app`
+- Works as an app on your phone (add to home screen)
+- Data saved to a free cloud database (Supabase)
+- Access from any device, anywhere
+
+## What you'll need (all free, no credit card)
+- A computer with internet access
+- About 20–30 minutes
+
+---
+
+## PART 1 — Create a GitHub account (stores your code)
+
+1. Go to **github.com**
+2. Click **"Sign up"** (top right)
+3. Enter an email, password, and username
+4. Verify your email when they send you a confirmation
+5. You're done with GitHub for now
+
+---
+
+## PART 2 — Create a Supabase account (your database)
+
+1. Go to **supabase.com**
+2. Click **"Start your project"**
+3. Click **"Sign up with GitHub"** — this uses the account you just made
+4. It will ask you to authorize Supabase — click **"Authorize supabase"**
+5. You're now logged into Supabase
+
+**Create your database:**
+
+6. Click the green **"New project"** button
+7. Under "Organization" it will show your name — leave that
+8. Give your project a name — something like `supercuts-analytics`
+9. Set a database password — write this down somewhere safe (you won't need it often)
+10. Choose a region closest to you (e.g. "East US")
+11. Click **"Create new project"**
+12. Wait about 2 minutes for it to set up — you'll see a loading screen
+
+**Create the data table:**
+
+13. Once loaded, look at the left sidebar and click **"SQL Editor"** (it looks like a code icon)
+14. You'll see a blank text area. Click inside it and paste this exact text:
+
+```sql
+create table weekly_report (
+  report_id text primary key,
+  payload jsonb not null,
+  updated_at timestamp with time zone default now()
+);
+
+alter table weekly_report enable row level security;
+
+create policy "Allow all access"
+  on weekly_report for all
+  using (true)
+  with check (true);
+
+grant usage on schema public to anon, authenticated;
+grant select, insert, update, delete on weekly_report to anon, authenticated;
+```
+
+15. Click the green **"Run"** button (or press Ctrl+Enter)
+16. You should see "Success. No rows returned" — that means it worked
+
+**Important:** that last `create policy` block is what actually lets the app read and write to the table. Without it, Supabase silently blocks every request from the app, and it quietly falls back to only saving data on your own device — you won't get an error, it'll just look like nothing saved when you check from another computer. If you already ran the SQL without the policy lines, just paste and run the `alter table` and `create policy` lines on their own now.
+
+**Get your API keys:**
+
+17. In the left sidebar, click the **gear icon** at the very bottom (Settings)
+18. Click **"API"** in the settings menu
+19. You'll see two things you need to copy — keep this page open:
+    - **Project URL** — looks like `https://abcdefgh.supabase.co`
+    - **anon public key** — a very long string of letters and numbers
+
+---
+
+## PART 3 — Upload your code to GitHub
+
+1. Go to **github.com** and make sure you're logged in
+2. Click the **"+"** button in the top right corner
+3. Click **"New repository"**
+4. Name it `supercuts-analytics`
+5. Leave everything else as default
+6. Click **"Create repository"**
+
+**Upload the files:**
+
+7. You'll see a page with setup instructions. Look for the link that says **"uploading an existing file"** — click it
+8. A file upload area will appear. Open the folder you downloaded from this chat (`supercuts-analytics`)
+9. Select ALL the files and folders inside it and drag them into the GitHub upload area
+   - Make sure you include: `src/`, `public/`, `package.json`, `vercel.json`, `.env.example`
+10. Scroll down and click **"Commit changes"**
+11. Your code is now on GitHub
+
+---
+
+## PART 4 — Deploy to Vercel (makes it a live website)
+
+1. Go to **vercel.com**
+2. Click **"Sign up"**
+3. Click **"Continue with GitHub"** — log in with your GitHub account
+4. Click **"Authorize Vercel"**
+5. You're now in the Vercel dashboard
+
+**Deploy your app:**
+
+6. Click **"Add New..."** then **"Project"**
+7. You'll see a list of your GitHub repositories — find `supercuts-analytics` and click **"Import"**
+8. Vercel will detect it's a React app automatically — don't change the settings
+9. **BEFORE clicking Deploy** — look for a section called **"Environment Variables"**
+10. Click to expand it and add two variables:
+
+   - Click **"Add"**
+   - Name: `REACT_APP_SUPABASE_URL`
+   - Value: paste your Supabase Project URL from Part 2 step 19
+   - Click **"Add"** again
+   - Name: `REACT_APP_SUPABASE_ANON_KEY`  
+   - Value: paste your Supabase anon public key from Part 2 step 19
+
+11. Now click the **"Deploy"** button
+12. Wait about 2–3 minutes — you'll see a progress bar and logs
+13. When it says **"Congratulations!"** your app is live!
+14. Click the **"Visit"** button to open your app — it will have a URL like `supercuts-analytics-abc123.vercel.app`
+
+---
+
+## PART 5 — Add to your phone as an app
+
+**On iPhone:**
+1. Open the app URL in **Safari** (must be Safari, not Chrome)
+2. Tap the **Share button** at the bottom (the square with an arrow pointing up)
+3. Scroll down and tap **"Add to Home Screen"**
+4. Tap **"Add"** in the top right
+5. The app icon will appear on your home screen
+
+**On Android:**
+1. Open the app URL in **Chrome**
+2. Tap the **three dots** in the top right corner
+3. Tap **"Add to Home Screen"**
+4. Tap **"Add"**
+
+---
+
+## PART 6 — Using the app
+
+1. Export your weekly stylist report (stores with each employee listed underneath)
+2. Open the app (from your home screen or the URL)
+3. Upload it into the single "Stylist Report" slot on the Upload tab
+4. The dashboard updates instantly — Overview lets you tap any metric
+   to see the top/bottom 10 stores, Stores shows every location,
+   Employees shows every stylist (searchable, sortable), and By Store
+   groups employees under their store. Every tab has a search box.
+5. Next week, upload the new file the same way — it replaces this
+   week's numbers for everyone viewing the site
+
+---
+
+## If something goes wrong
+
+**"Page not found" on Vercel:**
+- Make sure `vercel.json` was included in your uploaded files
+
+**Data not saving between sessions:**
+- Make sure both environment variables were added correctly in Vercel
+- Go to Vercel → your project → Settings → Environment Variables to check
+
+**The app shows "local" badge in the top corner:**
+- This means Supabase isn't connected — check your environment variables
+
+**Need to update the app later:**
+- Upload updated files to GitHub the same way as Part 3
+- Vercel will automatically rebuild and redeploy within 2 minutes
+
+---
+
+## Your app URL
+Write it here once you have it: ________________________________
+
