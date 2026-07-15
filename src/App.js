@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Bar } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip, Legend } from 'chart.js';
-import { loadReport, saveReport, clearReport, isConfigured } from './db';
-import { parseStylistReport } from './parser';
+import { loadData, saveData, clearData, isConfigured } from './db';
+import { parseStylistReport, parseEmployeeStartDates, normalizeName } from './parser';
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import './App.css';
 
@@ -141,17 +141,17 @@ function Leaderboard({ rows, metric, formatter, title, count = 8, order = 'desc'
 }
 
 // ─── Upload ─────────────────────────────────────────────────────────────────
-function UploadSlot({ fileInfo, uploading, onFile }) {
+function UploadSlot({ id, title, hint, fileInfo, uploading, onFile }) {
   return (
-    <label htmlFor="weekly-report-file" className={`upload-slot ${fileInfo ? 'upload-slot--filled' : ''}`}>
+    <label htmlFor={id} className={`upload-slot ${fileInfo ? 'upload-slot--filled' : ''}`}>
       <input
-        id="weekly-report-file" type="file" accept=".xlsx,.xls,.csv"
+        id={id} type="file" accept=".xlsx,.xls,.csv"
         onChange={e => { if (e.target.files[0]) onFile(e.target.files[0]); e.target.value = ''; }}
         style={{ display: 'none' }}
       />
       <div className="upload-slot-icon">{uploading ? <span className="spinner small" /> : (fileInfo ? '✓' : '+')}</div>
       <div className="upload-slot-body">
-        <p className="upload-slot-title">Stylist Report</p>
+        <p className="upload-slot-title">{title}</p>
         {fileInfo ? (
           <>
             <p className="upload-slot-file">{fileInfo.fileName}</p>
@@ -159,22 +159,31 @@ function UploadSlot({ fileInfo, uploading, onFile }) {
             <span className="upload-slot-replace">Replace file</span>
           </>
         ) : (
-          <p className="upload-slot-hint">Upload this week's store + stylist export</p>
+          <p className="upload-slot-hint">{hint}</p>
         )}
       </div>
     </label>
   );
 }
 
-function UploadTab({ report, uploading, onFile, onClear }) {
+function UploadTab({ report, uploading, onFile, onClear, employeeRoster, uploadingRoster, onRosterFile, onClearRoster }) {
   return (
     <div className="tab-content">
       <UploadSlot
+        id="weekly-report-file" title="Stylist Report" hint="Upload this week's store + stylist export"
         fileInfo={report ? { fileName: report.fileName, sub: `${report.storeCount} stores · ${report.employeeCount} employees · ${fmt$(report.companyTotals.sales)} total sales` } : null}
         uploading={uploading}
         onFile={onFile}
       />
-      {report && <button className="btn-ghost btn-danger" onClick={onClear}>Clear this report</button>}
+      {report && <button className="btn-ghost btn-danger" onClick={onClear}>Clear stylist report</button>}
+
+      <UploadSlot
+        id="employee-start-file" title="Employee Start Dates" hint="Upload the employee name + start date export"
+        fileInfo={employeeRoster ? { fileName: employeeRoster.fileName, sub: `${employeeRoster.employees.length} employees on file` } : null}
+        uploading={uploadingRoster}
+        onFile={onRosterFile}
+      />
+      {employeeRoster && <button className="btn-ghost btn-danger" onClick={onClearRoster}>Clear start-date list</button>}
     </div>
   );
 }
@@ -589,13 +598,148 @@ function DLTab({ report, query, onQuery }) {
   );
 }
 
+// ─── 60 Day Employee tab ────────────────────────────────────────────────────
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function buildNewHireRows(report, employeeRoster) {
+  const now = Date.now();
+  const byName = new Map();
+  if (report) {
+    report.allEmployees.forEach(e => byName.set(normalizeName(e.name), e));
+  }
+  const codeToStore = new Map();
+  if (report) {
+    report.stores.forEach(s => codeToStore.set(s.code, s));
+  }
+
+  const rows = [];
+  (employeeRoster?.employees || []).forEach(e => {
+    const start = new Date(e.startDate).getTime();
+    const daysAgo = Math.floor((now - start) / DAY_MS);
+    if (daysAgo < 0 || daysAgo > 60) return;
+
+    const match = byName.get(normalizeName(e.name));
+    let storeName = null, leaderInfo = null, metrics = {};
+    if (match) {
+      storeName = match.store;
+      const storeObj = report.stores.find(s => s.name === match.store);
+      leaderInfo = storeObj ? getLeaderForStoreCode(storeObj.code) : null;
+      metrics = match;
+    }
+
+    rows.push({
+      name: e.name,
+      startDate: e.startDate,
+      daysAgo,
+      store: storeName,
+      dl: leaderInfo ? leaderInfo.leaderName : null,
+      matched: !!match,
+      sales: metrics.sales ?? null,
+      colorSales: metrics.colorSales ?? null,
+      retail: metrics.retail ?? null,
+      cpc: metrics.cpc ?? null,
+      rpc: metrics.rpc ?? null,
+      tsth: metrics.tsth ?? null,
+      totalHours: metrics.totalHours ?? null,
+    });
+  });
+  return rows;
+}
+
+const NEW_HIRE_SORT_OPTIONS = [
+  { key: 'daysAgo', label: 'Newest first' },
+  { key: 'name', label: 'Name (A–Z)' },
+  { key: 'store', label: 'Store (A–Z)' },
+  { key: 'sales', label: 'Sales' },
+  { key: 'tsth', label: 'TSTH' },
+];
+
+function NewHireTab({ report, employeeRoster, query, onQuery }) {
+  const [sortBy, setSortBy] = useState('daysAgo');
+  const rows = useMemo(() => buildNewHireRows(report, employeeRoster), [report, employeeRoster]);
+  const filtered = useMemo(() => {
+    if (!query.trim()) return rows;
+    const q = query.trim().toLowerCase();
+    return rows.filter(r =>
+      r.name.toLowerCase().includes(q) ||
+      (r.store || '').toLowerCase().includes(q) ||
+      (r.dl || '').toLowerCase().includes(q)
+    );
+  }, [rows, query]);
+  const sorted = useMemo(() => {
+    if (sortBy === 'daysAgo') return [...filtered].sort((a, b) => a.daysAgo - b.daysAgo);
+    return sortByMetric(filtered, sortBy, sortBy === 'name' || sortBy === 'store' ? 'asc' : 'desc');
+  }, [filtered, sortBy]);
+
+  const unmatchedCount = filtered.filter(r => !r.matched).length;
+
+  if (!employeeRoster) {
+    return (
+      <div className="empty-state">
+        <p className="empty-title">No employee start-date file uploaded</p>
+        <p>Go to the Upload tab and add the "Employee Start Dates" file to see who's new.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="tab-content">
+      <SearchBox value={query} onChange={onQuery} placeholder="Search employees, stores, or DL…" />
+      <div className="ledger-head-row">
+        <p className="section-label">{filtered.length} employee{filtered.length !== 1 ? 's' : ''} hired in the last 60 days</p>
+        <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+          {NEW_HIRE_SORT_OPTIONS.map(o => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
+        </select>
+      </div>
+
+      <div className="ledger-scroll">
+        <table className="ledger-table">
+          <thead>
+            <tr>
+              <th className="ledger-name-col">Employee</th>
+              <th>Start Date</th><th>Days</th>
+              <th className="ledger-store-col">Store</th><th className="ledger-store-col">DL</th>
+              <th>Sales</th><th>Color Sales</th><th>Retail</th><th>CPC</th><th>RPC</th><th>TSTH</th><th>Hours</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((r, i) => (
+              <tr key={`${r.name}-${i}`}>
+                <td className="ledger-name-col">{r.name}</td>
+                <td>{new Date(r.startDate).toLocaleDateString('en-US')}</td>
+                <td>{r.daysAgo}</td>
+                <td className="ledger-store-col">{r.store || '—'}</td>
+                <td className="ledger-store-col">{r.dl || '—'}</td>
+                <td>{r.sales != null ? fmt$(r.sales) : '—'}</td>
+                <td>{r.colorSales != null ? fmt$(r.colorSales) : '—'}</td>
+                <td>{r.retail != null ? fmt$(r.retail) : '—'}</td>
+                <td>{r.cpc != null ? fmtNum(r.cpc) : '—'}</td>
+                <td>{r.rpc != null ? fmtNum(r.rpc) : '—'}</td>
+                <td className="ledger-rate">{r.tsth != null ? fmtRate(r.tsth) : '—'}</td>
+                <td>{r.totalHours != null ? fmtNum(r.totalHours, 1) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {!sorted.length && <p className="empty-note" style={{ textAlign: 'center' }}>No new hires match "{query}".</p>}
+      {unmatchedCount > 0 && (
+        <p className="ledger-footnote">
+          ⚠ {unmatchedCount} of these {unmatchedCount === 1 ? "person isn't" : "people aren't"} matched in the current Stylist Report yet (no store/sales data) — likely because they haven't had a shift with sales logged, or their name is spelled slightly differently between the two files.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ─── Setup tab ──────────────────────────────────────────────────────────────
 function SetupTab({ configured }) {
   const steps = [
     { n: 1, title: 'Export this week\u2019s stylist report', body: 'Run the report with every store and every employee under it, covering the week you want to see.' },
-    { n: 2, title: 'Upload it', body: 'Go to the Upload tab and drop the file in. The date range fills in automatically from the file.' },
-    { n: 3, title: 'Explore the tabs', body: 'Overview: tap a metric to see the top/bottom 10 stores. Stores: every location side by side. Employees: every stylist, sortable, searchable. By Store: employees grouped under their store. Every tab has a search box.' },
-    { n: 4, title: 'Next week', body: 'Just upload the new file the same way \u2014 it replaces this week\u2019s data for everyone viewing the site.' },
+    { n: 2, title: 'Upload it', body: 'Go to the Upload tab and drop it into the "Stylist Report" slot. The date range fills in automatically.' },
+    { n: 3, title: 'Optionally upload employee start dates', body: 'A simple Employee Name + Start Date export. Drop it into the "Employee Start Dates" slot to power the "60 Day Employee" tab, which shows anyone hired in the last 60 days along with their store, DL, and sales — even if they don\u2019t have sales data yet.' },
+    { n: 4, title: 'Explore the tabs', body: 'Overview: tap a metric to see the top/bottom 10 stores. Stores: every location side by side. Employees / By Store: every stylist. Retail / Color Sales / DL: grouped by District Leader. 60 Day Employee: recent hires. Every tab has a search box.' },
+    { n: 5, title: 'Next week', body: 'Just upload a new stylist report the same way \u2014 it replaces this week\u2019s data for everyone viewing the site.' },
   ];
   return (
     <div className="tab-content setup-tab">
@@ -639,24 +783,28 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;`}<
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Overview', 'Stores', 'Employees', 'By Store', 'Retail', 'Color Sales', 'DL', 'Upload', 'Setup'];
+const TABS = ['Overview', 'Stores', 'Employees', 'By Store', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Upload', 'Setup'];
 
 export default function App() {
   const [report, setReport] = useState(null);
+  const [employeeRoster, setEmployeeRoster] = useState(null);
   const [label, setLabel] = useState('');
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('Overview');
   const [toast, setToast] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadingRoster, setUploadingRoster] = useState(false);
   const [selectedMetric, setSelectedMetric] = useState('tsth');
-  const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', 'By Store': '', Retail: '', 'Color Sales': '', DL: '' });
+  const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', 'By Store': '', Retail: '', 'Color Sales': '', DL: '', '60 Day Employee': '' });
 
   useEffect(() => {
-    loadReport().then(({ data, source, error }) => {
-      if (data) { setReport(data); } else { setTab('Upload'); }
+    Promise.all([loadData('stylist_report'), loadData('employee_start_dates')]).then(([reportRes, rosterRes]) => {
+      if (reportRes.data) setReport(reportRes.data); else setTab('Upload');
+      if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       setLoading(false);
-      if (isConfigured() && source === 'local') {
-        showToast(`Couldn't reach Supabase (${error || 'unknown error'}) — showing this device's local data only`, 'error');
+      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local')) {
+        const err = reportRes.error || rosterRes.error;
+        showToast(`Couldn't reach Supabase (${err || 'unknown error'}) — showing this device's local data only`, 'error');
       }
     }).catch(() => setLoading(false));
   }, []);
@@ -674,7 +822,7 @@ export default function App() {
       const parsed = await parseStylistReport(file);
       setReport(parsed);
       setLabel(parsed.dateRangeLabel || '');
-      const result = await saveReport(parsed);
+      const result = await saveData('stylist_report', parsed);
       if (isConfigured() && !result.ok) {
         showToast(`Loaded ${file.name}, but couldn't sync to Supabase (${result.error}) — only visible on this device`, 'error');
       } else {
@@ -688,18 +836,43 @@ export default function App() {
     }
   }, []);
 
+  const handleRosterFile = useCallback(async file => {
+    setUploadingRoster(true);
+    try {
+      const parsed = await parseEmployeeStartDates(file);
+      setEmployeeRoster(parsed);
+      const result = await saveData('employee_start_dates', parsed);
+      if (isConfigured() && !result.ok) {
+        showToast(`Loaded ${file.name}, but couldn't sync to Supabase (${result.error}) — only visible on this device`, 'error');
+      } else {
+        showToast(`Loaded ${file.name} — ${parsed.employees.length} employees on file`);
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setUploadingRoster(false);
+    }
+  }, []);
+
   const handleClearAll = async () => {
-    if (!window.confirm('Clear the uploaded report and start over? This cannot be undone.')) return;
-    await clearReport();
+    if (!window.confirm('Clear the uploaded stylist report and start over? This cannot be undone.')) return;
+    await clearData('stylist_report');
     setReport(null);
     setLabel('');
     setTab('Upload');
-    showToast('Report cleared');
+    showToast('Stylist report cleared');
+  };
+
+  const handleClearRoster = async () => {
+    if (!window.confirm('Clear the employee start-date list? This cannot be undone.')) return;
+    await clearData('employee_start_dates');
+    setEmployeeRoster(null);
+    showToast('Start-date list cleared');
   };
 
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
-  const needsReport = !report && tab !== 'Upload' && tab !== 'Setup';
+  const needsReport = !report && tab !== 'Upload' && tab !== 'Setup' && tab !== '60 Day Employee';
 
   return (
     <div className="app">
@@ -746,7 +919,15 @@ export default function App() {
         {!needsReport && tab === 'DL' && report && (
           <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} />
         )}
-        {tab === 'Upload' && <UploadTab report={report} uploading={uploading} onFile={handleFile} onClear={handleClearAll} />}
+        {tab === '60 Day Employee' && (
+          <NewHireTab report={report} employeeRoster={employeeRoster} query={queries['60 Day Employee']} onQuery={v => setQuery('60 Day Employee', v)} />
+        )}
+        {tab === 'Upload' && (
+          <UploadTab
+            report={report} uploading={uploading} onFile={handleFile} onClear={handleClearAll}
+            employeeRoster={employeeRoster} uploadingRoster={uploadingRoster} onRosterFile={handleRosterFile} onClearRoster={handleClearRoster}
+          />
+        )}
         {tab === 'Setup' && <SetupTab configured={isConfigured()} />}
       </main>
     </div>

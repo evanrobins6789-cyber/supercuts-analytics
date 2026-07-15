@@ -38,6 +38,9 @@ function findCol(headerRow, label) {
 function cleanStoreName(raw) {
   return String(raw).replace(/^\s*\d+\s*-?\s*/, '').trim() || String(raw).trim();
 }
+export function normalizeName(raw) {
+  return String(raw).replace(/\s+/g, ' ').trim().toLowerCase();
+}
 function readWorkbookGrid(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -179,4 +182,56 @@ export async function parseStylistReport(file) {
     employeeCount: allEmployees.length,
     fileName: file.name,
   };
+}
+
+// ─── Employee start-date roster ─────────────────────────────────────────────
+// A simple two-column list: Employee Name | Employee start date (as text,
+// e.g. "1/16/2026"). Company-wide — includes everyone ever entered in the
+// system, not just people currently on a store's schedule.
+function parseUSDate(text) {
+  const m = String(text).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!m) return null;
+  let [, mo, da, yr] = m;
+  if (yr.length === 2) yr = '20' + yr;
+  const d = new Date(Number(yr), Number(mo) - 1, Number(da));
+  return isNaN(d.getTime()) ? null : d;
+}
+function parseDateCell(cell) {
+  const raw = cell?.v;
+  if (typeof raw === 'number') {
+    // Excel serial date (days since 1899-12-30)
+    const epoch = new Date(Date.UTC(1899, 11, 30));
+    return new Date(epoch.getTime() + raw * 86400000);
+  }
+  return parseUSDate(cellText(cell));
+}
+
+export async function parseEmployeeStartDates(file) {
+  const grid = await readWorkbookGrid(file);
+
+  const hdrRowIdx = grid.findIndex(row => row.some(c => cellText(c).toLowerCase() === 'employee name'));
+  if (hdrRowIdx === -1) throw new Error('Could not find an "Employee Name" column in this file.');
+  const headerRow = grid[hdrRowIdx];
+  const nameCol = findCol(headerRow, 'Employee Name');
+  const dateCol = findCol(headerRow, 'Employee start date');
+  if (dateCol === -1) throw new Error('Could not find an "Employee start date" column in this file.');
+
+  const seen = new Set();
+  const employees = [];
+  for (let r = hdrRowIdx + 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (!rowHasData(row)) continue;
+    const name = cellText(row[nameCol]);
+    if (!name) continue;
+    const key = normalizeName(name);
+    if (seen.has(key)) continue; // this file has repeated rows for the same person
+    const startDate = parseDateCell(row[dateCol]);
+    if (!startDate) continue;
+    seen.add(key);
+    employees.push({ name, startDate: startDate.toISOString() });
+  }
+
+  if (!employees.length) throw new Error('No employees with a valid start date were found in this file.');
+
+  return { employees, fileName: file.name };
 }
