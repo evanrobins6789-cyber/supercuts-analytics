@@ -118,6 +118,11 @@ export async function parseStylistReport(file) {
     const row = grid[r];
     if (!rowHasData(row)) continue;
 
+    // The file's own summary row can put "Grand Total" in any column
+    // depending on the export — scan the whole row so it's never mistaken
+    // for a store or an employee, no matter where the label lands.
+    if (row.some(c => /grand\s*total/i.test(cellText(c)))) continue;
+
     const locationRaw = cellText(row[col.location]);
     const first = cellText(row[col.firstName]);
     const last = cellText(row[col.lastName]);
