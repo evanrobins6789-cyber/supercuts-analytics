@@ -392,13 +392,16 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   const [sortBy, setSortBy] = useState(metricA.key);
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
   const [expanded, setExpanded] = useState({});
-  const rows = useMemo(() => report.stores.map(s => ({ name: s.name, code: s.code, employees: s.employees, ...s.totals })), [report.stores]);
-  const groups = useMemo(() => groupStoresByLeader(rows), [rows]);
-  const toggleStore = code => setExpanded(prev => ({ ...prev, [code]: !prev[code] }));
-
   const getGoal = code => (goalType && goals?.[code]?.[goalType] != null ? goals[code][goalType] : null);
   const showGoals = !!goalType;
   const colCount = 3 + (showGoals ? 2 : 0);
+
+  const rows = useMemo(() => report.stores.map(s => {
+    const goal = getGoal(s.code);
+    return { name: s.name, code: s.code, employees: s.employees, ...s.totals, vsGoal: goal != null ? s.totals[metricA.key] - goal : null };
+  }), [report.stores, goals, goalType]); // eslint-disable-line react-hooks/exhaustive-deps
+  const groups = useMemo(() => groupStoresByLeader(rows), [rows]);
+  const toggleStore = code => setExpanded(prev => ({ ...prev, [code]: !prev[code] }));
 
   const filteredGroups = useMemo(() => {
     if (!query.trim()) return groups;
@@ -441,6 +444,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
         <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
           <option value={metricA.key}>Sort: {metricA.label}</option>
           <option value={metricB.key}>Sort: {metricB.label}</option>
+          {showGoals && <option value="vsGoal">Sort: vs Goal</option>}
           <option value="name">Sort: Name (A–Z)</option>
         </select>
       </div>
@@ -465,7 +469,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                 <tbody>
                   {sortedStores.map(s => {
                     const goal = getGoal(s.code);
-                    const diff = goal != null ? s[metricA.key] - goal : null;
+                    const diff = s.vsGoal;
                     const isOpen = !!expanded[s.code];
                     return (
                       <React.Fragment key={s.name}>
@@ -531,7 +535,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
             <tbody>
               {sortedFlat.map(s => {
                 const goal = getGoal(s.code);
-                const diff = goal != null ? s[metricA.key] - goal : null;
+                const diff = s.vsGoal;
                 const isOpen = !!expanded[s.code];
                 return (
                   <React.Fragment key={s.name}>
@@ -606,7 +610,8 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
 // ─── DL tab ─────────────────────────────────────────────────────────────────
 function DLTab({ report, query, onQuery }) {
   const [expanded, setExpanded] = useState({});
-  const rows = useMemo(() => report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })), [report.stores]);
+  const [expandedStore, setExpandedStore] = useState({});
+  const rows = useMemo(() => report.stores.map(s => ({ name: s.name, code: s.code, employees: s.employees, ...s.totals })), [report.stores]);
   const groups = useMemo(() => groupStoresByLeader(rows), [rows]);
 
   const filteredGroups = useMemo(() => {
@@ -631,6 +636,7 @@ function DLTab({ report, query, onQuery }) {
   }, [filteredGroups]);
 
   const toggle = name => setExpanded(prev => ({ ...prev, [name]: !prev[name] }));
+  const toggleStoreRow = code => setExpandedStore(prev => ({ ...prev, [code]: !prev[code] }));
 
   return (
     <div className="tab-content">
@@ -672,18 +678,37 @@ function DLTab({ report, query, onQuery }) {
                           </tr>
                         </thead>
                         <tbody>
-                          {sortByMetric(g.stores, 'sales', 'desc').map(s => (
-                            <tr key={s.name}>
-                              <td className="ledger-name-col">{s.name}</td>
-                              <td>{fmt$(s.sales)}</td>
-                              <td className="ledger-rate">{fmtRate(s.tsth)}</td>
-                              <td>{fmtNum(s.totalHours, 0)}</td>
-                              <td>{fmt$(s.colorSales)}</td>
-                              <td>{fmtNum(s.cpc)}</td>
-                              <td>{fmt$(s.retail)}</td>
-                              <td>{fmtNum(s.rpc)}</td>
-                            </tr>
-                          ))}
+                          {sortByMetric(g.stores, 'sales', 'desc').map(s => {
+                            const isStoreOpen = !!expandedStore[s.code];
+                            return (
+                              <React.Fragment key={s.name}>
+                                <tr className="store-row-clickable" onClick={() => toggleStoreRow(s.code)}>
+                                  <td className="ledger-name-col">
+                                    <span className={`mini-chevron ${isStoreOpen ? 'mini-chevron--open' : ''}`}>▸</span> {s.name}
+                                  </td>
+                                  <td>{fmt$(s.sales)}</td>
+                                  <td className="ledger-rate">{fmtRate(s.tsth)}</td>
+                                  <td>{fmtNum(s.totalHours, 0)}</td>
+                                  <td>{fmt$(s.colorSales)}</td>
+                                  <td>{fmtNum(s.cpc)}</td>
+                                  <td>{fmt$(s.retail)}</td>
+                                  <td>{fmtNum(s.rpc)}</td>
+                                </tr>
+                                {isStoreOpen && (
+                                  <tr className="store-expand-row">
+                                    <td colSpan={8}>
+                                      <EmployeeTable
+                                        rows={sortByMetric(s.employees, 'sales', 'desc')}
+                                        showStoreCol={false}
+                                        footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours }}
+                                        footerLabel="Store total / weighted avg"
+                                      />
+                                    </td>
+                                  </tr>
+                                )}
+                              </React.Fragment>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
