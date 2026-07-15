@@ -150,12 +150,13 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;
 
 ## PART 6 — Using the app
 
-1. Export your weekly store performance report (one row per store)
+1. Export your weekly stylist report (stores with each employee listed underneath)
 2. Open the app (from your home screen or the URL)
-3. Upload it into the single "Weekly Report" slot
-4. The dashboard updates instantly — Overview shows company-wide
-   totals and a leaderboard of top stores, Stores shows every
-   location with the full set of metrics, sortable by any column
+3. Upload it into the single "Stylist Report" slot on the Upload tab
+4. The dashboard updates instantly — Overview lets you tap any metric
+   to see the top/bottom 10 stores, Stores shows every location,
+   Employees shows every stylist (searchable, sortable), and By Store
+   groups employees under their store. Every tab has a search box.
 5. Next week, upload the new file the same way — it replaces this
    week's numbers for everyone viewing the site
 

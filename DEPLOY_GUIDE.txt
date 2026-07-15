@@ -424,7 +424,7 @@ STEP 6 — HOW TO USE THE APP
 
 This app shows one week at a time, across every store:
 
-  1. Run your weekly store performance report (one row per store)
+  1. Run your weekly stylist report (stores with each employee listed underneath)
   2. Open the Store Scoreboard app (from your home screen icon or by
      going to your URL)
   3. Upload that file into the single "Weekly Report" slot
@@ -457,14 +457,16 @@ FIX: This means Supabase is not connected. Your environment
      Variables and check both values carefully.
 
 PROBLEM: I uploaded a file and got an error toast
-FIX: The file needs columns named "Location Name", "$Net Sales
-     w/o GC", and "Total Hours" (exactly like your weekly export).
-     Make sure you're uploading the store performance report, not
-     a different export.
+FIX: The file needs columns named "Location Name", "Employee First
+     Name", and "$EE Net no svs" (exactly like your weekly stylist
+     export). Make sure you're uploading the right report.
 
-PROBLEM: A store I expect to see is missing from the list
-FIX: Check that store's row in the original Excel file has a
-     value in the "Location Name" column — blank rows are skipped.
+PROBLEM: A store or employee I expect to see is missing
+FIX: Check that row in the original Excel file — a store needs a
+     value in "Location Name" with the employee columns blank, and
+     an employee needs a first/last name with "Location Name" blank
+     on their own row (that's how the file marks who belongs to
+     which store).
 
 PROBLEM: I can't find "uploading an existing file" on GitHub
 FIX: When you create a new empty repository, GitHub shows a

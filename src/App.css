@@ -77,6 +77,25 @@
 
 /* ─── Summary tiles ──────────────────────────────────────────────────── */
 .section-hint { font-size: 12.5px; color: var(--ink-soft); margin: 0; }
+
+/* ─── Search ─────────────────────────────────────────────────────────── */
+.search-box {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  padding: 9px 12px; box-shadow: var(--shadow);
+}
+.search-icon { color: var(--ink-soft); font-size: 15px; }
+.search-input {
+  flex: 1; border: none; outline: none; background: transparent;
+  font-family: 'Inter', sans-serif; font-size: 13.5px; color: var(--navy);
+}
+.search-input::placeholder { color: #A6B2C0; }
+.search-clear {
+  border: none; background: var(--line); color: var(--navy); width: 20px; height: 20px;
+  border-radius: 50%; cursor: pointer; font-size: 13px; line-height: 1;
+}
+.search-clear:hover { background: var(--red); color: #fff; }
+.ledger-store-col { text-align: left !important; font-family: 'Inter', sans-serif; color: var(--ink-soft); }
 .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 @media (max-width: 720px) { .summary-grid { grid-template-columns: repeat(2, 1fr); } }
 .summary-tile {
@@ -123,7 +142,7 @@
 .ledger-head-row { display: flex; align-items: center; justify-content: space-between; }
 .sort-select { font-family: 'Inter', sans-serif; font-size: 12px; color: var(--navy); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
 .ledger-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--card); box-shadow: var(--shadow); }
-.ledger-table { width: 100%; border-collapse: collapse; font-family: 'IBM Plex Mono', monospace; font-size: 12px; min-width: 1300px; }
+.ledger-table { width: 100%; border-collapse: collapse; font-family: 'IBM Plex Mono', monospace; font-size: 12px; min-width: 760px; }
 .ledger-table th, .ledger-table td { padding: 9px 11px; text-align: right; white-space: nowrap; }
 .ledger-name-col { text-align: left !important; font-family: 'Inter', sans-serif; font-weight: 500; position: sticky; left: 0; z-index: 2; background: var(--card); box-shadow: 2px 0 5px rgba(20,42,74,0.10); }
 .ledger-table tbody tr:nth-child(odd) .ledger-name-col { background: #F6F8FA; }
