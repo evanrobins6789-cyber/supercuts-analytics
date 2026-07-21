@@ -1320,6 +1320,23 @@ function historySummary(history) {
   };
 }
 
+function historyByStore(history) {
+  const records = Object.values(history || {});
+  const byCode = new Map();
+  records.forEach(r => {
+    if (!byCode.has(r.code)) byCode.set(r.code, { code: r.code, service: 0, retail: 0, color: 0, hours: 0, days: 0 });
+    const s = byCode.get(r.code);
+    s.service += r.service || 0;
+    s.retail += r.retail || 0;
+    s.color += r.color || 0;
+    s.hours += r.hours || 0;
+    s.days += 1;
+  });
+  return Array.from(byCode.values())
+    .map(s => ({ ...s, name: STORE_CODE_TO_NAME[s.code] || null }))
+    .sort((a, b) => b.retail - a.retail);
+}
+
 function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBatch, onClearHistory }) {
   const [processingSales, setProcessingSales] = useState(false);
   const [processingAttendance, setProcessingAttendance] = useState(false);
@@ -1340,6 +1357,8 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
   };
 
   const summary = historySummary(history);
+  const storeBreakdown = summary ? historyByStore(history) : [];
+  const unrecognized = storeBreakdown.filter(s => !s.name);
 
   return (
     <div className="tab-content">
@@ -1393,6 +1412,43 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
         </div>
       )}
       {!summary && <p className="empty-note">No historical data stored yet — upload files above to get started.</p>}
+
+      {unrecognized.length > 0 && (
+        <div className="unmatched-box">
+          <p className="unmatched-title">⚠ {unrecognized.length} store code{unrecognized.length > 1 ? 's' : ''} in your history don't match any known store</p>
+          <p className="unmatched-hint">These are likely bad rows (a total/summary line picked up as a store, a typo in a store code, etc.) inflating your totals:</p>
+          <ul>
+            {unrecognized.map(s => (
+              <li key={s.code}>Code {s.code} — {s.days} day{s.days !== 1 ? 's' : ''}, {fmt$(s.service)} service, {fmt$(s.retail)} retail, {fmt$(s.color)} color, {fmtNum(s.hours, 0)} hours</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {summary && (
+        <>
+          <p className="section-label">All stores in history (sorted by retail)</p>
+          <div className="ledger-scroll">
+            <table className="ledger-table">
+              <thead>
+                <tr><th className="ledger-name-col">Store</th><th>Days</th><th>Service</th><th>Retail</th><th>Color</th><th>Hours</th></tr>
+              </thead>
+              <tbody>
+                {storeBreakdown.map(s => (
+                  <tr key={s.code}>
+                    <td className="ledger-name-col">{s.name || `⚠ Code ${s.code} (unrecognized)`}</td>
+                    <td>{s.days}</td>
+                    <td>{fmt$(s.service)}</td>
+                    <td>{fmt$(s.retail)}</td>
+                    <td>{fmt$(s.color)}</td>
+                    <td>{fmtNum(s.hours, 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
 
       {summary && <button className="btn-ghost btn-danger" onClick={onClearHistory}>Clear all historical data</button>}
 
