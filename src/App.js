@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { loadData, saveData, clearData, isConfigured } from './db';
-import { parseStylistReport, parseEmployeeStartDates, parseGoalFile, parseReviews, normalizeName } from './parser';
+import {
+  parseStylistReport, parseEmployeeStartDates, parseGoalFile, parseReviews, normalizeName,
+  parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory,
+} from './parser';
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
 import './App.css';
@@ -1296,6 +1299,113 @@ function ReviewsTab({ report, reviews, query, onQuery }) {
   );
 }
 
+// ─── Historical Import tab ──────────────────────────────────────────────────
+function historySummary(history) {
+  const records = Object.values(history || {});
+  if (!records.length) return null;
+  const stores = new Set(records.map(r => r.code));
+  const dates = records.map(r => r.date).sort();
+  const sum = key => records.reduce((s, r) => s + (r[key] || 0), 0);
+  return {
+    dayCount: records.length,
+    storeCount: stores.size,
+    firstDate: dates[0],
+    lastDate: dates[dates.length - 1],
+    totalService: sum('service'),
+    totalRetail: sum('retail'),
+    totalColor: sum('color'),
+    totalHours: sum('hours'),
+    missingHours: records.filter(r => r.hours == null).length,
+    missingSales: records.filter(r => r.service == null).length,
+  };
+}
+
+function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBatch, onClearHistory }) {
+  const [processingSales, setProcessingSales] = useState(false);
+  const [processingAttendance, setProcessingAttendance] = useState(false);
+  const [log, setLog] = useState([]);
+
+  const handleSalesFiles = async fileList => {
+    setProcessingSales(true);
+    const lines = await onImportSalesBatch(fileList);
+    setLog(prev => [...lines, ...prev]);
+    setProcessingSales(false);
+  };
+
+  const handleAttendanceFiles = async fileList => {
+    setProcessingAttendance(true);
+    const lines = await onImportAttendanceBatch(fileList);
+    setLog(prev => [...lines, ...prev]);
+    setProcessingAttendance(false);
+  };
+
+  const summary = historySummary(history);
+
+  return (
+    <div className="tab-content">
+      <p className="section-hint">
+        One-time historical backfill. Upload as many Sales-Accrual and Attendance files as you have — each gets
+        boiled down to daily totals per store and added permanently to your history. Re-uploading a file you've
+        already done is safe; it just overwrites those exact days with the same numbers.
+      </p>
+
+      <div className="history-upload-row">
+        <label className={`upload-slot history-upload-slot ${processingSales ? 'upload-slot--filled' : ''}`}>
+          <input
+            type="file" accept=".xlsx,.xls,.csv" multiple style={{ display: 'none' }}
+            onChange={e => { const files = Array.from(e.target.files); if (files.length) handleSalesFiles(files); e.target.value = ''; }}
+          />
+          <div className="upload-slot-icon">{processingSales ? <span className="spinner small" /> : '📥'}</div>
+          <div className="upload-slot-body">
+            <p className="upload-slot-title">Sales-Accrual Files</p>
+            <p className="upload-slot-hint">Select all your Sales-Accrual exports at once (Sales, Retail, Color)</p>
+          </div>
+        </label>
+
+        <label className={`upload-slot history-upload-slot ${processingAttendance ? 'upload-slot--filled' : ''}`}>
+          <input
+            type="file" accept=".xlsx,.xls,.csv" multiple style={{ display: 'none' }}
+            onChange={e => { const files = Array.from(e.target.files); if (files.length) handleAttendanceFiles(files); e.target.value = ''; }}
+          />
+          <div className="upload-slot-icon">{processingAttendance ? <span className="spinner small" /> : '📥'}</div>
+          <div className="upload-slot-body">
+            <p className="upload-slot-title">Attendance Files</p>
+            <p className="upload-slot-hint">Select all your Attendance exports at once (Hours)</p>
+          </div>
+        </label>
+      </div>
+
+      {summary && (
+        <div className="summary-grid">
+          <div className="summary-tile"><p className="summary-tile-label">Days of History</p><p className="summary-tile-value">{summary.dayCount}</p></div>
+          <div className="summary-tile"><p className="summary-tile-label">Stores Covered</p><p className="summary-tile-value">{summary.storeCount}</p></div>
+          <div className="summary-tile"><p className="summary-tile-label">Date Range</p><p className="summary-tile-value" style={{ fontSize: 15 }}>{summary.firstDate} → {summary.lastDate}</p></div>
+          <div className="summary-tile"><p className="summary-tile-label">Total Hours</p><p className="summary-tile-value">{fmtNum(summary.totalHours, 0)}</p></div>
+          <div className="summary-tile"><p className="summary-tile-label">Total Service Sales</p><p className="summary-tile-value">{fmt$(summary.totalService)}</p></div>
+          <div className="summary-tile"><p className="summary-tile-label">Total Retail</p><p className="summary-tile-value">{fmt$(summary.totalRetail)}</p></div>
+          <div className="summary-tile"><p className="summary-tile-label">Total Color</p><p className="summary-tile-value">{fmt$(summary.totalColor)}</p></div>
+          {(summary.missingHours > 0 || summary.missingSales > 0) && (
+            <div className="summary-tile">
+              <p className="summary-tile-label">Incomplete Days</p>
+              <p className="summary-tile-value" style={{ fontSize: 13 }}>{summary.missingHours} missing hours, {summary.missingSales} missing sales</p>
+            </div>
+          )}
+        </div>
+      )}
+      {!summary && <p className="empty-note">No historical data stored yet — upload files above to get started.</p>}
+
+      {summary && <button className="btn-ghost btn-danger" onClick={onClearHistory}>Clear all historical data</button>}
+
+      {log.length > 0 && (
+        <div className="history-log">
+          <p className="chart-title">Import log</p>
+          {log.map((line, i) => <p key={i} className={`history-log-line ${line.startsWith('✗') ? 'history-log-line--error' : ''}`}>{line}</p>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Setup tab ──────────────────────────────────────────────────────────────
 function SetupTab({ configured }) {
   const steps = [
@@ -1347,13 +1457,14 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;`}<
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Goals', 'Upload', 'Setup'];
+const TABS = ['Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Goals', 'Historical Import', 'Upload', 'Setup'];
 
 export default function App() {
   const [report, setReport] = useState(null);
   const [employeeRoster, setEmployeeRoster] = useState(null);
   const [goals, setGoals] = useState({});
   const [reviews, setReviews] = useState(null);
+  const [history, setHistory] = useState({});
   const [label, setLabel] = useState('');
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('Overview');
@@ -1365,14 +1476,15 @@ export default function App() {
   const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', Retail: '', 'Color Sales': '', DL: '', '60 Day Employee': '', Reviews: '' });
 
   useEffect(() => {
-    Promise.all([loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('reviews')]).then(([reportRes, rosterRes, goalsRes, reviewsRes]) => {
+    Promise.all([loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('reviews'), loadData('daily_history')]).then(([reportRes, rosterRes, goalsRes, reviewsRes, historyRes]) => {
       if (reportRes.data) setReport(reportRes.data); else setTab('Upload');
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
       if (reviewsRes.data) setReviews(reviewsRes.data);
+      if (historyRes.data) setHistory(historyRes.data);
       setLoading(false);
-      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local' || reviewsRes.source === 'local')) {
-        const err = reportRes.error || rosterRes.error || goalsRes.error || reviewsRes.error;
+      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local' || reviewsRes.source === 'local' || historyRes.source === 'local')) {
+        const err = reportRes.error || rosterRes.error || goalsRes.error || reviewsRes.error || historyRes.error;
         showToast(`Couldn't reach Supabase (${err || 'unknown error'}) — showing this device's local data only`, 'error');
       }
     }).catch(() => setLoading(false));
@@ -1502,9 +1614,60 @@ export default function App() {
     }
   }, [goals]);
 
+  const handleImportSalesBatch = useCallback(async fileList => {
+    let working = history;
+    const lines = [];
+    for (const file of fileList) {
+      try {
+        const parsed = await parseSalesAccrualFile(file);
+        working = mergeSalesIntoHistory(working, parsed.records);
+        lines.push(`✓ ${file.name} — ${parsed.records.length} store-days`);
+      } catch (err) {
+        lines.push(`✗ ${file.name} — ${err.message}`);
+      }
+    }
+    setHistory(working);
+    const result = await saveData('daily_history', working);
+    if (isConfigured() && !result.ok) {
+      showToast(`Imported, but couldn't sync to Supabase (${result.error})`, 'error');
+    } else {
+      showToast(`Processed ${fileList.length} sales file${fileList.length !== 1 ? 's' : ''}`);
+    }
+    return lines;
+  }, [history]);
+
+  const handleImportAttendanceBatch = useCallback(async fileList => {
+    let working = history;
+    const lines = [];
+    for (const file of fileList) {
+      try {
+        const parsed = await parseAttendanceHistoryFile(file);
+        working = mergeAttendanceIntoHistory(working, parsed.records);
+        lines.push(`✓ ${file.name} — ${parsed.records.length} store-days`);
+      } catch (err) {
+        lines.push(`✗ ${file.name} — ${err.message}`);
+      }
+    }
+    setHistory(working);
+    const result = await saveData('daily_history', working);
+    if (isConfigured() && !result.ok) {
+      showToast(`Imported, but couldn't sync to Supabase (${result.error})`, 'error');
+    } else {
+      showToast(`Processed ${fileList.length} attendance file${fileList.length !== 1 ? 's' : ''}`);
+    }
+    return lines;
+  }, [history]);
+
+  const handleClearHistory = async () => {
+    if (!window.confirm('Clear all historical data? This cannot be undone.')) return;
+    await clearData('daily_history');
+    setHistory({});
+    showToast('Historical data cleared');
+  };
+
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
-  const needsReport = !report && tab !== 'Upload' && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Goals' && tab !== 'Reviews';
+  const needsReport = !report && tab !== 'Upload' && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Goals' && tab !== 'Reviews' && tab !== 'Historical Import';
 
   return (
     <div className="app">
@@ -1558,6 +1721,12 @@ export default function App() {
         )}
         {tab === 'Goals' && (
           <GoalsTab report={report} goals={goals} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} />
+        )}
+        {tab === 'Historical Import' && (
+          <HistoricalImportTab
+            history={history} onImportSalesBatch={handleImportSalesBatch}
+            onImportAttendanceBatch={handleImportAttendanceBatch} onClearHistory={handleClearHistory}
+          />
         )}
         {tab === 'Upload' && (
           <UploadTab

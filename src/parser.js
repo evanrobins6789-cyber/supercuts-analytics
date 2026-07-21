@@ -300,3 +300,144 @@ export async function parseReviews(file) {
 
   return { reviews, fileName: file.name };
 }
+
+// ─── Historical import: Sales-Accrual & Attendance ─────────────────────────
+// Both are line-item exports (one row per transaction, or per employee per
+// day). We aggregate down to one record per store per day here, rather than
+// keeping every raw row — that's what actually gets stored permanently.
+
+function toISODate(text) {
+  const m = String(text).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  const [, mo, da, yr] = m;
+  return `${yr}-${mo.padStart(2, '0')}-${da.padStart(2, '0')}`;
+}
+
+function extractCode(centerText) {
+  const m = String(centerText).match(/^\s*(\d+)/);
+  return m ? String(parseInt(m[1], 10)) : null;
+}
+
+// A retail product name almost always has a size in it, e.g. "(4.12 fl. oz.)"
+// or "(3_oz)". Blank Stylist + a Sold By name is the same signal from a
+// different angle (product sales aren't attributed to a stylist).
+const RETAIL_SIZE_RE = /\(\s*[\d.]+[\s_]*(?:fl\.?[\s_]*)?oz\.?\s*\)/i;
+function isRetailItem(itemName, stylist, soldBy) {
+  if (RETAIL_SIZE_RE.test(itemName)) return true;
+  if (!stylist && soldBy) return true;
+  return false;
+}
+
+const COLOR_KEYWORDS = ['color', 'colour', 'highlight', 'foil', 'demi', 'toner', 'balayage', 'grey blending', 'gray blending', 'repigmentation', 'supercolor', 'hairpainting'];
+function isColorItem(itemName) {
+  const t = itemName.toLowerCase();
+  return COLOR_KEYWORDS.some(k => t.includes(k));
+}
+
+export async function parseSalesAccrualFile(file) {
+  const grid = await readWorkbookGrid(file);
+  const hdrRowIdx = grid.findIndex(row => row.some(c => cellText(c).toLowerCase() === 'center name'));
+  if (hdrRowIdx === -1) throw new Error('Could not find a "Center Name" column in this file.');
+  const headerRow = grid[hdrRowIdx];
+  const col = {
+    center: findCol(headerRow, 'Center Name'),
+    item: findCol(headerRow, 'Item Name'),
+    sales: findCol(headerRow, 'Sales (Exc. Tax)'),
+    date: findCol(headerRow, 'Sale Date'),
+    stylist: findCol(headerRow, 'Stylist'),
+    soldBy: findCol(headerRow, 'Sold By'),
+  };
+  if (col.center === -1 || col.sales === -1 || col.date === -1) {
+    throw new Error('Could not find the expected columns (Center Name, Sales (Exc. Tax), Sale Date) in this file.');
+  }
+
+  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color }
+  for (let r = hdrRowIdx + 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (!rowHasData(row)) continue;
+    const code = extractCode(cellText(row[col.center]));
+    if (!code) continue;
+    const isoDate = toISODate(cellText(row[col.date]));
+    if (!isoDate) continue;
+
+    const amount = numOf(row[col.sales]);
+    const itemName = cellText(row[col.item]);
+    const stylist = cellText(row[col.stylist]);
+    const soldBy = cellText(row[col.soldBy]);
+
+    const key = `${code}|${isoDate}`;
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0 });
+    const rec = daily.get(key);
+    if (isRetailItem(itemName, stylist, soldBy)) {
+      rec.retail += amount;
+    } else {
+      rec.service += amount;
+      if (isColorItem(itemName)) rec.color += amount;
+    }
+  }
+
+  if (!daily.size) throw new Error('No sales rows found in this file.');
+  const records = Array.from(daily.values()).map(r => ({
+    code: r.code, date: r.date,
+    service: Math.round(r.service * 100) / 100,
+    retail: Math.round(r.retail * 100) / 100,
+    color: Math.round(r.color * 100) / 100,
+  }));
+  return { records, fileName: file.name };
+}
+
+export async function parseAttendanceHistoryFile(file) {
+  const grid = await readWorkbookGrid(file);
+  const hdrRowIdx = grid.findIndex(row => row.some(c => cellText(c).toLowerCase() === 'employee name'));
+  if (hdrRowIdx === -1) throw new Error('Could not find an "Employee Name" column in this file.');
+  const headerRow = grid[hdrRowIdx];
+  const col = {
+    date: findCol(headerRow, 'Date'),
+    workCenter: findCol(headerRow, 'Work Center'),
+    actualHours: findCol(headerRow, 'Actual Hours'),
+  };
+  if (col.date === -1 || col.workCenter === -1 || col.actualHours === -1) {
+    throw new Error('Could not find the expected columns (Date, Work Center, Actual Hours) in this file.');
+  }
+
+  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, hours }
+  for (let r = hdrRowIdx + 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (!rowHasData(row)) continue;
+    const code = extractCode(cellText(row[col.workCenter]));
+    if (!code) continue;
+    const isoDate = toISODate(cellText(row[col.date]));
+    if (!isoDate) continue;
+    const hours = numOf(row[col.actualHours]);
+
+    const key = `${code}|${isoDate}`;
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, hours: 0 });
+    daily.get(key).hours += hours;
+  }
+
+  if (!daily.size) throw new Error('No attendance rows found in this file.');
+  const records = Array.from(daily.values()).map(r => ({ code: r.code, date: r.date, hours: Math.round(r.hours * 100) / 100 }));
+  return { records, fileName: file.name };
+}
+
+// Merge newly-parsed daily records into the existing permanent history.
+// Re-uploading the same file/date range is safe — it just overwrites those
+// exact store+date entries with the same numbers, no duplication.
+export function mergeSalesIntoHistory(history, salesRecords) {
+  const next = { ...history };
+  salesRecords.forEach(r => {
+    const key = `${r.code}|${r.date}`;
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null };
+    next[key] = { ...existing, service: r.service, retail: r.retail, color: r.color };
+  });
+  return next;
+}
+export function mergeAttendanceIntoHistory(history, attendanceRecords) {
+  const next = { ...history };
+  attendanceRecords.forEach(r => {
+    const key = `${r.code}|${r.date}`;
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null };
+    next[key] = { ...existing, hours: r.hours };
+  });
+  return next;
+}

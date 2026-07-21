@@ -121,6 +121,13 @@
 }
 .goal-import-btn:hover { border-color: var(--red); color: var(--red-deep); }
 
+/* ─── Historical Import ──────────────────────────────────────────────── */
+.history-upload-row { display: flex; gap: 14px; flex-wrap: wrap; }
+.history-upload-slot { flex: 1 1 260px; }
+.history-log { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow); max-height: 320px; overflow-y: auto; }
+.history-log-line { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--ink-soft); padding: 3px 0; border-bottom: 1px dotted var(--line); }
+.history-log-line--error { color: var(--red-deep); }
+
 .store-row-clickable { cursor: pointer; }
 .store-row-clickable:hover { background: rgba(194,59,59,0.08); }
 .mini-chevron { display: inline-block; font-size: 9px; color: var(--red); transition: transform 0.15s ease; }
