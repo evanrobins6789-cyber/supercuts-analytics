@@ -3,6 +3,7 @@ import { loadData, saveData, clearData, isConfigured } from './db';
 import {
   parseStylistReport, parseEmployeeStartDates, parseGoalFile, parseReviews, normalizeName,
   parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory,
+  buildWeeklyRecord, mergeWeeklyIntoHistory,
 } from './parser';
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
@@ -1513,6 +1514,197 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
   );
 }
 
+// ─── Weekly tab ─────────────────────────────────────────────────────────────
+function addDaysISO(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function isoWeekStart(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const day = d.getDay(); // 0=Sun..6=Sat
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  return d.toISOString().slice(0, 10);
+}
+function expandDateRange(start, end) {
+  const dates = [];
+  let cur = start;
+  let guard = 0;
+  while (cur <= end && guard < 400) {
+    dates.push(cur);
+    cur = addDaysISO(cur, 1);
+    guard++;
+  }
+  return dates;
+}
+const EMPTY_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0 };
+function addInto(target, src) {
+  target.service += src.service || 0;
+  target.retail += src.retail || 0;
+  target.color += src.color || 0;
+  target.hours += src.hours || 0;
+  target.giftCards += src.giftCards || 0;
+}
+
+// Builds one row per week — a real uploaded Stylist Report week where one
+// exists, otherwise a Mon–Sun bucket of the daily historical-import data.
+// Days already covered by an uploaded weekly report are excluded from the
+// daily bucketing, so the two sources can never double-count each other.
+function buildWeeklySnapshots(dailyHistory, weeklyHistory) {
+  const weeklyEntries = Object.values(weeklyHistory || {});
+  const covered = new Set();
+  weeklyEntries.forEach(w => expandDateRange(w.startDate, w.endDate).forEach(d => covered.add(d)));
+
+  const dailyWeeks = new Map();
+  Object.values(dailyHistory || {}).forEach(r => {
+    if (covered.has(r.date)) return;
+    const ws = isoWeekStart(r.date);
+    if (!dailyWeeks.has(ws)) dailyWeeks.set(ws, { startDate: ws, endDate: addDaysISO(ws, 6), source: 'daily', stores: {} });
+    const wk = dailyWeeks.get(ws);
+    if (!wk.stores[r.code]) wk.stores[r.code] = { ...EMPTY_TOTALS };
+    addInto(wk.stores[r.code], r);
+  });
+
+  const weeks = [
+    ...weeklyEntries.map(w => ({ startDate: w.startDate, endDate: w.endDate, source: 'weekly', stores: w.stores })),
+    ...Array.from(dailyWeeks.values()),
+  ];
+  weeks.sort((a, b) => a.startDate.localeCompare(b.startDate));
+  return weeks;
+}
+
+// Attributes each week to the calendar month its start date falls in.
+function buildMonthlySnapshots(weeks) {
+  const months = new Map();
+  weeks.forEach(w => {
+    const monthKey = w.startDate.slice(0, 7);
+    if (!months.has(monthKey)) months.set(monthKey, { month: monthKey, stores: {} });
+    const m = months.get(monthKey);
+    Object.entries(w.stores).forEach(([code, v]) => {
+      if (!m.stores[code]) m.stores[code] = { ...EMPTY_TOTALS };
+      addInto(m.stores[code], v);
+    });
+  });
+  return Array.from(months.values()).sort((a, b) => a.month.localeCompare(b.month));
+}
+
+function periodTotals(stores) {
+  const t = { ...EMPTY_TOTALS };
+  Object.values(stores).forEach(v => addInto(t, v));
+  return t;
+}
+
+function WeeklyTab({ dailyHistory, weeklyHistory }) {
+  const [granularity, setGranularity] = useState('week'); // 'week' | 'month'
+  const [grouping, setGrouping] = useState('total'); // 'total' | 'dl'
+  const [expandedLeader, setExpandedLeader] = useState({});
+
+  const weeks = useMemo(() => buildWeeklySnapshots(dailyHistory, weeklyHistory), [dailyHistory, weeklyHistory]);
+  const months = useMemo(() => buildMonthlySnapshots(weeks), [weeks]);
+  const periods = granularity === 'week' ? weeks : months;
+
+  if (!periods.length) {
+    return <div className="empty-state"><p className="empty-title">No data yet</p><p>Upload a stylist report or run a historical import to see weekly/monthly snapshots.</p></div>;
+  }
+
+  const toggleLeader = name => setExpandedLeader(prev => ({ ...prev, [name]: !prev[name] }));
+  const labelFor = p => (granularity === 'week' ? `${p.startDate} → ${p.endDate}` : p.month);
+
+  // For "By DL": every store that appears in ANY period, grouped by leader once — then each period's totals are looked up per leader.
+  const dlGroups = useMemo(() => {
+    if (grouping !== 'dl') return [];
+    const allCodes = new Set();
+    periods.forEach(p => Object.keys(p.stores).forEach(c => allCodes.add(c)));
+    const rows = Array.from(allCodes).map(code => ({ code }));
+    const groups = groupStoresByLeader(rows);
+    return groups.map(g => ({ leaderName: g.leaderName, role: g.role, codes: g.stores.map(s => s.code) }));
+  }, [periods, grouping]);
+
+  return (
+    <div className="tab-content">
+      <p className="section-hint">
+        Permanent snapshot fed by your weekly Stylist Report uploads (going forward) and the historical import (backfill).
+        Re-uploading the same week is always safe — it just replaces that one week's numbers, it never adds on top.
+      </p>
+      <div className="ledger-head-row">
+        <div className="view-toggle">
+          <button className={`view-toggle-btn ${granularity === 'week' ? 'active' : ''}`} onClick={() => setGranularity('week')}>By Week</button>
+          <button className={`view-toggle-btn ${granularity === 'month' ? 'active' : ''}`} onClick={() => setGranularity('month')}>By Month</button>
+        </div>
+        <div className="view-toggle">
+          <button className={`view-toggle-btn ${grouping === 'total' ? 'active' : ''}`} onClick={() => setGrouping('total')}>Company Total</button>
+          <button className={`view-toggle-btn ${grouping === 'dl' ? 'active' : ''}`} onClick={() => setGrouping('dl')}>By DL</button>
+        </div>
+      </div>
+
+      {grouping === 'total' && (
+        <div className="ledger-scroll">
+          <table className="ledger-table">
+            <thead><tr><th className="ledger-name-col">{granularity === 'week' ? 'Week' : 'Month'}</th><th>Service Sales</th><th>Color</th><th>Retail</th><th>Gift Cards</th></tr></thead>
+            <tbody>
+              {[...periods].reverse().map(p => {
+                const t = periodTotals(p.stores);
+                return (
+                  <tr key={granularity === 'week' ? p.startDate : p.month}>
+                    <td className="ledger-name-col">{labelFor(p)}{p.source === 'daily' && granularity === 'week' && <span className="store-unmatched-flag"> (backfilled)</span>}</td>
+                    <td>{fmt$(t.service)}</td>
+                    <td>{fmt$(t.color)}</td>
+                    <td>{fmt$(t.retail)}</td>
+                    <td>{t.giftCards > 0 ? fmt$(t.giftCards) : '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {grouping === 'dl' && (
+        <div className="dl-list">
+          {dlGroups.map(g => {
+            const isOpen = !!expandedLeader[g.leaderName];
+            return (
+              <div key={g.leaderName} className="dl-card">
+                <button className="dl-card-head" onClick={() => toggleLeader(g.leaderName)}>
+                  <div className="dl-card-name-wrap">
+                    <span className={`dl-chevron ${isOpen ? 'dl-chevron--open' : ''}`}>▸</span>
+                    <span className="dl-card-name">{g.leaderName}</span>
+                    <span className="dl-card-count">{g.role} · {g.codes.length} store{g.codes.length !== 1 ? 's' : ''}</span>
+                  </div>
+                </button>
+                {isOpen && (
+                  <div className="ledger-scroll dl-store-table">
+                    <table className="ledger-table">
+                      <thead><tr><th className="ledger-name-col">{granularity === 'week' ? 'Week' : 'Month'}</th><th>Service Sales</th><th>Color</th><th>Retail</th><th>Gift Cards</th></tr></thead>
+                      <tbody>
+                        {[...periods].reverse().map(p => {
+                          const subset = {};
+                          g.codes.forEach(c => { if (p.stores[c]) subset[c] = p.stores[c]; });
+                          const t = periodTotals(subset);
+                          return (
+                            <tr key={granularity === 'week' ? p.startDate : p.month}>
+                              <td className="ledger-name-col">{labelFor(p)}</td>
+                              <td>{fmt$(t.service)}</td>
+                              <td>{fmt$(t.color)}</td>
+                              <td>{fmt$(t.retail)}</td>
+                              <td>{t.giftCards > 0 ? fmt$(t.giftCards) : '—'}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Setup tab ──────────────────────────────────────────────────────────────
 function SetupTab({ configured }) {
   const steps = [
@@ -1564,7 +1756,7 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;`}<
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Goals', 'Historical Import', 'Upload', 'Setup'];
+const TABS = ['Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Goals', 'Weekly', 'Historical Import', 'Upload', 'Setup'];
 
 export default function App() {
   const [report, setReport] = useState(null);
@@ -1572,6 +1764,7 @@ export default function App() {
   const [goals, setGoals] = useState({});
   const [reviews, setReviews] = useState(null);
   const [history, setHistory] = useState({});
+  const [weeklyHistory, setWeeklyHistory] = useState({});
   const [label, setLabel] = useState('');
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('Overview');
@@ -1583,15 +1776,16 @@ export default function App() {
   const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', Retail: '', 'Color Sales': '', DL: '', '60 Day Employee': '', Reviews: '' });
 
   useEffect(() => {
-    Promise.all([loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('reviews'), loadData('daily_history')]).then(([reportRes, rosterRes, goalsRes, reviewsRes, historyRes]) => {
+    Promise.all([loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('reviews'), loadData('daily_history'), loadData('weekly_history')]).then(([reportRes, rosterRes, goalsRes, reviewsRes, historyRes, weeklyRes]) => {
       if (reportRes.data) setReport(reportRes.data); else setTab('Upload');
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
       if (reviewsRes.data) setReviews(reviewsRes.data);
       if (historyRes.data) setHistory(historyRes.data);
+      if (weeklyRes.data) setWeeklyHistory(weeklyRes.data);
       setLoading(false);
-      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local' || reviewsRes.source === 'local' || historyRes.source === 'local')) {
-        const err = reportRes.error || rosterRes.error || goalsRes.error || reviewsRes.error || historyRes.error;
+      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local' || reviewsRes.source === 'local' || historyRes.source === 'local' || weeklyRes.source === 'local')) {
+        const err = reportRes.error || rosterRes.error || goalsRes.error || reviewsRes.error || historyRes.error || weeklyRes.error;
         showToast(`Couldn't reach Supabase (${err || 'unknown error'}) — showing this device's local data only`, 'error');
       }
     }).catch(() => setLoading(false));
@@ -1611,6 +1805,17 @@ export default function App() {
       setReport(parsed);
       setLabel(parsed.dateRangeLabel || '');
       const result = await saveData('stylist_report', parsed);
+
+      // Also feed this week into the permanent weekly history. Keyed by the
+      // report's own start/end dates, so re-uploading the same week just
+      // overwrites that one entry — it can never double-count.
+      const weekRecord = buildWeeklyRecord(parsed);
+      if (weekRecord) {
+        const nextWeekly = mergeWeeklyIntoHistory(weeklyHistory, weekRecord);
+        setWeeklyHistory(nextWeekly);
+        await saveData('weekly_history', nextWeekly);
+      }
+
       if (isConfigured() && !result.ok) {
         showToast(`Loaded ${file.name}, but couldn't sync to Supabase (${result.error}) — only visible on this device`, 'error');
       } else {
@@ -1622,7 +1827,7 @@ export default function App() {
     } finally {
       setUploading(false);
     }
-  }, []);
+  }, [weeklyHistory]);
 
   const handleRosterFile = useCallback(async file => {
     setUploadingRoster(true);
@@ -1774,7 +1979,7 @@ export default function App() {
 
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
-  const needsReport = !report && tab !== 'Upload' && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Goals' && tab !== 'Reviews' && tab !== 'Historical Import';
+  const needsReport = !report && tab !== 'Upload' && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Goals' && tab !== 'Reviews' && tab !== 'Historical Import' && tab !== 'Weekly';
 
   return (
     <div className="app">
@@ -1828,6 +2033,9 @@ export default function App() {
         )}
         {tab === 'Goals' && (
           <GoalsTab report={report} goals={goals} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} />
+        )}
+        {tab === 'Weekly' && (
+          <WeeklyTab dailyHistory={history} weeklyHistory={weeklyHistory} />
         )}
         {tab === 'Historical Import' && (
           <HistoricalImportTab

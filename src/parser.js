@@ -114,6 +114,8 @@ export async function parseStylistReport(file) {
   }
 
   let dateRangeLabel = null;
+  let startDateISO = null;
+  let endDateISO = null;
   const stores = [];
   let current = null;
 
@@ -138,7 +140,11 @@ export async function parseStylistReport(file) {
       if (!dateRangeLabel) {
         const start = cellText(row[col.startDate]);
         const end = cellText(row[col.endDate]);
-        if (start && end) dateRangeLabel = `${start} – ${end}`;
+        if (start && end) {
+          dateRangeLabel = `${start} – ${end}`;
+          startDateISO = toISODate(start);
+          endDateISO = toISODate(end);
+        }
       }
       continue;
     }
@@ -175,6 +181,8 @@ export async function parseStylistReport(file) {
 
   return {
     dateRangeLabel,
+    startDateISO,
+    endDateISO,
     stores,
     allEmployees,
     companyTotals,
@@ -359,7 +367,7 @@ export async function parseSalesAccrualFile(file) {
   // no double-dipping between Sales and Retail.
   const hasExactTypes = col.itemType !== -1;
 
-  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color }
+  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color, giftCards }
   for (let r = hdrRowIdx + 1; r < grid.length; r++) {
     const row = grid[r];
     if (!rowHasData(row)) continue;
@@ -372,12 +380,13 @@ export async function parseSalesAccrualFile(file) {
     const itemName = cellText(row[col.item]);
 
     const key = `${code}|${isoDate}`;
-    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0 });
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0 });
     const rec = daily.get(key);
 
     if (hasExactTypes) {
       const itemType = cellText(row[col.itemType]).trim();
-      if (/^gift\s*card/i.test(itemType) || /^total\b/i.test(itemType)) continue; // gift cards and the file's own grand-total row aren't real per-store revenue
+      if (/^total\b/i.test(itemType)) continue; // the file's own grand-total row isn't real per-store revenue
+      if (/^gift\s*card/i.test(itemType)) { rec.giftCards += amount; continue; }
       if (itemType === 'Product') {
         rec.retail += amount;
       } else {
@@ -389,7 +398,7 @@ export async function parseSalesAccrualFile(file) {
       // Older export without Item Type/Category — fall back to name-based heuristics.
       const stylist = cellText(row[col.stylist]);
       const soldBy = cellText(row[col.soldBy]);
-      if (/^gift\s*card/i.test(itemName)) continue;
+      if (/^gift\s*card/i.test(itemName)) { rec.giftCards += amount; continue; }
       if (isRetailItem(itemName, stylist, soldBy)) {
         rec.retail += amount;
       } else {
@@ -405,6 +414,7 @@ export async function parseSalesAccrualFile(file) {
     service: Math.round(r.service * 100) / 100,
     retail: Math.round(r.retail * 100) / 100,
     color: Math.round(r.color * 100) / 100,
+    giftCards: Math.round(r.giftCards * 100) / 100,
   }));
   return { records, fileName: file.name };
 }
@@ -450,8 +460,8 @@ export function mergeSalesIntoHistory(history, salesRecords) {
   const next = { ...history };
   salesRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null };
-    next[key] = { ...existing, service: r.service, retail: r.retail, color: r.color };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null };
+    next[key] = { ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards };
   });
   return next;
 }
@@ -459,8 +469,35 @@ export function mergeAttendanceIntoHistory(history, attendanceRecords) {
   const next = { ...history };
   attendanceRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null };
     next[key] = { ...existing, hours: r.hours };
   });
   return next;
+}
+
+// ─── Weekly snapshot (fed by the regular Stylist Report upload) ────────────
+// Turns an already-parsed Stylist Report into one record per store for that
+// exact week (keyed by its real start/end dates), so every normal Monday
+// upload permanently extends the history — without needing the heavier
+// Sales-Accrual/Attendance historical import for ongoing weeks.
+export function buildWeeklyRecord(report) {
+  if (!report.startDateISO || !report.endDateISO) return null;
+  const weekKey = `${report.startDateISO}_${report.endDateISO}`;
+  const stores = {};
+  report.stores.forEach(s => {
+    if (!s.code) return;
+    stores[s.code] = {
+      service: s.totals.sales,
+      retail: s.totals.retail,
+      color: s.totals.colorSales,
+      hours: s.totals.totalHours,
+    };
+  });
+  return { weekKey, startDate: report.startDateISO, endDate: report.endDateISO, stores };
+}
+
+// Re-uploading the same week is safe — its whole entry is just replaced.
+export function mergeWeeklyIntoHistory(weeklyHistory, weekRecord) {
+  if (!weekRecord) return weeklyHistory;
+  return { ...weeklyHistory, [weekRecord.weekKey]: weekRecord };
 }
