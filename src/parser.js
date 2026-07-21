@@ -257,3 +257,46 @@ export async function parseGoalFile(file) {
 
   return { entries, periodLabel, fileName: file.name };
 }
+
+// ─── Reviews export (CSV) ───────────────────────────────────────────────────
+// A Google-reviews style export. The "location" column is a verbose listing
+// name that doesn't match our store naming — "location short name" is the
+// store CODE, which is what we actually match on (same pattern as goals).
+export async function parseReviews(file) {
+  const grid = await readWorkbookGrid(file); // XLSX.read auto-detects CSV too
+  const header = grid[0];
+  const col = {
+    location: findCol(header, 'location'),
+    code: findCol(header, 'location short name'),
+    postedAt: findCol(header, 'posted at'),
+    userName: findCol(header, 'user name'),
+    rating: findCol(header, 'rating'),
+    message: findCol(header, 'message'),
+    reply: findCol(header, 'reply'),
+    url: findCol(header, 'review url'),
+  };
+  if (col.code === -1 || col.rating === -1) {
+    throw new Error('Could not find the expected columns ("location short name", "rating") in this file.');
+  }
+
+  const reviews = [];
+  for (let r = 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (!rowHasData(row)) continue;
+    const code = cellText(row[col.code]);
+    if (!code) continue;
+    reviews.push({
+      code,
+      rawLocation: col.location !== -1 ? cellText(row[col.location]) : '',
+      postedAt: col.postedAt !== -1 ? cellText(row[col.postedAt]) : '',
+      userName: col.userName !== -1 ? cellText(row[col.userName]) : '',
+      rating: numOf(row[col.rating]),
+      message: col.message !== -1 ? cellText(row[col.message]) : '',
+      reply: col.reply !== -1 ? cellText(row[col.reply]) : '',
+      url: col.url !== -1 ? cellText(row[col.url]) : '',
+    });
+  }
+  if (!reviews.length) throw new Error('No review rows found in this file.');
+
+  return { reviews, fileName: file.name };
+}

@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { loadData, saveData, clearData, isConfigured } from './db';
-import { parseStylistReport, parseEmployeeStartDates, parseGoalFile, normalizeName } from './parser';
+import { parseStylistReport, parseEmployeeStartDates, parseGoalFile, parseReviews, normalizeName } from './parser';
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
-import { getCodeForStoreName } from './storeDirectory';
+import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
 import './App.css';
 
 const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -163,7 +163,7 @@ function UploadSlot({ id, title, hint, fileInfo, uploading, onFile }) {
   );
 }
 
-function UploadTab({ report, uploading, onFile, onClear, employeeRoster, uploadingRoster, onRosterFile, onClearRoster }) {
+function UploadTab({ report, uploading, onFile, onClear, employeeRoster, uploadingRoster, onRosterFile, onClearRoster, reviews, uploadingReviews, onReviewsFile, onClearReviews }) {
   return (
     <div className="tab-content">
       <UploadSlot
@@ -181,6 +181,14 @@ function UploadTab({ report, uploading, onFile, onClear, employeeRoster, uploadi
         onFile={onRosterFile}
       />
       {employeeRoster && <button className="btn-ghost btn-danger" onClick={onClearRoster}>Clear start-date list</button>}
+
+      <UploadSlot
+        id="reviews-file" title="Reviews Export" hint="Upload the reviews export (CSV)"
+        fileInfo={reviews ? { fileName: reviews.fileName, sub: `${reviews.reviews.length} reviews on file` } : null}
+        uploading={uploadingReviews}
+        onFile={onReviewsFile}
+      />
+      {reviews && <button className="btn-ghost btn-danger" onClick={onClearReviews}>Clear reviews</button>}
     </div>
   );
 }
@@ -983,13 +991,203 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals }) {
   );
 }
 
+// ─── Reviews tab ────────────────────────────────────────────────────────────
+const REVIEW_CATEGORIES = [
+  { key: 'atmosphere', label: 'Atmosphere', keywords: ['atmosphere', 'dirty', 'messy', 'smell', 'unclean', 'environment', 'decor', 'uncomfortable', 'cluttered', 'disorganized', 'filthy', 'run down', 'outdated'] },
+  { key: 'quality', label: 'Quality of Service', keywords: ['haircut', 'botched', 'uneven', 'ruined', 'unprofessional', 'rude', 'bad job', 'poor service', 'disappointed', 'messed up', 'terrible', 'awful', 'horrible', 'sloppy', 'incompetent', 'butchered', 'awful cut', 'bad cut'] },
+  { key: 'waitTime', label: 'Wait Time', keywords: ['wait', 'waiting', 'hours', 'long time', 'slow', 'line', 'queue', 'understaffed', 'short staffed', 'short-staffed', 'took forever'] },
+  { key: 'cancellations', label: 'Cancellations', keywords: ['cancel', 'cancelled', 'canceled', 'no show', "didn't show", 'rescheduled', 'reschedule', 'no call', 'walked out', 'closed early', 'no one there', 'turned away', 'turns customers away'] },
+];
+
+function reviewMatchesCategory(message, categoryKey) {
+  const cat = REVIEW_CATEGORIES.find(c => c.key === categoryKey);
+  if (!cat || !message) return false;
+  const text = message.toLowerCase();
+  return cat.keywords.some(kw => text.includes(kw));
+}
+
+// The review file's own "location" text is a verbose listing name that
+// doesn't match our store naming, so we resolve by code instead — falling
+// back to whatever's in the raw location text if a code isn't recognized,
+// rather than hiding the review.
+function resolveStoreName(code, rawLocation) {
+  if (STORE_CODE_TO_NAME[code]) return { name: STORE_CODE_TO_NAME[code], matched: true };
+  const m = String(rawLocation || '').match(/\(([^)]+)\)/);
+  return { name: m ? m[1] : `Store ${code}`, matched: false };
+}
+
+// Only checks employees who actually work at that specific store, to avoid
+// false positives from common first names matching unrelated people.
+function detectEmployeeMention(message, employees) {
+  if (!employees || !message) return null;
+  const text = message.toLowerCase();
+  for (const emp of employees) {
+    const firstName = emp.name.trim().split(/\s+/)[0].replace(/[^a-zA-Z]/g, '');
+    if (firstName.length < 3) continue;
+    const re = new RegExp(`\\b${firstName.toLowerCase()}\\b`);
+    if (re.test(text)) return emp.name;
+  }
+  return null;
+}
+
+function StarRating({ value }) {
+  return <span className="star-rating">{'★'.repeat(value)}{'☆'.repeat(Math.max(0, 5 - value))}</span>;
+}
+
+function ReviewCard({ review, employeeMatch }) {
+  const tone = review.rating <= 2 ? 'neg' : review.rating >= 4 ? 'pos' : 'neu';
+  return (
+    <div className={`review-card review-card--${tone}`}>
+      <div className="review-card-head">
+        <StarRating value={review.rating} />
+        <span className="review-user">{review.userName || 'Anonymous'}</span>
+        <span className="review-date">{review.postedAt ? review.postedAt.slice(0, 10) : ''}</span>
+      </div>
+      {review.message && <p className="review-message">{review.message}</p>}
+      {employeeMatch && <p className="review-employee-tag">👤 Mentions: {employeeMatch}</p>}
+    </div>
+  );
+}
+
+function ReviewsTab({ report, reviews, query, onQuery }) {
+  const [viewMode, setViewMode] = useState('flat'); // 'flat' | 'dl'
+  const [category, setCategory] = useState(null);
+  const [expanded, setExpanded] = useState({});
+
+  if (!reviews) {
+    return <div className="empty-state"><p className="empty-title">No reviews uploaded yet</p><p>Go to the Upload tab and add the reviews export.</p></div>;
+  }
+
+  const allReviews = reviews.reviews;
+  const totalCount = allReviews.length;
+  const overallAvg = totalCount ? allReviews.reduce((s, r) => s + r.rating, 0) / totalCount : 0;
+  const positive = allReviews.filter(r => r.rating >= 4);
+  const negative = allReviews.filter(r => r.rating <= 2);
+  const posAvg = positive.length ? positive.reduce((s, r) => s + r.rating, 0) / positive.length : 0;
+  const negAvg = negative.length ? negative.reduce((s, r) => s + r.rating, 0) / negative.length : 0;
+
+  const storeMap = useMemo(() => {
+    const map = new Map();
+    allReviews.forEach(r => {
+      if (!map.has(r.code)) {
+        const { name, matched } = resolveStoreName(r.code, r.rawLocation);
+        map.set(r.code, { code: r.code, name, matched, reviews: [] });
+      }
+      map.get(r.code).reviews.push(r);
+    });
+    return map;
+  }, [allReviews]);
+
+  const categoryCounts = useMemo(() => {
+    const counts = {};
+    REVIEW_CATEGORIES.forEach(c => { counts[c.key] = negative.filter(r => reviewMatchesCategory(r.message, c.key)).length; });
+    return counts;
+  }, [negative]);
+
+  const storeRows = useMemo(() => {
+    return Array.from(storeMap.values())
+      .map(s => {
+        const matching = category ? s.reviews.filter(r => r.rating <= 2 && reviewMatchesCategory(r.message, category)) : null;
+        const avg = s.reviews.length ? s.reviews.reduce((a, r) => a + r.rating, 0) / s.reviews.length : 0;
+        return { ...s, avg, matchCount: matching ? matching.length : null };
+      })
+      .filter(s => !category || s.matchCount > 0);
+  }, [storeMap, category]);
+
+  const filteredStores = useMemo(() => {
+    if (!query.trim()) return storeRows;
+    const q = query.trim().toLowerCase();
+    return storeRows.filter(s => s.name.toLowerCase().includes(q));
+  }, [storeRows, query]);
+
+  const groups = useMemo(() => (viewMode === 'dl' ? groupStoresByLeader(filteredStores) : null), [filteredStores, viewMode]);
+  const toggle = code => setExpanded(prev => ({ ...prev, [code]: !prev[code] }));
+  const activeCat = REVIEW_CATEGORIES.find(c => c.key === category);
+
+  const renderStoreRow = s => {
+    const isOpen = !!expanded[s.code];
+    const employeesForStore = report?.stores.find(st => st.code === s.code)?.employees || null;
+    const reviewList = category
+      ? s.reviews.filter(r => r.rating <= 2 && reviewMatchesCategory(r.message, category))
+      : [...s.reviews].sort((a, b) => b.postedAt.localeCompare(a.postedAt));
+    return (
+      <div key={s.code} className="dl-card">
+        <button className="dl-card-head" onClick={() => toggle(s.code)}>
+          <div className="dl-card-name-wrap">
+            <span className={`dl-chevron ${isOpen ? 'dl-chevron--open' : ''}`}>▸</span>
+            <span className="dl-card-name">{s.name}</span>
+            {!s.matched && <span className="store-unmatched-flag">⚠ unrecognized code {s.code}</span>}
+            <span className="dl-card-count">{s.reviews.length} review{s.reviews.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div className="dl-card-stats">
+            <div className="dl-stat"><span className="dl-stat-label">Avg Rating</span><span className="dl-stat-value">{s.avg.toFixed(1)}★</span></div>
+            {category && <div className="dl-stat"><span className="dl-stat-label">{activeCat.label} issues</span><span className="dl-stat-value">{s.matchCount}</span></div>}
+          </div>
+        </button>
+        {isOpen && (
+          <div className="dl-store-table review-list">
+            {reviewList.map((r, i) => (
+              <ReviewCard key={i} review={r} employeeMatch={detectEmployeeMention(r.message, employeesForStore)} />
+            ))}
+            {!reviewList.length && <p className="empty-note" style={{ padding: '12px' }}>No reviews to show here.</p>}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="tab-content">
+      <div className="summary-grid">
+        <div className="summary-tile"><p className="summary-tile-label">Total Reviews</p><p className="summary-tile-value">{totalCount}</p></div>
+        <div className="summary-tile summary-tile--accent"><p className="summary-tile-label">Overall Average</p><p className="summary-tile-value">{overallAvg.toFixed(2)}★</p></div>
+        <div className="summary-tile"><p className="summary-tile-label">Positive (4–5★)</p><p className="summary-tile-value">{positive.length}<span className="summary-tile-sub"> · {posAvg.toFixed(2)}★ avg</span></p></div>
+        <div className="summary-tile"><p className="summary-tile-label">Negative (1–2★)</p><p className="summary-tile-value">{negative.length}<span className="summary-tile-sub"> · {negAvg.toFixed(2)}★ avg</span></p></div>
+      </div>
+
+      <p className="section-hint">Tap a category to see negative reviews mentioning it, grouped by store.</p>
+      <div className="summary-grid">
+        {REVIEW_CATEGORIES.map(c => (
+          <button key={c.key} className={`summary-tile ${category === c.key ? 'summary-tile--active' : ''}`} onClick={() => setCategory(category === c.key ? null : c.key)}>
+            <p className="summary-tile-label">{c.label}</p>
+            <p className="summary-tile-value">{categoryCounts[c.key]}</p>
+          </button>
+        ))}
+      </div>
+      {category && <button className="btn-ghost btn-clear-filter" onClick={() => setCategory(null)}>Clear "{activeCat.label}" filter</button>}
+
+      <SearchBox value={query} onChange={onQuery} placeholder="Search stores…" />
+      <div className="view-toggle">
+        <button className={`view-toggle-btn ${viewMode === 'flat' ? 'active' : ''}`} onClick={() => setViewMode('flat')}>List Stores</button>
+        <button className={`view-toggle-btn ${viewMode === 'dl' ? 'active' : ''}`} onClick={() => setViewMode('dl')}>By DL</button>
+      </div>
+
+      {viewMode === 'flat' && (
+        <div className="dl-list">
+          {[...filteredStores].sort((a, b) => b.reviews.length - a.reviews.length).map(renderStoreRow)}
+          {!filteredStores.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match.</p>}
+        </div>
+      )}
+      {viewMode === 'dl' && groups.map(g => (
+        <div key={g.leaderName}>
+          <p className="section-label store-group-role-label">{g.leaderName} <span className="store-group-count">{g.role}</span></p>
+          <div className="dl-list" style={{ marginBottom: 16 }}>
+            {g.stores.map(renderStoreRow)}
+          </div>
+        </div>
+      ))}
+      {viewMode === 'dl' && !groups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match.</p>}
+    </div>
+  );
+}
+
 // ─── Setup tab ──────────────────────────────────────────────────────────────
 function SetupTab({ configured }) {
   const steps = [
     { n: 1, title: 'Export this week\u2019s stylist report', body: 'Run the report with every store and every employee under it, covering the week you want to see.' },
     { n: 2, title: 'Upload it', body: 'Go to the Upload tab and drop it into the "Stylist Report" slot. The date range fills in automatically.' },
     { n: 3, title: 'Optionally upload employee start dates', body: 'A simple Employee Name + Start Date export. Drop it into the "Employee Start Dates" slot to power the "60 Day Employee" tab, which shows anyone hired in the last 60 days along with their store, DL, and sales — even if they don\u2019t have sales data yet.' },
-    { n: 4, title: 'Explore the tabs', body: 'Overview: tap a metric to see the top/bottom 10 stores. Stores: every location, click one to see its employees. Employees: every stylist company-wide. Retail / Color Sales: grouped by DL, or toggle to a flat list. DL: rolled-up totals per leader, click to expand their stores. 60 Day Employee: recent hires. Every tab has a search box.' },
+    { n: 4, title: 'Explore the tabs', body: 'Overview: tap a metric to see the top/bottom 10 stores. Stores: every location, click one to see its employees. Employees: every stylist company-wide. Retail / Color Sales: grouped by DL, or toggle to a flat list. DL: rolled-up totals per leader, click to expand their stores. 60 Day Employee: recent hires. Reviews: totals, negative-review categories, and per-store review lists with employee call-outs. Every tab has a search box.' },
     { n: 5, title: 'Next week', body: 'Just upload a new stylist report the same way \u2014 it replaces this week\u2019s data for everyone viewing the site.' },
   ];
   return (
@@ -1034,29 +1232,32 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;`}<
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Goals', 'Upload', 'Setup'];
+const TABS = ['Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Goals', 'Upload', 'Setup'];
 
 export default function App() {
   const [report, setReport] = useState(null);
   const [employeeRoster, setEmployeeRoster] = useState(null);
   const [goals, setGoals] = useState({});
+  const [reviews, setReviews] = useState(null);
   const [label, setLabel] = useState('');
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('Overview');
   const [toast, setToast] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadingRoster, setUploadingRoster] = useState(false);
+  const [uploadingReviews, setUploadingReviews] = useState(false);
   const [selectedMetric, setSelectedMetric] = useState('tsth');
-  const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', Retail: '', 'Color Sales': '', DL: '', '60 Day Employee': '' });
+  const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', Retail: '', 'Color Sales': '', DL: '', '60 Day Employee': '', Reviews: '' });
 
   useEffect(() => {
-    Promise.all([loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals')]).then(([reportRes, rosterRes, goalsRes]) => {
+    Promise.all([loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('reviews')]).then(([reportRes, rosterRes, goalsRes, reviewsRes]) => {
       if (reportRes.data) setReport(reportRes.data); else setTab('Upload');
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
+      if (reviewsRes.data) setReviews(reviewsRes.data);
       setLoading(false);
-      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local')) {
-        const err = reportRes.error || rosterRes.error || goalsRes.error;
+      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local' || reviewsRes.source === 'local')) {
+        const err = reportRes.error || rosterRes.error || goalsRes.error || reviewsRes.error;
         showToast(`Couldn't reach Supabase (${err || 'unknown error'}) — showing this device's local data only`, 'error');
       }
     }).catch(() => setLoading(false));
@@ -1123,6 +1324,31 @@ export default function App() {
     showToast('Start-date list cleared');
   };
 
+  const handleReviewsFile = useCallback(async file => {
+    setUploadingReviews(true);
+    try {
+      const parsed = await parseReviews(file);
+      setReviews(parsed);
+      const result = await saveData('reviews', parsed);
+      if (isConfigured() && !result.ok) {
+        showToast(`Loaded ${file.name}, but couldn't sync to Supabase (${result.error}) — only visible on this device`, 'error');
+      } else {
+        showToast(`Loaded ${file.name} — ${parsed.reviews.length} reviews on file`);
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setUploadingReviews(false);
+    }
+  }, []);
+
+  const handleClearReviews = async () => {
+    if (!window.confirm('Clear the uploaded reviews? This cannot be undone.')) return;
+    await clearData('reviews');
+    setReviews(null);
+    showToast('Reviews cleared');
+  };
+
   const handleSaveGoal = useCallback((storeCode, field, value) => {
     setGoals(prev => {
       const next = { ...prev, [storeCode]: { ...prev[storeCode], [field]: value } };
@@ -1163,7 +1389,7 @@ export default function App() {
 
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
-  const needsReport = !report && tab !== 'Upload' && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Goals';
+  const needsReport = !report && tab !== 'Upload' && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Goals' && tab !== 'Reviews';
 
   return (
     <div className="app">
@@ -1212,6 +1438,9 @@ export default function App() {
         {tab === '60 Day Employee' && (
           <NewHireTab report={report} employeeRoster={employeeRoster} query={queries['60 Day Employee']} onQuery={v => setQuery('60 Day Employee', v)} />
         )}
+        {tab === 'Reviews' && (
+          <ReviewsTab report={report} reviews={reviews} query={queries.Reviews} onQuery={v => setQuery('Reviews', v)} />
+        )}
         {tab === 'Goals' && (
           <GoalsTab report={report} goals={goals} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} />
         )}
@@ -1219,6 +1448,7 @@ export default function App() {
           <UploadTab
             report={report} uploading={uploading} onFile={handleFile} onClear={handleClearAll}
             employeeRoster={employeeRoster} uploadingRoster={uploadingRoster} onRosterFile={handleRosterFile} onClearRoster={handleClearRoster}
+            reviews={reviews} uploadingReviews={uploadingReviews} onReviewsFile={handleReviewsFile} onClearReviews={handleClearReviews}
           />
         )}
         {tab === 'Setup' && <SetupTab configured={isConfigured()} />}
