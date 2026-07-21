@@ -366,6 +366,8 @@ export async function parseSalesAccrualFile(file) {
     const stylist = cellText(row[col.stylist]);
     const soldBy = cellText(row[col.soldBy]);
 
+    if (/^gift\s*card/i.test(itemName)) continue; // gift card sales aren't real revenue — excluded entirely, matching "Net Sales w/o GC"
+
     const key = `${code}|${isoDate}`;
     if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0 });
     const rec = daily.get(key);
