@@ -318,10 +318,11 @@ function extractCode(centerText) {
   return m ? String(parseInt(m[1], 10)) : null;
 }
 
-// A retail product name almost always has a size in it, e.g. "(4.12 fl. oz.)"
-// or "(3_oz)". Blank Stylist + a Sold By name is the same signal from a
+// A retail product name almost always has a size, kit, or gift-set marker in
+// it somewhere — "(4.12 fl. oz.)", "8.5 OZ" with no parens, "(1 Kit)", "Gift
+// Set", etc. Blank Stylist + a Sold By name is the same signal from a
 // different angle (product sales aren't attributed to a stylist).
-const RETAIL_SIZE_RE = /\(\s*[\d.]+[\s_]*(?:fl\.?[\s_]*)?oz\.?\s*\)/i;
+const RETAIL_SIZE_RE = /\d[\d.]*[\s_-]*(?:fl\.?[\s_]*oz\.?|oz\.?|ml|liters?)\b|\bkit\b|\bgift\s*set\b/i;
 function isRetailItem(itemName, stylist, soldBy) {
   if (RETAIL_SIZE_RE.test(itemName)) return true;
   if (!stylist && soldBy) return true;
