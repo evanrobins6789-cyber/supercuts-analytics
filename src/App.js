@@ -1049,10 +1049,22 @@ function ReviewCard({ review, employeeMatch }) {
   );
 }
 
+function isNegativeReview(r) { return r.rating <= 3; }
+function isPositiveReview(r) { return r.rating >= 4; }
+function ratingClass(avg) { return avg >= 4.8 ? 'rating-good' : 'rating-bad'; }
+
+const REVIEW_SORT_OPTIONS = [
+  { key: 'reviews', label: 'Total Reviews' },
+  { key: 'negative', label: 'Most Negative' },
+  { key: 'positive', label: 'Most Positive' },
+];
+
 function ReviewsTab({ report, reviews, query, onQuery }) {
   const [viewMode, setViewMode] = useState('flat'); // 'flat' | 'dl'
   const [category, setCategory] = useState(null);
-  const [expanded, setExpanded] = useState({});
+  const [expandedStore, setExpandedStore] = useState({});
+  const [expandedLeader, setExpandedLeader] = useState({});
+  const [sortBy, setSortBy] = useState('reviews');
 
   if (!reviews) {
     return <div className="empty-state"><p className="empty-title">No reviews uploaded yet</p><p>Go to the Upload tab and add the reviews export.</p></div>;
@@ -1061,8 +1073,8 @@ function ReviewsTab({ report, reviews, query, onQuery }) {
   const allReviews = reviews.reviews;
   const totalCount = allReviews.length;
   const overallAvg = totalCount ? allReviews.reduce((s, r) => s + r.rating, 0) / totalCount : 0;
-  const positive = allReviews.filter(r => r.rating >= 4);
-  const negative = allReviews.filter(r => r.rating <= 2);
+  const positive = allReviews.filter(isPositiveReview);
+  const negative = allReviews.filter(isNegativeReview);
   const posAvg = positive.length ? positive.reduce((s, r) => s + r.rating, 0) / positive.length : 0;
   const negAvg = negative.length ? negative.reduce((s, r) => s + r.rating, 0) / negative.length : 0;
 
@@ -1087,9 +1099,14 @@ function ReviewsTab({ report, reviews, query, onQuery }) {
   const storeRows = useMemo(() => {
     return Array.from(storeMap.values())
       .map(s => {
-        const matching = category ? s.reviews.filter(r => r.rating <= 2 && reviewMatchesCategory(r.message, category)) : null;
+        const matching = category ? s.reviews.filter(r => isNegativeReview(r) && reviewMatchesCategory(r.message, category)) : null;
         const avg = s.reviews.length ? s.reviews.reduce((a, r) => a + r.rating, 0) / s.reviews.length : 0;
-        return { ...s, avg, matchCount: matching ? matching.length : null };
+        return {
+          ...s, avg,
+          negCount: s.reviews.filter(isNegativeReview).length,
+          posCount: s.reviews.filter(isPositiveReview).length,
+          matchCount: matching ? matching.length : null,
+        };
       })
       .filter(s => !category || s.matchCount > 0);
   }, [storeMap, category]);
@@ -1100,36 +1117,132 @@ function ReviewsTab({ report, reviews, query, onQuery }) {
     return storeRows.filter(s => s.name.toLowerCase().includes(q));
   }, [storeRows, query]);
 
-  const groups = useMemo(() => (viewMode === 'dl' ? groupStoresByLeader(filteredStores) : null), [filteredStores, viewMode]);
-  const toggle = code => setExpanded(prev => ({ ...prev, [code]: !prev[code] }));
+  const sortStores = arr => {
+    const a2 = [...arr];
+    if (sortBy === 'negative') a2.sort((a, b) => b.negCount - a.negCount);
+    else if (sortBy === 'positive') a2.sort((a, b) => b.posCount - a.posCount);
+    else a2.sort((a, b) => b.reviews.length - a.reviews.length);
+    return a2;
+  };
+
+  const groups = useMemo(() => {
+    if (viewMode !== 'dl') return null;
+    return groupStoresByLeader(filteredStores).map(g => {
+      const totalReviews = g.stores.reduce((s, st) => s + st.reviews.length, 0);
+      const totalRating = g.stores.reduce((s, st) => s + st.reviews.reduce((a, r) => a + r.rating, 0), 0);
+      return {
+        ...g,
+        totalReviews,
+        avg: totalReviews ? totalRating / totalReviews : 0,
+        neg: g.stores.reduce((s, st) => s + st.negCount, 0),
+        pos: g.stores.reduce((s, st) => s + st.posCount, 0),
+      };
+    });
+  }, [filteredStores, viewMode]);
+
+  const sortedGroups = useMemo(() => {
+    if (!groups) return null;
+    const g2 = [...groups];
+    if (sortBy === 'negative') g2.sort((a, b) => b.neg - a.neg);
+    else if (sortBy === 'positive') g2.sort((a, b) => b.pos - a.pos);
+    else g2.sort((a, b) => b.totalReviews - a.totalReviews);
+    return g2;
+  }, [groups, sortBy]);
+
+  const toggleStore = code => setExpandedStore(prev => ({ ...prev, [code]: !prev[code] }));
+  const toggleLeader = name => setExpandedLeader(prev => ({ ...prev, [name]: !prev[name] }));
   const activeCat = REVIEW_CATEGORIES.find(c => c.key === category);
 
-  const renderStoreRow = s => {
-    const isOpen = !!expanded[s.code];
+  const renderReviewList = s => {
     const employeesForStore = report?.stores.find(st => st.code === s.code)?.employees || null;
     const reviewList = category
-      ? s.reviews.filter(r => r.rating <= 2 && reviewMatchesCategory(r.message, category))
+      ? s.reviews.filter(r => isNegativeReview(r) && reviewMatchesCategory(r.message, category))
       : [...s.reviews].sort((a, b) => b.postedAt.localeCompare(a.postedAt));
     return (
+      <div className="dl-store-table review-list">
+        {reviewList.map((r, i) => (
+          <ReviewCard key={i} review={r} employeeMatch={detectEmployeeMention(r.message, employeesForStore)} />
+        ))}
+        {!reviewList.length && <p className="empty-note" style={{ padding: '12px' }}>No reviews to show here.</p>}
+      </div>
+    );
+  };
+
+  // Flat "List Stores" view — one card per store
+  const renderStoreCard = s => {
+    const isOpen = !!expandedStore[s.code];
+    return (
       <div key={s.code} className="dl-card">
-        <button className="dl-card-head" onClick={() => toggle(s.code)}>
+        <button className="dl-card-head" onClick={() => toggleStore(s.code)}>
           <div className="dl-card-name-wrap">
             <span className={`dl-chevron ${isOpen ? 'dl-chevron--open' : ''}`}>▸</span>
             <span className="dl-card-name">{s.name}</span>
             {!s.matched && <span className="store-unmatched-flag">⚠ unrecognized code {s.code}</span>}
-            <span className="dl-card-count">{s.reviews.length} review{s.reviews.length !== 1 ? 's' : ''}</span>
+            <span className="dl-card-count">{s.reviews.length} review{s.reviews.length !== 1 ? 's' : ''} ({s.negCount} neg · {s.posCount} pos)</span>
           </div>
           <div className="dl-card-stats">
-            <div className="dl-stat"><span className="dl-stat-label">Avg Rating</span><span className="dl-stat-value">{s.avg.toFixed(1)}★</span></div>
-            {category && <div className="dl-stat"><span className="dl-stat-label">{activeCat.label} issues</span><span className="dl-stat-value">{s.matchCount}</span></div>}
+            <div className="dl-stat"><span className="dl-stat-label">Avg Rating</span><span className={`dl-stat-value ${ratingClass(s.avg)}`}>{s.avg.toFixed(2)}★</span></div>
+            <div className="dl-stat"><span className="dl-stat-label">Negative (1–3★)</span><span className="dl-stat-value">{s.negCount}</span></div>
+            <div className="dl-stat"><span className="dl-stat-label">Positive (4–5★)</span><span className="dl-stat-value">{s.posCount}</span></div>
+            {category && <div className="dl-stat"><span className="dl-stat-label">{activeCat.label}</span><span className="dl-stat-value">{s.matchCount}</span></div>}
+          </div>
+        </button>
+        {isOpen && renderReviewList(s)}
+      </div>
+    );
+  };
+
+  // "By DL" view — leader card (rolled-up totals) expands to a table of
+  // stores, and each store row expands further into its review list —
+  // same two-level pattern as the DL tab.
+  const renderLeaderCard = g => {
+    const isOpen = !!expandedLeader[g.leaderName];
+    const sortedStores = sortStores(g.stores);
+    return (
+      <div key={g.leaderName} className="dl-card">
+        <button className="dl-card-head" onClick={() => toggleLeader(g.leaderName)}>
+          <div className="dl-card-name-wrap">
+            <span className={`dl-chevron ${isOpen ? 'dl-chevron--open' : ''}`}>▸</span>
+            <span className="dl-card-name">{g.leaderName}</span>
+            <span className="dl-card-count">{g.role} · {g.stores.length} store{g.stores.length !== 1 ? 's' : ''}</span>
+          </div>
+          <div className="dl-card-stats">
+            <div className="dl-stat"><span className="dl-stat-label">Avg Rating</span><span className={`dl-stat-value ${ratingClass(g.avg)}`}>{g.avg.toFixed(2)}★</span></div>
+            <div className="dl-stat"><span className="dl-stat-label">Negative (1–3★)</span><span className="dl-stat-value">{g.neg}</span></div>
+            <div className="dl-stat"><span className="dl-stat-label">Positive (4–5★)</span><span className="dl-stat-value">{g.pos}</span></div>
           </div>
         </button>
         {isOpen && (
-          <div className="dl-store-table review-list">
-            {reviewList.map((r, i) => (
-              <ReviewCard key={i} review={r} employeeMatch={detectEmployeeMention(r.message, employeesForStore)} />
-            ))}
-            {!reviewList.length && <p className="empty-note" style={{ padding: '12px' }}>No reviews to show here.</p>}
+          <div className="ledger-scroll dl-store-table">
+            <table className="ledger-table">
+              <thead>
+                <tr><th className="ledger-name-col">Store</th><th>Reviews</th><th>Negative</th><th>Positive</th><th>Avg Rating</th></tr>
+              </thead>
+              <tbody>
+                {sortedStores.map(s => {
+                  const isStoreOpen = !!expandedStore[s.code];
+                  return (
+                    <React.Fragment key={s.code}>
+                      <tr className="store-row-clickable" onClick={() => toggleStore(s.code)}>
+                        <td className="ledger-name-col">
+                          <span className={`mini-chevron ${isStoreOpen ? 'mini-chevron--open' : ''}`}>▸</span> {s.name}
+                          {!s.matched && <span className="store-unmatched-flag"> ⚠</span>}
+                        </td>
+                        <td>{s.reviews.length}</td>
+                        <td>{s.negCount}</td>
+                        <td>{s.posCount}</td>
+                        <td className={ratingClass(s.avg)}>{s.avg.toFixed(2)}★</td>
+                      </tr>
+                      {isStoreOpen && (
+                        <tr className="store-expand-row">
+                          <td colSpan={5}>{renderReviewList(s)}</td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
@@ -1140,12 +1253,12 @@ function ReviewsTab({ report, reviews, query, onQuery }) {
     <div className="tab-content">
       <div className="summary-grid">
         <div className="summary-tile"><p className="summary-tile-label">Total Reviews</p><p className="summary-tile-value">{totalCount}</p></div>
-        <div className="summary-tile summary-tile--accent"><p className="summary-tile-label">Overall Average</p><p className="summary-tile-value">{overallAvg.toFixed(2)}★</p></div>
-        <div className="summary-tile"><p className="summary-tile-label">Positive (4–5★)</p><p className="summary-tile-value">{positive.length}<span className="summary-tile-sub"> · {posAvg.toFixed(2)}★ avg</span></p></div>
-        <div className="summary-tile"><p className="summary-tile-label">Negative (1–2★)</p><p className="summary-tile-value">{negative.length}<span className="summary-tile-sub"> · {negAvg.toFixed(2)}★ avg</span></p></div>
+        <div className="summary-tile"><p className="summary-tile-label">Overall Average</p><p className={`summary-tile-value ${ratingClass(overallAvg)}`}>{overallAvg.toFixed(2)}★</p></div>
+        <div className="summary-tile"><p className="summary-tile-label">Positive (4–5★)</p><p className="summary-tile-value">{positive.length}<span className={`summary-tile-sub ${ratingClass(posAvg)}`}> · {posAvg.toFixed(2)}★ avg</span></p></div>
+        <div className="summary-tile"><p className="summary-tile-label">Negative (1–3★)</p><p className="summary-tile-value">{negative.length}<span className={`summary-tile-sub ${ratingClass(negAvg)}`}> · {negAvg.toFixed(2)}★ avg</span></p></div>
       </div>
 
-      <p className="section-hint">Tap a category to see negative reviews mentioning it, grouped by store.</p>
+      <p className="section-hint">Tap a category to see negative (1–3★) reviews mentioning it, grouped by store.</p>
       <div className="summary-grid">
         {REVIEW_CATEGORIES.map(c => (
           <button key={c.key} className={`summary-tile ${category === c.key ? 'summary-tile--active' : ''}`} onClick={() => setCategory(category === c.key ? null : c.key)}>
@@ -1157,26 +1270,28 @@ function ReviewsTab({ report, reviews, query, onQuery }) {
       {category && <button className="btn-ghost btn-clear-filter" onClick={() => setCategory(null)}>Clear "{activeCat.label}" filter</button>}
 
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores…" />
-      <div className="view-toggle">
-        <button className={`view-toggle-btn ${viewMode === 'flat' ? 'active' : ''}`} onClick={() => setViewMode('flat')}>List Stores</button>
-        <button className={`view-toggle-btn ${viewMode === 'dl' ? 'active' : ''}`} onClick={() => setViewMode('dl')}>By DL</button>
+      <div className="ledger-head-row">
+        <div className="view-toggle">
+          <button className={`view-toggle-btn ${viewMode === 'flat' ? 'active' : ''}`} onClick={() => setViewMode('flat')}>List Stores</button>
+          <button className={`view-toggle-btn ${viewMode === 'dl' ? 'active' : ''}`} onClick={() => setViewMode('dl')}>By DL</button>
+        </div>
+        <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+          {REVIEW_SORT_OPTIONS.map(o => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
+        </select>
       </div>
 
       {viewMode === 'flat' && (
         <div className="dl-list">
-          {[...filteredStores].sort((a, b) => b.reviews.length - a.reviews.length).map(renderStoreRow)}
+          {sortStores(filteredStores).map(renderStoreCard)}
           {!filteredStores.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match.</p>}
         </div>
       )}
-      {viewMode === 'dl' && groups.map(g => (
-        <div key={g.leaderName}>
-          <p className="section-label store-group-role-label">{g.leaderName} <span className="store-group-count">{g.role}</span></p>
-          <div className="dl-list" style={{ marginBottom: 16 }}>
-            {g.stores.map(renderStoreRow)}
-          </div>
+      {viewMode === 'dl' && (
+        <div className="dl-list">
+          {sortedGroups.map(renderLeaderCard)}
+          {!sortedGroups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match.</p>}
         </div>
-      ))}
-      {viewMode === 'dl' && !groups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match.</p>}
+      )}
     </div>
   );
 }
