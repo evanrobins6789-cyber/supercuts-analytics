@@ -347,10 +347,17 @@ export async function parseSalesAccrualFile(file) {
     date: findCol(headerRow, 'Sale Date'),
     stylist: findCol(headerRow, 'Stylist'),
     soldBy: findCol(headerRow, 'Sold By'),
+    itemType: findCol(headerRow, 'Item Type'),
+    itemCategory: findCol(headerRow, 'Item Category'),
   };
   if (col.center === -1 || col.sales === -1 || col.date === -1) {
     throw new Error('Could not find the expected columns (Center Name, Sales (Exc. Tax), Sale Date) in this file.');
   }
+  // Newer exports include an exact "Item Type" (Product/Service/Gift card)
+  // and "Item Category" (e.g. "Color Services") — when present, use those
+  // directly instead of guessing from the item name. No more heuristics,
+  // no double-dipping between Sales and Retail.
+  const hasExactTypes = col.itemType !== -1;
 
   const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color }
   for (let r = hdrRowIdx + 1; r < grid.length; r++) {
@@ -363,19 +370,32 @@ export async function parseSalesAccrualFile(file) {
 
     const amount = numOf(row[col.sales]);
     const itemName = cellText(row[col.item]);
-    const stylist = cellText(row[col.stylist]);
-    const soldBy = cellText(row[col.soldBy]);
-
-    if (/^gift\s*card/i.test(itemName)) continue; // gift card sales aren't real revenue — excluded entirely, matching "Net Sales w/o GC"
 
     const key = `${code}|${isoDate}`;
     if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0 });
     const rec = daily.get(key);
-    if (isRetailItem(itemName, stylist, soldBy)) {
-      rec.retail += amount;
+
+    if (hasExactTypes) {
+      const itemType = cellText(row[col.itemType]).trim();
+      if (/^gift\s*card/i.test(itemType) || /^total\b/i.test(itemType)) continue; // gift cards and the file's own grand-total row aren't real per-store revenue
+      if (itemType === 'Product') {
+        rec.retail += amount;
+      } else {
+        rec.service += amount;
+        const category = col.itemCategory !== -1 ? cellText(row[col.itemCategory]) : '';
+        if (category === 'Color Services') rec.color += amount;
+      }
     } else {
-      rec.service += amount;
-      if (isColorItem(itemName)) rec.color += amount;
+      // Older export without Item Type/Category — fall back to name-based heuristics.
+      const stylist = cellText(row[col.stylist]);
+      const soldBy = cellText(row[col.soldBy]);
+      if (/^gift\s*card/i.test(itemName)) continue;
+      if (isRetailItem(itemName, stylist, soldBy)) {
+        rec.retail += amount;
+      } else {
+        rec.service += amount;
+        if (isColorItem(itemName)) rec.color += amount;
+      }
     }
   }
 

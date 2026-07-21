@@ -1337,6 +1337,33 @@ function historyByStore(history) {
     .sort((a, b) => b.retail - a.retail);
 }
 
+// For every calendar day in the covered range, is there ANY record at all
+// (any store)? Grouped by month, so a partially-missed file jumps out
+// immediately as "24/28 days" instead of just a mysteriously low total.
+function historyMonthCoverage(history) {
+  const records = Object.values(history || {});
+  if (!records.length) return [];
+  const dateSet = new Set(records.map(r => r.date));
+  const dates = Array.from(dateSet).sort();
+  const start = new Date(dates[0] + 'T00:00:00');
+  const end = new Date(dates[dates.length - 1] + 'T00:00:00');
+
+  const monthMap = new Map();
+  const cur = new Date(start);
+  while (cur <= end) {
+    const monthKey = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`;
+    const iso = cur.toISOString().slice(0, 10);
+    if (!monthMap.has(monthKey)) monthMap.set(monthKey, { expected: 0, present: 0 });
+    const rec = monthMap.get(monthKey);
+    rec.expected += 1;
+    if (dateSet.has(iso)) rec.present += 1;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return Array.from(monthMap.entries())
+    .map(([month, v]) => ({ month, ...v, missing: v.expected - v.present }))
+    .sort((a, b) => a.month.localeCompare(b.month));
+}
+
 function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBatch, onClearHistory }) {
   const [processingSales, setProcessingSales] = useState(false);
   const [processingAttendance, setProcessingAttendance] = useState(false);
@@ -1359,6 +1386,8 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
   const summary = historySummary(history);
   const storeBreakdown = summary ? historyByStore(history) : [];
   const unrecognized = storeBreakdown.filter(s => !s.name);
+  const monthCoverage = summary ? historyMonthCoverage(history) : [];
+  const incompleteMonths = monthCoverage.filter(m => m.missing > 0);
 
   return (
     <div className="tab-content">
@@ -1423,6 +1452,28 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
             ))}
           </ul>
         </div>
+      )}
+
+      {summary && (
+        <>
+          <p className="section-label">Calendar coverage by month (any store present that day)</p>
+          <div className="ledger-scroll">
+            <table className="ledger-table">
+              <thead><tr><th className="ledger-name-col">Month</th><th>Days Present</th><th>Days Expected</th><th>Missing</th></tr></thead>
+              <tbody>
+                {monthCoverage.map(m => (
+                  <tr key={m.month}>
+                    <td className="ledger-name-col">{m.month}</td>
+                    <td>{m.present}</td>
+                    <td>{m.expected}</td>
+                    <td className={m.missing > 0 ? 'ledger-margin-neg' : ''}>{m.missing}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {incompleteMonths.length === 0 && <p className="empty-note">Every month in your range has full calendar coverage — no whole days missing.</p>}
+        </>
       )}
 
       {summary && (
