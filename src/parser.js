@@ -343,6 +343,15 @@ function isColorItem(itemName) {
   return COLOR_KEYWORDS.some(k => t.includes(k));
 }
 
+// CPC/RPC need a "customer count" to divide by — the file's own Item
+// Category gives this exactly ("Haircut Services") when present; otherwise
+// fall back to matching common haircut SKU names.
+const HAIRCUT_KEYWORDS = ['supercut', 'buzz cut', 'kids cut', 'trim'];
+function isHaircutItem(itemName) {
+  const t = itemName.toLowerCase();
+  return HAIRCUT_KEYWORDS.some(k => t.includes(k));
+}
+
 export async function parseSalesAccrualFile(file) {
   const grid = await readWorkbookGrid(file);
   const hdrRowIdx = grid.findIndex(row => row.some(c => cellText(c).toLowerCase() === 'center name'));
@@ -351,6 +360,7 @@ export async function parseSalesAccrualFile(file) {
   const col = {
     center: findCol(headerRow, 'Center Name'),
     item: findCol(headerRow, 'Item Name'),
+    qty: findCol(headerRow, 'Qty'),
     sales: findCol(headerRow, 'Sales (Exc. Tax)'),
     date: findCol(headerRow, 'Sale Date'),
     stylist: findCol(headerRow, 'Stylist'),
@@ -367,7 +377,7 @@ export async function parseSalesAccrualFile(file) {
   // no double-dipping between Sales and Retail.
   const hasExactTypes = col.itemType !== -1;
 
-  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color, giftCards, employees: {name: {sales, colorSales}} }
+  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color, giftCards, haircuts, employees: {name: {sales, colorSales, haircuts}} }
   for (let r = hdrRowIdx + 1; r < grid.length; r++) {
     const row = grid[r];
     if (!rowHasData(row)) continue;
@@ -378,16 +388,18 @@ export async function parseSalesAccrualFile(file) {
 
     const amount = numOf(row[col.sales]);
     const itemName = cellText(row[col.item]);
+    const qty = col.qty !== -1 ? (numOf(row[col.qty]) || 1) : 1;
     const stylist = col.stylist !== -1 ? cellText(row[col.stylist]) : '';
 
     const key = `${code}|${isoDate}`;
-    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, employees: {} });
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, employees: {} });
     const rec = daily.get(key);
-    const addToEmployee = (name, isColor) => {
+    const addToEmployee = (name, isColor, isHaircut) => {
       if (!name) return; // retail/product rows have no stylist attributed — those stay store-level only
-      if (!rec.employees[name]) rec.employees[name] = { sales: 0, colorSales: 0 };
+      if (!rec.employees[name]) rec.employees[name] = { sales: 0, colorSales: 0, haircuts: 0 };
       rec.employees[name].sales += amount;
       if (isColor) rec.employees[name].colorSales += amount;
+      if (isHaircut) rec.employees[name].haircuts += qty;
     };
 
     if (hasExactTypes) {
@@ -400,8 +412,10 @@ export async function parseSalesAccrualFile(file) {
         rec.service += amount;
         const category = col.itemCategory !== -1 ? cellText(row[col.itemCategory]) : '';
         const isColor = category === 'Color Services';
+        const isHaircut = category === 'Haircut Services';
         if (isColor) rec.color += amount;
-        addToEmployee(stylist, isColor);
+        if (isHaircut) rec.haircuts += qty;
+        addToEmployee(stylist, isColor, isHaircut);
       }
     } else {
       // Older export without Item Type/Category — fall back to name-based heuristics.
@@ -412,8 +426,10 @@ export async function parseSalesAccrualFile(file) {
       } else {
         rec.service += amount;
         const isColor = isColorItem(itemName);
+        const isHaircut = isHaircutItem(itemName);
         if (isColor) rec.color += amount;
-        addToEmployee(stylist, isColor);
+        if (isHaircut) rec.haircuts += qty;
+        addToEmployee(stylist, isColor, isHaircut);
       }
     }
   }
@@ -425,8 +441,10 @@ export async function parseSalesAccrualFile(file) {
     retail: Math.round(r.retail * 100) / 100,
     color: Math.round(r.color * 100) / 100,
     giftCards: Math.round(r.giftCards * 100) / 100,
+    haircuts: Math.round(r.haircuts * 100) / 100,
     employees: Object.entries(r.employees).map(([name, v]) => ({
       name, sales: Math.round(v.sales * 100) / 100, colorSales: Math.round(v.colorSales * 100) / 100,
+      haircuts: Math.round(v.haircuts * 100) / 100,
     })),
   }));
   return { records, fileName: file.name };
@@ -495,10 +513,10 @@ export function mergeSalesIntoHistory(history, salesRecords) {
   const next = { ...history };
   salesRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, employees: {} };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, employees: {} };
     next[key] = {
-      ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards,
-      employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales']),
+      ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards, haircuts: r.haircuts,
+      employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales', 'haircuts']),
     };
   });
   return next;
@@ -507,7 +525,7 @@ export function mergeAttendanceIntoHistory(history, attendanceRecords) {
   const next = { ...history };
   attendanceRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, employees: {} };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, employees: {} };
     next[key] = {
       ...existing, hours: r.hours,
       employees: mergeEmployeeFields(existing.employees, r.employees || [], ['totalHours']),
