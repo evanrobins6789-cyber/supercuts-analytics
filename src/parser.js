@@ -491,6 +491,11 @@ export function buildWeeklyRecord(report) {
       retail: s.totals.retail,
       color: s.totals.colorSales,
       hours: s.totals.totalHours,
+      haircuts: s.totals.haircuts,
+      employees: s.employees.map(e => ({
+        name: e.name, sales: e.sales, colorSales: e.colorSales, retail: e.retail,
+        haircuts: e.haircuts, totalHours: e.totalHours,
+      })),
     };
   });
   return { weekKey, startDate: report.startDateISO, endDate: report.endDateISO, stores };
