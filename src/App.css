@@ -308,10 +308,11 @@
 /* ─── AI Chat widget ─────────────────────────────────────────────────── */
 .ai-chat-fab {
   position: fixed; bottom: 24px; right: 24px; width: 56px; height: 56px; border-radius: 50%;
-  background: var(--red); color: #fff; border: none; font-size: 22px; cursor: pointer;
+  background: #fff; border: 2px solid var(--red); cursor: pointer;
   box-shadow: 0 4px 14px rgba(0,0,0,0.25); z-index: 1000; display: flex; align-items: center; justify-content: center;
 }
-.ai-chat-fab:hover { background: var(--red-deep); }
+.ai-chat-fab-close { font-size: 20px; color: var(--red); font-weight: 700; }
+.ai-chat-fab:hover { transform: scale(1.05); }
 .ai-chat-panel {
   position: fixed; bottom: 90px; right: 24px; width: 340px; max-width: calc(100vw - 32px); max-height: 60vh;
   background: var(--card); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.25);

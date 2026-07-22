@@ -1918,33 +1918,72 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
   );
 }
 
-// ─── AI Chat widget ─────────────────────────────────────────────────────────
+// ─── AI Chat widget ("Tilly") ───────────────────────────────────────────────
 // Summarizes what's currently loaded into a compact text blob sent alongside
 // each question, so the AI answers from your real numbers instead of guessing.
-function buildAIContext(report, history, weeklyHistory, goals) {
-  if (!report) return 'No stylist report is currently loaded on the site.';
-  const t = report.companyTotals;
+// Covers the live report AND the full permanent history (every Historical
+// Import + every weekly upload, ever), rolled up by month so it stays compact.
+function buildAIContext(report, history, weeklyHistory, goals, reviews) {
   const lines = [];
-  lines.push(`Current report period: ${report.dateRangeLabel || 'unknown'}`);
-  lines.push(`Company totals — Sales: $${Math.round(t.sales)}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}`);
-  lines.push('');
-  lines.push('Per-store totals for the current period (Store: Sales, TSTH, Hours, Color, Retail, CPC, RPC):');
-  report.stores.forEach(s => {
-    const st = s.totals;
-    const goal = goals?.[s.code];
-    const goalStr = goal ? ` | Color Goal: ${goal.colorGoal ?? 'none'}, Retail Goal: ${goal.retailGoal ?? 'none'}` : '';
-    lines.push(`${s.name}: Sales $${Math.round(st.sales)}, TSTH $${st.tsth != null ? st.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(st.totalHours)}, Color $${Math.round(st.colorSales)}, Retail $${Math.round(st.retail)}, CPC ${st.cpc != null ? st.cpc.toFixed(2) : 'n/a'}, RPC ${st.rpc != null ? st.rpc.toFixed(2) : 'n/a'}${goalStr}`);
-  });
-  const historyDayCount = Object.keys(history || {}).length;
-  const weeklyCount = Object.keys(weeklyHistory || {}).length;
-  if (historyDayCount || weeklyCount) {
+
+  if (report) {
+    const t = report.companyTotals;
+    lines.push(`CURRENT REPORT PERIOD: ${report.dateRangeLabel || 'unknown'}`);
+    lines.push(`Company totals — Sales: $${Math.round(t.sales)}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}`);
     lines.push('');
-    lines.push(`Historical data is also available: ${historyDayCount} store-days of daily history and ${weeklyCount} uploaded weeks of weekly history, but the exact figures aren't included in this summary unless asked about the current period above.`);
+    lines.push('Per-store totals for the CURRENT period (Store: Sales, TSTH, Hours, Color, Retail, CPC, RPC, goals if set):');
+    report.stores.forEach(s => {
+      const st = s.totals;
+      const goal = goals?.[s.code];
+      const goalStr = goal ? ` | Color Goal: ${goal.colorGoal ?? 'none'}, Retail Goal: ${goal.retailGoal ?? 'none'}` : '';
+      lines.push(`${s.name}: Sales $${Math.round(st.sales)}, TSTH $${st.tsth != null ? st.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(st.totalHours)}, Color $${Math.round(st.colorSales)}, Retail $${Math.round(st.retail)}, CPC ${st.cpc != null ? st.cpc.toFixed(2) : 'n/a'}, RPC ${st.rpc != null ? st.rpc.toFixed(2) : 'n/a'}${goalStr}`);
+    });
+  } else {
+    lines.push('No current stylist report is loaded on the site right now.');
   }
+
+  // Full permanent history — every Sales-Accrual/Attendance historical import
+  // plus every regular weekly upload, ever — rolled up by calendar month so
+  // it covers everything without sending years of daily rows.
+  const weeks = buildWeeklySnapshots(history, weeklyHistory);
+  const months = buildMonthlySnapshots(weeks);
+  if (months.length) {
+    lines.push('');
+    lines.push('COMPANY-WIDE HISTORY BY MONTH (covers every report ever uploaded — Historical Import backfill and every weekly upload):');
+    months.forEach(m => {
+      const t = periodTotals(m.stores);
+      lines.push(`${m.month}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Gift Cards $${Math.round(t.giftCards)}, Hours ${Math.round(t.hours)}`);
+    });
+  }
+
+  if (reviews?.reviews?.length) {
+    const all = reviews.reviews;
+    const avg = all.reduce((s, r) => s + r.rating, 0) / all.length;
+    const neg = all.filter(r => r.rating <= 3).length;
+    const pos = all.filter(r => r.rating >= 4).length;
+    lines.push('');
+    lines.push(`REVIEWS: ${all.length} total, average rating ${avg.toFixed(2)}★, ${pos} positive (4-5★), ${neg} negative (1-3★).`);
+  }
+
   return lines.join('\n');
 }
 
-function AIChatWidget({ report, history, weeklyHistory, goals }) {
+function RobinNestIcon({ size = 28 }) {
+  return (
+    <svg viewBox="0 0 40 40" width={size} height={size} xmlns="http://www.w3.org/2000/svg">
+      <ellipse cx="20" cy="30.5" rx="15" ry="5.5" fill="#8B5E3C" />
+      <path d="M6 30 Q20 23 34 30" stroke="#6B4423" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+      <path d="M8.5 27.5 Q20 21.5 31.5 27.5" stroke="#6B4423" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+      <ellipse cx="19.5" cy="19.5" rx="9" ry="8" fill="#5B7C8D" />
+      <ellipse cx="19.5" cy="23" rx="6" ry="5" fill="#D2691E" />
+      <circle cx="20" cy="11.5" r="6" fill="#5B7C8D" />
+      <circle cx="22.5" cy="10.5" r="1.1" fill="#1A1A1A" />
+      <path d="M26 11.5 L30 12.5 L26 13.5 Z" fill="#E8A33D" />
+    </svg>
+  );
+}
+
+function AIChatWidget({ report, history, weeklyHistory, goals, reviews }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -1957,7 +1996,7 @@ function AIChatWidget({ report, history, weeklyHistory, goals }) {
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, history, weeklyHistory, goals);
+      const context = buildAIContext(report, history, weeklyHistory, goals, reviews);
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1966,7 +2005,7 @@ function AIChatWidget({ report, history, weeklyHistory, goals }) {
       const data = await res.json();
       setMessages(prev => [...prev, { role: 'assistant', text: res.ok ? data.answer : `Error: ${data.error || 'something went wrong'}` }]);
     } catch (err) {
-      setMessages(prev => [...prev, { role: 'assistant', text: `Error: couldn't reach the AI (${err.message})` }]);
+      setMessages(prev => [...prev, { role: 'assistant', text: `Error: couldn't reach Tilly (${err.message})` }]);
     } finally {
       setLoading(false);
     }
@@ -1974,20 +2013,20 @@ function AIChatWidget({ report, history, weeklyHistory, goals }) {
 
   return (
     <>
-      <button className="ai-chat-fab" onClick={() => setOpen(o => !o)} aria-label="Ask about your metrics">
-        {open ? '✕' : '💬'}
+      <button className="ai-chat-fab" onClick={() => setOpen(o => !o)} aria-label="Chat with Tilly">
+        {open ? <span className="ai-chat-fab-close">✕</span> : <RobinNestIcon />}
       </button>
       {open && (
         <div className="ai-chat-panel">
-          <p className="ai-chat-header">Ask about your metrics</p>
+          <p className="ai-chat-header">🪺 Tilly — ask about your metrics</p>
           <div className="ai-chat-messages">
-            {!messages.length && <p className="ai-chat-empty">Try: "which store has the lowest TSTH right now?" or "how is Villanova doing on color vs its goal?"</p>}
+            {!messages.length && <p className="ai-chat-empty">Try: "which store has the lowest TSTH right now?" or "how did color sales trend over the last few months?"</p>}
             {messages.map((m, i) => <div key={i} className={`ai-chat-msg ai-chat-msg--${m.role}`}>{m.text}</div>)}
-            {loading && <div className="ai-chat-msg ai-chat-msg--assistant">Thinking…</div>}
+            {loading && <div className="ai-chat-msg ai-chat-msg--assistant">Tilly is thinking…</div>}
           </div>
           <div className="ai-chat-input-row">
             <input
-              className="ai-chat-input" value={input} placeholder="Ask a question…"
+              className="ai-chat-input" value={input} placeholder="Ask Tilly a question…"
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') send(); }}
             />
@@ -2387,7 +2426,7 @@ export default function App() {
         )}
         {tab === 'Setup' && <SetupTab configured={isConfigured()} />}
       </main>
-      <AIChatWidget report={report} history={history} weeklyHistory={weeklyHistory} goals={goals} />
+      <AIChatWidget report={report} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} />
     </div>
   );
 }
