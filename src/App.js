@@ -122,9 +122,8 @@ function expandDateRangeDays(start, end) {
   }
   return dates;
 }
-// Employee-level detail comes from weekly Stylist Report uploads AND from
-// the Sales-Accrual/Attendance historical backfill (both attribute rows to
-// a Stylist/Employee Name, so both can populate per-employee totals).
+// Employee-level detail only ever comes from actual weekly Stylist Report
+// uploads (Sales-Accrual/Attendance backfill never had per-employee data).
 // Merges by name across every week in range, summing raw totals and
 // recomputing tsth/cpc/rpc from those sums — never averaging ratios.
 function mergeEmployeesInto(targetMap, employees) {
@@ -187,10 +186,10 @@ function getRangeTotals(history, weeklyHistory, startISO, endISO) {
 }
 // Adapts history's {service,retail,color,hours,giftCards,haircuts,employees}
 // shape into the same shape a live Stylist Report uses, so the exact same
-// tables/columns can render either one. haircuts/employees come through
-// whenever the Sales-Accrual/Attendance backfill (or a weekly Stylist Report)
-// covered that period; otherwise they come back null/empty rather than a
-// made-up number.
+// tables/columns can render either one. CPC/RPC/employees only come through
+// for periods actually covered by a weekly Stylist Report upload — pure
+// Sales-Accrual/Attendance backfill never had haircuts or per-employee data,
+// so those come back null/empty rather than a made-up number.
 function historyTotalsToReportShape(t) {
   const hours = t?.hours || 0;
   const service = t?.service || 0;
@@ -219,7 +218,7 @@ function DateRangeBar({ start, end, onChange }) {
       {(start || end) && (
         <button className="btn-ghost date-range-clear" onClick={() => onChange(null, null)}>Clear — use current report</button>
       )}
-      {(start && end) && <span className="date-range-note">Showing historical data for this range. Employee-level detail is included wherever your Sales-Accrual/Attendance imports cover these dates.</span>}
+      {(start && end) && <span className="date-range-note">Showing historical data for this range. Employee-level detail isn't available historically — only store totals.</span>}
     </div>
   );
 }
