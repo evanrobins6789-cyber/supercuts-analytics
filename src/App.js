@@ -674,11 +674,12 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                     const goal = getGoal(s.code);
                     const diff = s.vsGoal;
                     const isOpen = !!expanded[s.code];
+                    const hasEmployeeData = s.employees.length > 0;
                     return (
                       <React.Fragment key={s.name}>
-                        <tr className="store-row-clickable" onClick={() => toggleStore(s.code)}>
+                        <tr className={hasEmployeeData ? 'store-row-clickable' : ''} onClick={hasEmployeeData ? () => toggleStore(s.code) : undefined}>
                           <td className="ledger-name-col">
-                            <span className={`mini-chevron ${isOpen ? 'mini-chevron--open' : ''}`}>▸</span> {s.name}
+                            {hasEmployeeData && <span className={`mini-chevron ${isOpen ? 'mini-chevron--open' : ''}`}>▸</span>} {s.name}
                           </td>
                           <td>{metricA.fmt(s[metricA.key])}</td>
                           <td>{metricB.fmt(s[metricB.key])}</td>
@@ -743,11 +744,12 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                 const goal = getGoal(s.code);
                 const diff = s.vsGoal;
                 const isOpen = !!expanded[s.code];
+                const hasEmployeeData = s.employees.length > 0;
                 return (
                   <React.Fragment key={s.name}>
-                    <tr className="store-row-clickable" onClick={() => toggleStore(s.code)}>
+                    <tr className={hasEmployeeData ? 'store-row-clickable' : ''} onClick={hasEmployeeData ? () => toggleStore(s.code) : undefined}>
                       <td className="ledger-name-col">
-                        <span className={`mini-chevron ${isOpen ? 'mini-chevron--open' : ''}`}>▸</span> {s.name}
+                        {hasEmployeeData && <span className={`mini-chevron ${isOpen ? 'mini-chevron--open' : ''}`}>▸</span>} {s.name}
                       </td>
                       <td>{metricA.fmt(s[metricA.key])}</td>
                       <td>{metricB.fmt(s[metricB.key])}</td>
@@ -905,9 +907,9 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                             const hasEmployeeData = s.employees.length > 0;
                             return (
                               <React.Fragment key={s.name}>
-                                <tr className="store-row-clickable" onClick={() => toggleStoreRow(s.code)}>
+                                <tr className={hasEmployeeData ? 'store-row-clickable' : ''} onClick={hasEmployeeData ? () => toggleStoreRow(s.code) : undefined}>
                                   <td className="ledger-name-col">
-                                    <span className={`mini-chevron ${isStoreOpen ? 'mini-chevron--open' : ''}`}>▸</span> {s.name}
+                                    {hasEmployeeData && <span className={`mini-chevron ${isStoreOpen ? 'mini-chevron--open' : ''}`}>▸</span>} {s.name}
                                   </td>
                                   <td>{fmt$(s.sales)}</td>
                                   <td className="ledger-rate">{fmtRate(s.tsth)}</td>
