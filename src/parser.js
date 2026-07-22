@@ -367,7 +367,7 @@ export async function parseSalesAccrualFile(file) {
   // no double-dipping between Sales and Retail.
   const hasExactTypes = col.itemType !== -1;
 
-  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color, giftCards }
+  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color, giftCards, employees: {name: {sales, colorSales}} }
   for (let r = hdrRowIdx + 1; r < grid.length; r++) {
     const row = grid[r];
     if (!rowHasData(row)) continue;
@@ -378,10 +378,17 @@ export async function parseSalesAccrualFile(file) {
 
     const amount = numOf(row[col.sales]);
     const itemName = cellText(row[col.item]);
+    const stylist = col.stylist !== -1 ? cellText(row[col.stylist]) : '';
 
     const key = `${code}|${isoDate}`;
-    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0 });
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, employees: {} });
     const rec = daily.get(key);
+    const addToEmployee = (name, isColor) => {
+      if (!name) return; // retail/product rows have no stylist attributed — those stay store-level only
+      if (!rec.employees[name]) rec.employees[name] = { sales: 0, colorSales: 0 };
+      rec.employees[name].sales += amount;
+      if (isColor) rec.employees[name].colorSales += amount;
+    };
 
     if (hasExactTypes) {
       const itemType = cellText(row[col.itemType]).trim();
@@ -392,18 +399,21 @@ export async function parseSalesAccrualFile(file) {
       } else {
         rec.service += amount;
         const category = col.itemCategory !== -1 ? cellText(row[col.itemCategory]) : '';
-        if (category === 'Color Services') rec.color += amount;
+        const isColor = category === 'Color Services';
+        if (isColor) rec.color += amount;
+        addToEmployee(stylist, isColor);
       }
     } else {
       // Older export without Item Type/Category — fall back to name-based heuristics.
-      const stylist = cellText(row[col.stylist]);
       const soldBy = cellText(row[col.soldBy]);
       if (/^gift\s*card/i.test(itemName)) { rec.giftCards += amount; continue; }
       if (isRetailItem(itemName, stylist, soldBy)) {
         rec.retail += amount;
       } else {
         rec.service += amount;
-        if (isColorItem(itemName)) rec.color += amount;
+        const isColor = isColorItem(itemName);
+        if (isColor) rec.color += amount;
+        addToEmployee(stylist, isColor);
       }
     }
   }
@@ -415,6 +425,9 @@ export async function parseSalesAccrualFile(file) {
     retail: Math.round(r.retail * 100) / 100,
     color: Math.round(r.color * 100) / 100,
     giftCards: Math.round(r.giftCards * 100) / 100,
+    employees: Object.entries(r.employees).map(([name, v]) => ({
+      name, sales: Math.round(v.sales * 100) / 100, colorSales: Math.round(v.colorSales * 100) / 100,
+    })),
   }));
   return { records, fileName: file.name };
 }
@@ -426,6 +439,7 @@ export async function parseAttendanceHistoryFile(file) {
   const headerRow = grid[hdrRowIdx];
   const col = {
     date: findCol(headerRow, 'Date'),
+    employeeName: findCol(headerRow, 'Employee Name'),
     workCenter: findCol(headerRow, 'Work Center'),
     actualHours: findCol(headerRow, 'Actual Hours'),
   };
@@ -433,7 +447,7 @@ export async function parseAttendanceHistoryFile(file) {
     throw new Error('Could not find the expected columns (Date, Work Center, Actual Hours) in this file.');
   }
 
-  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, hours }
+  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, hours, employees: {name: hours} }
   for (let r = hdrRowIdx + 1; r < grid.length; r++) {
     const row = grid[r];
     if (!rowHasData(row)) continue;
@@ -442,26 +456,50 @@ export async function parseAttendanceHistoryFile(file) {
     const isoDate = toISODate(cellText(row[col.date]));
     if (!isoDate) continue;
     const hours = numOf(row[col.actualHours]);
+    const empName = col.employeeName !== -1 ? cellText(row[col.employeeName]) : '';
 
     const key = `${code}|${isoDate}`;
-    if (!daily.has(key)) daily.set(key, { code, date: isoDate, hours: 0 });
-    daily.get(key).hours += hours;
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, hours: 0, employees: {} });
+    const rec = daily.get(key);
+    rec.hours += hours;
+    if (empName) rec.employees[empName] = (rec.employees[empName] || 0) + hours;
   }
 
   if (!daily.size) throw new Error('No attendance rows found in this file.');
-  const records = Array.from(daily.values()).map(r => ({ code: r.code, date: r.date, hours: Math.round(r.hours * 100) / 100 }));
+  const records = Array.from(daily.values()).map(r => ({
+    code: r.code, date: r.date, hours: Math.round(r.hours * 100) / 100,
+    employees: Object.entries(r.employees).map(([name, hrs]) => ({ name, totalHours: Math.round(hrs * 100) / 100 })),
+  }));
   return { records, fileName: file.name };
 }
 
 // Merge newly-parsed daily records into the existing permanent history.
 // Re-uploading the same file/date range is safe — it just overwrites those
 // exact store+date entries with the same numbers, no duplication.
+// Merges one source's per-employee fields into an existing {name: {...}} map
+// without clobbering fields that came from a different source (e.g. Sales
+// gives sales/colorSales, Attendance gives totalHours — either can arrive
+// first or be re-uploaded later without erasing the other's contribution).
+function mergeEmployeeFields(existingMap, newEntries, fields) {
+  const merged = { ...(existingMap || {}) };
+  newEntries.forEach(e => {
+    const prev = merged[e.name] || {};
+    const next = { ...prev };
+    fields.forEach(f => { next[f] = e[f]; });
+    merged[e.name] = next;
+  });
+  return merged;
+}
+
 export function mergeSalesIntoHistory(history, salesRecords) {
   const next = { ...history };
   salesRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null };
-    next[key] = { ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, employees: {} };
+    next[key] = {
+      ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards,
+      employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales']),
+    };
   });
   return next;
 }
@@ -469,8 +507,11 @@ export function mergeAttendanceIntoHistory(history, attendanceRecords) {
   const next = { ...history };
   attendanceRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null };
-    next[key] = { ...existing, hours: r.hours };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, employees: {} };
+    next[key] = {
+      ...existing, hours: r.hours,
+      employees: mergeEmployeeFields(existing.employees, r.employees || [], ['totalHours']),
+    };
   });
   return next;
 }

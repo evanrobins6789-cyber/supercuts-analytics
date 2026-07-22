@@ -171,6 +171,11 @@ function getRangeTotals(history, weeklyHistory, startISO, endISO) {
     if (r.date < startISO || r.date > endISO) return;
     if (covered.has(r.date)) return;
     addTo(r.code, r);
+    if (r.employees && Object.keys(r.employees).length) {
+      if (!employeesByStore[r.code]) employeesByStore[r.code] = {};
+      const asArray = Object.entries(r.employees).map(([name, v]) => ({ name, ...v }));
+      mergeEmployeesInto(employeesByStore[r.code], asArray);
+    }
   });
   Object.keys(byStore).forEach(code => {
     byStore[code].employees = employeesByStore[code]
