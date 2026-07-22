@@ -75,7 +75,16 @@ export async function loadDataByPrefix(prefix) {
   if (supabase) {
     const { data, error } = await supabase.from('weekly_report').select('*').like('report_id', `${prefix}%`);
     if (!error) {
-      return { data: (data || []).map(row => ({ key: row.report_id, payload: row.payload })), source: 'supabase', error: null };
+      const remote = (data || []).map(row => ({ key: row.report_id, payload: row.payload }));
+      // A chunk can exist locally (every save writes local first) but be
+      // missing from Supabase if that one chunk's upsert failed or hasn't
+      // synced yet — e.g. a large historical-import month timing out.
+      // Fill any such gaps from local so a partial sync failure on THIS
+      // device doesn't look like data loss on refresh; Supabase still wins
+      // for any key both sides have, since it's the cross-device source of truth.
+      const remoteKeys = new Set(remote.map(r => r.key));
+      const localOnly = readLocalByPrefix(prefix).filter(r => !remoteKeys.has(r.key));
+      return { data: [...remote, ...localOnly], source: 'supabase', error: null, localOnlyKeys: localOnly.map(r => r.key) };
     }
     return { data: readLocalByPrefix(prefix), source: 'local', error: error.message };
   }

@@ -122,8 +122,9 @@ function expandDateRangeDays(start, end) {
   }
   return dates;
 }
-// Employee-level detail only ever comes from actual weekly Stylist Report
-// uploads (Sales-Accrual/Attendance backfill never had per-employee data).
+// Employee-level detail comes from weekly Stylist Report uploads AND from
+// the Sales-Accrual/Attendance historical backfill (both attribute rows to
+// a Stylist/Employee Name, so both can populate per-employee totals).
 // Merges by name across every week in range, summing raw totals and
 // recomputing tsth/cpc/rpc from those sums — never averaging ratios.
 function mergeEmployeesInto(targetMap, employees) {
@@ -186,10 +187,10 @@ function getRangeTotals(history, weeklyHistory, startISO, endISO) {
 }
 // Adapts history's {service,retail,color,hours,giftCards,haircuts,employees}
 // shape into the same shape a live Stylist Report uses, so the exact same
-// tables/columns can render either one. CPC/RPC/employees only come through
-// for periods actually covered by a weekly Stylist Report upload — pure
-// Sales-Accrual/Attendance backfill never had haircuts or per-employee data,
-// so those come back null/empty rather than a made-up number.
+// tables/columns can render either one. haircuts/employees come through
+// whenever the Sales-Accrual/Attendance backfill (or a weekly Stylist Report)
+// covered that period; otherwise they come back null/empty rather than a
+// made-up number.
 function historyTotalsToReportShape(t) {
   const hours = t?.hours || 0;
   const service = t?.service || 0;
@@ -218,7 +219,7 @@ function DateRangeBar({ start, end, onChange }) {
       {(start || end) && (
         <button className="btn-ghost date-range-clear" onClick={() => onChange(null, null)}>Clear — use current report</button>
       )}
-      {(start && end) && <span className="date-range-note">Showing historical data for this range. Employee-level detail isn't available historically — only store totals.</span>}
+      {(start && end) && <span className="date-range-note">Showing historical data for this range. Employee-level detail is included wherever your Sales-Accrual/Attendance imports cover these dates.</span>}
     </div>
   );
 }
@@ -2136,6 +2137,34 @@ export default function App() {
         const err = reportRes.error || rosterRes.error || goalsRes.error || reviewsRes.error || dailyChunksRes.error || weeklyChunksRes.error;
         showToast(`Couldn't reach Supabase (${err || 'unknown error'}) — showing this device's local data only`, 'error');
       }
+
+      // Some chunks can exist only in this device's local backup — e.g. a
+      // prior historical-import save that timed out against Supabase (large
+      // payload) but still wrote to localStorage. Re-push those now so the
+      // gap is healed for every device, not just this one.
+      const recoveredDaily = dailyChunksRes.localOnlyKeys || [];
+      const recoveredWeekly = weeklyChunksRes.localOnlyKeys || [];
+      if (isConfigured() && (recoveredDaily.length || recoveredWeekly.length)) {
+        Promise.all([
+          ...recoveredDaily.map(key => {
+            const chunk = {};
+            Object.entries(mergedDaily).forEach(([k, rec]) => { if (`daily_history_${rec.date.slice(0, 7)}` === key) chunk[k] = rec; });
+            return saveData(key, chunk);
+          }),
+          ...recoveredWeekly.map(key => {
+            const chunk = {};
+            Object.entries(mergedWeekly).forEach(([k, rec]) => { if (`weekly_history_${rec.startDate.slice(0, 7)}` === key) chunk[k] = rec; });
+            return saveData(key, chunk);
+          }),
+        ]).then(results => {
+          const failed = results.filter(r => !r.ok);
+          if (failed.length) {
+            showToast(`Found ${recoveredDaily.length + recoveredWeekly.length} month(s) of history that only existed on this device — some still won't sync to Supabase (${failed[0].error}). Keep using this device for now.`, 'error');
+          } else {
+            showToast(`Recovered and re-synced ${recoveredDaily.length + recoveredWeekly.length} month(s) of history that had failed to sync earlier.`);
+          }
+        });
+      }
     }).catch(() => setLoading(false));
   }, []);
 
@@ -2283,13 +2312,14 @@ export default function App() {
   const saveHistoryMonthChunks = async (working, touchedMonths) => {
     let ok = true;
     let lastError = null;
+    const failedMonths = [];
     for (const month of touchedMonths) {
       const chunk = {};
       Object.entries(working).forEach(([key, rec]) => { if (rec.date.slice(0, 7) === month) chunk[key] = rec; });
       const result = await saveData(`daily_history_${month}`, chunk);
-      if (!result.ok) { ok = false; lastError = result.error; }
+      if (!result.ok) { ok = false; lastError = result.error; failedMonths.push(month); }
     }
-    return { ok, error: lastError };
+    return { ok, error: lastError, failedMonths };
   };
 
   const handleImportSalesBatch = useCallback(async fileList => {
@@ -2309,6 +2339,7 @@ export default function App() {
     setHistory(working);
     const result = await saveHistoryMonthChunks(working, touchedMonths);
     if (isConfigured() && !result.ok) {
+      lines.push(`✗ Couldn't sync ${result.failedMonths.join(', ')} to Supabase (${result.error}) — this data is safe on this device (it'll auto-retry syncing next time you load the app), but won't show up on other devices until it does. Try the import again or reload the page to trigger a retry.`);
       showToast(`Imported, but couldn't sync to Supabase (${result.error})`, 'error');
     } else {
       showToast(`Processed ${fileList.length} sales file${fileList.length !== 1 ? 's' : ''}`);
@@ -2333,6 +2364,7 @@ export default function App() {
     setHistory(working);
     const result = await saveHistoryMonthChunks(working, touchedMonths);
     if (isConfigured() && !result.ok) {
+      lines.push(`✗ Couldn't sync ${result.failedMonths.join(', ')} to Supabase (${result.error}) — this data is safe on this device (it'll auto-retry syncing next time you load the app), but won't show up on other devices until it does. Try the import again or reload the page to trigger a retry.`);
       showToast(`Imported, but couldn't sync to Supabase (${result.error})`, 'error');
     } else {
       showToast(`Processed ${fileList.length} attendance file${fileList.length !== 1 ? 's' : ''}`);
