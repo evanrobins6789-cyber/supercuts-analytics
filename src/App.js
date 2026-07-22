@@ -1918,6 +1918,87 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
   );
 }
 
+// ─── AI Chat widget ─────────────────────────────────────────────────────────
+// Summarizes what's currently loaded into a compact text blob sent alongside
+// each question, so the AI answers from your real numbers instead of guessing.
+function buildAIContext(report, history, weeklyHistory, goals) {
+  if (!report) return 'No stylist report is currently loaded on the site.';
+  const t = report.companyTotals;
+  const lines = [];
+  lines.push(`Current report period: ${report.dateRangeLabel || 'unknown'}`);
+  lines.push(`Company totals — Sales: $${Math.round(t.sales)}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}`);
+  lines.push('');
+  lines.push('Per-store totals for the current period (Store: Sales, TSTH, Hours, Color, Retail, CPC, RPC):');
+  report.stores.forEach(s => {
+    const st = s.totals;
+    const goal = goals?.[s.code];
+    const goalStr = goal ? ` | Color Goal: ${goal.colorGoal ?? 'none'}, Retail Goal: ${goal.retailGoal ?? 'none'}` : '';
+    lines.push(`${s.name}: Sales $${Math.round(st.sales)}, TSTH $${st.tsth != null ? st.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(st.totalHours)}, Color $${Math.round(st.colorSales)}, Retail $${Math.round(st.retail)}, CPC ${st.cpc != null ? st.cpc.toFixed(2) : 'n/a'}, RPC ${st.rpc != null ? st.rpc.toFixed(2) : 'n/a'}${goalStr}`);
+  });
+  const historyDayCount = Object.keys(history || {}).length;
+  const weeklyCount = Object.keys(weeklyHistory || {}).length;
+  if (historyDayCount || weeklyCount) {
+    lines.push('');
+    lines.push(`Historical data is also available: ${historyDayCount} store-days of daily history and ${weeklyCount} uploaded weeks of weekly history, but the exact figures aren't included in this summary unless asked about the current period above.`);
+  }
+  return lines.join('\n');
+}
+
+function AIChatWidget({ report, history, weeklyHistory, goals }) {
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const send = async () => {
+    const question = input.trim();
+    if (!question || loading) return;
+    setMessages(prev => [...prev, { role: 'user', text: question }]);
+    setInput('');
+    setLoading(true);
+    try {
+      const context = buildAIContext(report, history, weeklyHistory, goals);
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: question, context }),
+      });
+      const data = await res.json();
+      setMessages(prev => [...prev, { role: 'assistant', text: res.ok ? data.answer : `Error: ${data.error || 'something went wrong'}` }]);
+    } catch (err) {
+      setMessages(prev => [...prev, { role: 'assistant', text: `Error: couldn't reach the AI (${err.message})` }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <button className="ai-chat-fab" onClick={() => setOpen(o => !o)} aria-label="Ask about your metrics">
+        {open ? '✕' : '💬'}
+      </button>
+      {open && (
+        <div className="ai-chat-panel">
+          <p className="ai-chat-header">Ask about your metrics</p>
+          <div className="ai-chat-messages">
+            {!messages.length && <p className="ai-chat-empty">Try: "which store has the lowest TSTH right now?" or "how is Villanova doing on color vs its goal?"</p>}
+            {messages.map((m, i) => <div key={i} className={`ai-chat-msg ai-chat-msg--${m.role}`}>{m.text}</div>)}
+            {loading && <div className="ai-chat-msg ai-chat-msg--assistant">Thinking…</div>}
+          </div>
+          <div className="ai-chat-input-row">
+            <input
+              className="ai-chat-input" value={input} placeholder="Ask a question…"
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') send(); }}
+            />
+            <button className="ai-chat-send" onClick={send} disabled={loading}>Send</button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── Setup tab ──────────────────────────────────────────────────────────────
 function SetupTab({ configured }) {
   const steps = [
@@ -2306,6 +2387,7 @@ export default function App() {
         )}
         {tab === 'Setup' && <SetupTab configured={isConfigured()} />}
       </main>
+      <AIChatWidget report={report} history={history} weeklyHistory={weeklyHistory} goals={goals} />
     </div>
   );
 }
