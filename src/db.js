@@ -52,3 +52,44 @@ export async function clearData(key) {
   }
   localStorage.removeItem(LOCAL_PREFIX + key);
 }
+
+// ─── Prefix-based storage (for large, ever-growing datasets) ───────────────
+// Splitting something like 18 months of daily history into one row per
+// month keeps each individual save small and fast, instead of one giant
+// JSON blob that eventually hits Supabase's statement timeout.
+function readLocalByPrefix(prefix) {
+  const results = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(LOCAL_PREFIX + prefix)) {
+      try {
+        results.push({ key: k.slice(LOCAL_PREFIX.length), payload: JSON.parse(localStorage.getItem(k)) });
+      } catch { /* skip corrupt entry */ }
+    }
+  }
+  return results;
+}
+
+// Returns { data: [{key, payload}], source, error }
+export async function loadDataByPrefix(prefix) {
+  if (supabase) {
+    const { data, error } = await supabase.from('weekly_report').select('*').like('report_id', `${prefix}%`);
+    if (!error) {
+      return { data: (data || []).map(row => ({ key: row.report_id, payload: row.payload })), source: 'supabase', error: null };
+    }
+    return { data: readLocalByPrefix(prefix), source: 'local', error: error.message };
+  }
+  return { data: readLocalByPrefix(prefix), source: 'local', error: null };
+}
+
+export async function clearDataByPrefix(prefix) {
+  if (supabase) {
+    await supabase.from('weekly_report').delete().like('report_id', `${prefix}%`);
+  }
+  const toRemove = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(LOCAL_PREFIX + prefix)) toRemove.push(k);
+  }
+  toRemove.forEach(k => localStorage.removeItem(k));
+}

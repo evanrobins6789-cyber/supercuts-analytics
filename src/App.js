@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { loadData, saveData, clearData, isConfigured } from './db';
+import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDataByPrefix } from './db';
 import {
   parseStylistReport, parseEmployeeStartDates, parseGoalFile, parseReviews, normalizeName,
   parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory,
@@ -1989,16 +1989,29 @@ export default function App() {
   const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', Retail: '', 'Color Sales': '', DL: '', '60 Day Employee': '', Reviews: '' });
 
   useEffect(() => {
-    Promise.all([loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('reviews'), loadData('daily_history'), loadData('weekly_history')]).then(([reportRes, rosterRes, goalsRes, reviewsRes, historyRes, weeklyRes]) => {
+    Promise.all([
+      loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('reviews'),
+      loadDataByPrefix('daily_history_'), loadDataByPrefix('weekly_history_'),
+      loadData('daily_history'), loadData('weekly_history'), // legacy single-row format, if anything was saved before chunking
+    ]).then(([reportRes, rosterRes, goalsRes, reviewsRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
       if (reportRes.data) setReport(reportRes.data); else setTab('Upload');
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
       if (reviewsRes.data) setReviews(reviewsRes.data);
-      if (historyRes.data) setHistory(historyRes.data);
-      if (weeklyRes.data) setWeeklyHistory(weeklyRes.data);
+
+      const mergedDaily = {};
+      (dailyChunksRes.data || []).forEach(chunk => Object.assign(mergedDaily, chunk.payload));
+      if (legacyDailyRes.data) Object.assign(mergedDaily, legacyDailyRes.data);
+      setHistory(mergedDaily);
+
+      const mergedWeekly = {};
+      (weeklyChunksRes.data || []).forEach(chunk => Object.assign(mergedWeekly, chunk.payload));
+      if (legacyWeeklyRes.data) Object.assign(mergedWeekly, legacyWeeklyRes.data);
+      setWeeklyHistory(mergedWeekly);
+
       setLoading(false);
-      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local' || reviewsRes.source === 'local' || historyRes.source === 'local' || weeklyRes.source === 'local')) {
-        const err = reportRes.error || rosterRes.error || goalsRes.error || reviewsRes.error || historyRes.error || weeklyRes.error;
+      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local' || reviewsRes.source === 'local' || dailyChunksRes.source === 'local' || weeklyChunksRes.source === 'local')) {
+        const err = reportRes.error || rosterRes.error || goalsRes.error || reviewsRes.error || dailyChunksRes.error || weeklyChunksRes.error;
         showToast(`Couldn't reach Supabase (${err || 'unknown error'}) — showing this device's local data only`, 'error');
       }
     }).catch(() => setLoading(false));
@@ -2021,16 +2034,22 @@ export default function App() {
 
       // Also feed this week into the permanent weekly history. Keyed by the
       // report's own start/end dates, so re-uploading the same week just
-      // overwrites that one entry — it can never double-count.
+      // overwrites that one entry — it can never double-count. Saved as one
+      // small chunk per month rather than the whole growing history at once,
+      // so this never risks a Supabase statement timeout as it accumulates.
       const weekRecord = buildWeeklyRecord(parsed);
+      let weeklyResult = { ok: true };
       if (weekRecord) {
         const nextWeekly = mergeWeeklyIntoHistory(weeklyHistory, weekRecord);
         setWeeklyHistory(nextWeekly);
-        await saveData('weekly_history', nextWeekly);
+        const month = weekRecord.startDate.slice(0, 7);
+        const chunk = {};
+        Object.entries(nextWeekly).forEach(([key, rec]) => { if (rec.startDate.slice(0, 7) === month) chunk[key] = rec; });
+        weeklyResult = await saveData(`weekly_history_${month}`, chunk);
       }
 
-      if (isConfigured() && !result.ok) {
-        showToast(`Loaded ${file.name}, but couldn't sync to Supabase (${result.error}) — only visible on this device`, 'error');
+      if (isConfigured() && (!result.ok || !weeklyResult.ok)) {
+        showToast(`Loaded ${file.name}, but couldn't sync to Supabase (${result.error || weeklyResult.error}) — only visible on this device`, 'error');
       } else {
         showToast(`Loaded ${file.name} — ${parsed.storeCount} stores, ${parsed.employeeCount} employees`);
       }
@@ -2139,20 +2158,34 @@ export default function App() {
     }
   }, [goals]);
 
+  const saveHistoryMonthChunks = async (working, touchedMonths) => {
+    let ok = true;
+    let lastError = null;
+    for (const month of touchedMonths) {
+      const chunk = {};
+      Object.entries(working).forEach(([key, rec]) => { if (rec.date.slice(0, 7) === month) chunk[key] = rec; });
+      const result = await saveData(`daily_history_${month}`, chunk);
+      if (!result.ok) { ok = false; lastError = result.error; }
+    }
+    return { ok, error: lastError };
+  };
+
   const handleImportSalesBatch = useCallback(async fileList => {
     let working = history;
+    const touchedMonths = new Set();
     const lines = [];
     for (const file of fileList) {
       try {
         const parsed = await parseSalesAccrualFile(file);
         working = mergeSalesIntoHistory(working, parsed.records);
+        parsed.records.forEach(r => touchedMonths.add(r.date.slice(0, 7)));
         lines.push(`✓ ${file.name} — ${parsed.records.length} store-days`);
       } catch (err) {
         lines.push(`✗ ${file.name} — ${err.message}`);
       }
     }
     setHistory(working);
-    const result = await saveData('daily_history', working);
+    const result = await saveHistoryMonthChunks(working, touchedMonths);
     if (isConfigured() && !result.ok) {
       showToast(`Imported, but couldn't sync to Supabase (${result.error})`, 'error');
     } else {
@@ -2163,18 +2196,20 @@ export default function App() {
 
   const handleImportAttendanceBatch = useCallback(async fileList => {
     let working = history;
+    const touchedMonths = new Set();
     const lines = [];
     for (const file of fileList) {
       try {
         const parsed = await parseAttendanceHistoryFile(file);
         working = mergeAttendanceIntoHistory(working, parsed.records);
+        parsed.records.forEach(r => touchedMonths.add(r.date.slice(0, 7)));
         lines.push(`✓ ${file.name} — ${parsed.records.length} store-days`);
       } catch (err) {
         lines.push(`✗ ${file.name} — ${err.message}`);
       }
     }
     setHistory(working);
-    const result = await saveData('daily_history', working);
+    const result = await saveHistoryMonthChunks(working, touchedMonths);
     if (isConfigured() && !result.ok) {
       showToast(`Imported, but couldn't sync to Supabase (${result.error})`, 'error');
     } else {
@@ -2185,7 +2220,8 @@ export default function App() {
 
   const handleClearHistory = async () => {
     if (!window.confirm('Clear all historical data? This cannot be undone.')) return;
-    await clearData('daily_history');
+    await clearDataByPrefix('daily_history_');
+    await clearData('daily_history'); // legacy single-row format, if it exists
     setHistory({});
     showToast('Historical data cleared');
   };
