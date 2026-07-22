@@ -96,6 +96,88 @@ function groupStoresByLeader(storeRows) {
   return groups;
 }
 
+// ─── Historical date-range querying (shared by Stores/Retail/Color/DL) ─────
+// Same "don't double-count" rule as the Weekly tab: a week only counts from
+// an uploaded weekly report if its whole range sits inside the query range;
+// any day already covered by SOME weekly report is skipped from the daily
+// (Sales-Accrual/Attendance) bucket either way, so nothing is ever counted twice.
+const EMPTY_RANGE_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0 };
+function addRangeInto(target, src) {
+  target.service += src.service || 0;
+  target.retail += src.retail || 0;
+  target.color += src.color || 0;
+  target.hours += src.hours || 0;
+  target.giftCards += src.giftCards || 0;
+}
+function expandDateRangeDays(start, end) {
+  const dates = [];
+  const d = new Date(start + 'T00:00:00');
+  const endD = new Date(end + 'T00:00:00');
+  let guard = 0;
+  while (d <= endD && guard < 1200) {
+    dates.push(d.toISOString().slice(0, 10));
+    d.setDate(d.getDate() + 1);
+    guard++;
+  }
+  return dates;
+}
+function getRangeTotals(history, weeklyHistory, startISO, endISO) {
+  const weeklyEntries = Object.values(weeklyHistory || {});
+  const covered = new Set();
+  weeklyEntries.forEach(w => expandDateRangeDays(w.startDate, w.endDate).forEach(d => covered.add(d)));
+
+  const byStore = {};
+  const addTo = (code, src) => {
+    if (!byStore[code]) byStore[code] = { ...EMPTY_RANGE_TOTALS };
+    addRangeInto(byStore[code], src);
+  };
+  weeklyEntries.forEach(w => {
+    if (w.startDate >= startISO && w.endDate <= endISO) {
+      Object.entries(w.stores).forEach(([code, v]) => addTo(code, v));
+    }
+  });
+  Object.values(history || {}).forEach(r => {
+    if (r.date < startISO || r.date > endISO) return;
+    if (covered.has(r.date)) return;
+    addTo(r.code, r);
+  });
+  return byStore;
+}
+// Adapts history's {service,retail,color,hours,giftCards} shape into the
+// same shape a live Stylist Report uses, so the exact same tables/columns
+// can render either one. Haircuts (and therefore CPC/RPC) aren't tracked
+// historically, so those come back null rather than a made-up number.
+function historyTotalsToReportShape(t) {
+  const hours = t?.hours || 0;
+  const service = t?.service || 0;
+  return {
+    sales: service,
+    totalHours: hours,
+    colorSales: t?.color || 0,
+    retail: t?.retail || 0,
+    giftCards: t?.giftCards || 0,
+    haircuts: null,
+    tsth: hours > 0 ? service / hours : null,
+    cpc: null,
+    rpc: null,
+  };
+}
+
+function DateRangeBar({ start, end, onChange }) {
+  return (
+    <div className="date-range-bar">
+      <span className="date-range-label">Date range:</span>
+      <input type="date" className="date-range-input" value={start || ''} onChange={e => onChange(e.target.value || null, end)} />
+      <span className="date-range-to">to</span>
+      <input type="date" className="date-range-input" value={end || ''} onChange={e => onChange(start, e.target.value || null)} />
+      {(start || end) && (
+        <button className="btn-ghost date-range-clear" onClick={() => onChange(null, null)}>Clear — use current report</button>
+      )}
+      {(start && end) && <span className="date-range-note">Showing historical data for this range. Employee-level detail isn't available historically — only store totals.</span>}
+    </div>
+  );
+}
+
 // ─── Search ─────────────────────────────────────────────────────────────────
 function SearchBox({ value, onChange, placeholder }) {
   return (
@@ -234,10 +316,20 @@ function OverviewTab({ report, selected, onSelect, query, onQuery }) {
 }
 
 // ─── Stores tab ─────────────────────────────────────────────────────────────
-function StoresTab({ report, query, onQuery }) {
+function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange }) {
   const [sortBy, setSortBy] = useState('tsth');
   const [expanded, setExpanded] = useState({});
-  const storeRows = useMemo(() => report.stores.map(s => ({ name: s.name, code: s.code, employees: s.employees, ...s.totals })), [report.stores]);
+  const isHistorical = !!(dateRange.start && dateRange.end);
+
+  const storeRows = useMemo(() => {
+    if (isHistorical) {
+      const totals = getRangeTotals(history, weeklyHistory, dateRange.start, dateRange.end);
+      return Object.entries(totals).map(([code, t]) => ({
+        name: STORE_CODE_TO_NAME[code] || `Store ${code}`, code, employees: [], ...historyTotalsToReportShape(t),
+      }));
+    }
+    return report.stores.map(s => ({ name: s.name, code: s.code, employees: s.employees, ...s.totals }));
+  }, [isHistorical, history, weeklyHistory, dateRange, report.stores]);
 
   const isSearching = !!query.trim();
   const filtered = useMemo(() => {
@@ -253,15 +345,16 @@ function StoresTab({ report, query, onQuery }) {
   }, [storeRows, query, isSearching]);
   const sorted = useMemo(() => sortByMetric(filtered, sortBy, 'desc'), [filtered, sortBy]);
 
-  const t = report.companyTotals;
+  const t = isHistorical ? rollupRows(storeRows) : report.companyTotals;
   const toggle = name => setExpanded(prev => ({ ...prev, [name]: !prev[name] }));
 
   return (
     <div className="tab-content">
+      <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores or employees…" />
 
       <div className="ledger-head-row">
-        <p className="section-label">{filtered.length} of {report.storeCount} stores</p>
+        <p className="section-label">{filtered.length} of {storeRows.length} stores{isHistorical ? ' (historical)' : ''}</p>
         <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
           {STORE_METRICS.map(o => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
         </select>
@@ -272,23 +365,23 @@ function StoresTab({ report, query, onQuery }) {
           const isOpen = isSearching || !!expanded[s.name];
           return (
             <div key={s.name} className="dl-card">
-              <button className="dl-card-head" onClick={() => toggle(s.name)}>
+              <button className="dl-card-head" onClick={() => toggle(s.name)} disabled={isHistorical}>
                 <div className="dl-card-name-wrap">
-                  <span className={`dl-chevron ${isOpen ? 'dl-chevron--open' : ''}`}>▸</span>
+                  {!isHistorical && <span className={`dl-chevron ${isOpen ? 'dl-chevron--open' : ''}`}>▸</span>}
                   <span className="dl-card-name">{s.name}</span>
-                  <span className="dl-card-count">{s.employees.length} employee{s.employees.length !== 1 ? 's' : ''}</span>
+                  {!isHistorical && <span className="dl-card-count">{s.employees.length} employee{s.employees.length !== 1 ? 's' : ''}</span>}
                 </div>
                 <div className="dl-card-stats">
                   <div className="dl-stat"><span className="dl-stat-label">Sales</span><span className="dl-stat-value">{fmt$(s.sales)}</span></div>
                   <div className="dl-stat"><span className="dl-stat-label">TSTH</span><span className="dl-stat-value">{fmtRate(s.tsth)}</span></div>
                   <div className="dl-stat"><span className="dl-stat-label">Hours</span><span className="dl-stat-value">{fmtNum(s.totalHours, 0)}</span></div>
                   <div className="dl-stat"><span className="dl-stat-label">Color</span><span className="dl-stat-value">{fmt$(s.colorSales)}</span></div>
-                  <div className="dl-stat"><span className="dl-stat-label">CPC</span><span className="dl-stat-value">{fmtNum(s.cpc)}</span></div>
+                  {!isHistorical && <div className="dl-stat"><span className="dl-stat-label">CPC</span><span className="dl-stat-value">{fmtNum(s.cpc)}</span></div>}
                   <div className="dl-stat"><span className="dl-stat-label">Retail</span><span className="dl-stat-value">{fmt$(s.retail)}</span></div>
-                  <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(s.rpc)}</span></div>
+                  {!isHistorical && <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(s.rpc)}</span></div>}
                 </div>
               </button>
-              {isOpen && (
+              {isOpen && !isHistorical && (
                 <div className="dl-store-table">
                   <EmployeeTable
                     rows={sortByMetric(s.employees, 'sales', 'desc')}
@@ -314,9 +407,9 @@ function StoresTab({ report, query, onQuery }) {
               <td className="ledger-rate">{fmtRate(t.tsth)}</td>
               <td>{fmtNum(t.totalHours, 0)}</td>
               <td>{fmt$(t.colorSales)}</td>
-              <td>{fmtNum(t.cpc)}</td>
+              <td>{isHistorical ? '—' : fmtNum(t.cpc)}</td>
               <td>{fmt$(t.retail)}</td>
-              <td>{fmtNum(t.rpc)}</td>
+              <td>{isHistorical ? '—' : fmtNum(t.rpc)}</td>
             </tr>
           </tfoot>
         </table>
@@ -327,10 +420,10 @@ function StoresTab({ report, query, onQuery }) {
 }
 
 // ─── Employees tab ──────────────────────────────────────────────────────────
-function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel = 'Total / Avg (weighted)' }) {
+function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel = 'Total / Avg (weighted)', focused = null, onFocus = null }) {
   return (
     <div className="ledger-scroll">
-      <table className="ledger-table">
+      <table className={`ledger-table ${focused ? 'ledger-table--focus-mode' : ''}`}>
         <thead>
           <tr>
             <th className="ledger-name-col">Employee</th>
@@ -340,7 +433,11 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
         </thead>
         <tbody>
           {rows.map((e, i) => (
-            <tr key={`${e.name}-${e.store}-${i}`}>
+            <tr
+              key={`${e.name}-${e.store}-${i}`}
+              className={onFocus ? `ledger-row-clickable ${focused === e.name ? 'ledger-row-focused' : ''}` : ''}
+              onClick={onFocus ? () => onFocus(focused === e.name ? null : e.name) : undefined}
+            >
               <td className="ledger-name-col">{e.name}</td>
               {showStoreCol && <td className="ledger-store-col">{e.store}</td>}
               {EMPLOYEE_METRICS.map(m => (
@@ -368,6 +465,7 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
 
 function EmployeesTab({ report, query, onQuery }) {
   const [sortBy, setSortBy] = useState('sales');
+  const [focused, setFocused] = useState(null);
   const filtered = useMemo(() => {
     if (!query.trim()) return report.allEmployees;
     const q = query.trim().toLowerCase();
@@ -394,24 +492,60 @@ function EmployeesTab({ report, query, onQuery }) {
         </div>
       )}
 
-      <EmployeeTable rows={sorted} showStoreCol />
+      {focused && (
+        <p className="section-hint">
+          Focused on <strong>{focused}</strong> — everyone else is dimmed. <button className="btn-ghost" onClick={() => setFocused(null)}>Clear focus</button>
+        </p>
+      )}
+      <EmployeeTable rows={sorted} showStoreCol focused={focused} onFocus={setFocused} />
     </div>
   );
 }
 
+function getPrevMonthRange() {
+  const now = new Date();
+  const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const last = new Date(now.getFullYear(), now.getMonth(), 0);
+  const toISO = d => d.toISOString().slice(0, 10);
+  return { start: toISO(first), end: toISO(last) };
+}
+
 // ─── Single-focus store tabs (Retail, Color Sales) — grouped by DL ─────────
-function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals }) {
+function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor }) {
   const [sortBy, setSortBy] = useState(metricA.key);
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
   const [expanded, setExpanded] = useState({});
+  const isHistorical = !!(dateRange?.start && dateRange?.end);
   const getGoal = code => (goalType && goals?.[code]?.[goalType] != null ? goals[code][goalType] : null);
-  const showGoals = !!goalType;
-  const colCount = 3 + (showGoals ? 2 : 0);
+  const showGoals = !!goalType && !isHistorical;
+  const colCount = 3 + (showGoals ? 2 : 0) + (showPrevMonthColor ? 1 : 0);
 
-  const rows = useMemo(() => report.stores.map(s => {
-    const goal = getGoal(s.code);
-    return { name: s.name, code: s.code, employees: s.employees, ...s.totals, vsGoal: goal != null ? s.totals[metricA.key] - goal : null };
-  }), [report.stores, goals, goalType]);
+  const prevMonthColorByCode = useMemo(() => {
+    if (!showPrevMonthColor) return {};
+    const { start, end } = getPrevMonthRange();
+    const totals = getRangeTotals(history, weeklyHistory, start, end);
+    const map = {};
+    Object.entries(totals).forEach(([code, t]) => { map[code] = t.color; });
+    return map;
+  }, [showPrevMonthColor, history, weeklyHistory]);
+
+  const rows = useMemo(() => {
+    if (isHistorical) {
+      const totals = getRangeTotals(history, weeklyHistory, dateRange.start, dateRange.end);
+      return Object.entries(totals).map(([code, t]) => ({
+        name: STORE_CODE_TO_NAME[code] || `Store ${code}`, code, employees: [], ...historyTotalsToReportShape(t), vsGoal: null,
+        prevMonthColor: showPrevMonthColor ? prevMonthColorByCode[code] : undefined,
+      }));
+    }
+    return report.stores.map(s => {
+      const goal = getGoal(s.code);
+      return {
+        name: s.name, code: s.code, employees: s.employees, ...s.totals,
+        vsGoal: goal != null ? s.totals[metricA.key] - goal : null,
+        prevMonthColor: showPrevMonthColor ? prevMonthColorByCode[s.code] : undefined,
+      };
+    });
+  }, [isHistorical, history, weeklyHistory, dateRange, report.stores, goals, goalType, showPrevMonthColor, prevMonthColorByCode]);
   const groups = useMemo(() => groupStoresByLeader(rows), [rows]);
   const toggleStore = code => setExpanded(prev => ({ ...prev, [code]: !prev[code] }));
 
@@ -434,16 +568,18 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   }, [rows, query]);
   const sortedFlat = useMemo(() => sortByMetric(filteredFlat, sortBy, 'desc'), [filteredFlat, sortBy]);
 
-  const t = report.companyTotals;
+  const t = isHistorical ? rollupRows(rows) : report.companyTotals;
   const totalStoresShown = viewMode === 'dl'
     ? filteredGroups.reduce((n, g) => n + g.stores.length, 0)
     : filteredFlat.length;
 
   const groupGoalTotal = storesArr => storesArr.reduce((s, st) => s + (getGoal(st.code) ?? 0), 0);
   const companyGoalTotal = rows.reduce((s, st) => s + (getGoal(st.code) ?? 0), 0);
+  const prevMonthColSum = arr => arr.reduce((s, st) => s + (st.prevMonthColor || 0), 0);
 
   return (
     <div className="tab-content">
+      {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
       <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
 
       <div className="view-toggle">
@@ -452,7 +588,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
       </div>
 
       <div className="ledger-head-row">
-        <p className="section-label">{title} — {totalStoresShown} of {report.storeCount} stores{viewMode === 'dl' ? ', grouped by DL' : ''}</p>
+        <p className="section-label">{title} — {totalStoresShown} stores{viewMode === 'dl' ? ', grouped by DL' : ''}{isHistorical ? ' (historical)' : ''}</p>
         <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
           <option value={metricA.key}>Sort: {metricA.label}</option>
           <option value={metricB.key}>Sort: {metricB.label}</option>
@@ -475,6 +611,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                 <thead>
                   <tr>
                     <th className="ledger-name-col">Store</th><th>{metricA.label}</th><th>{metricB.label}</th>
+                    {showPrevMonthColor && <th>Prev Month Color</th>}
                     {showGoals && <><th>Goal</th><th>vs Goal</th></>}
                   </tr>
                 </thead>
@@ -491,6 +628,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                           </td>
                           <td>{metricA.fmt(s[metricA.key])}</td>
                           <td>{metricB.fmt(s[metricB.key])}</td>
+                          {showPrevMonthColor && <td>{s.prevMonthColor != null ? fmt$(s.prevMonthColor) : '—'}</td>}
                           {showGoals && (
                             <>
                               <td>{goal != null ? fmt$(goal) : '—'}</td>
@@ -498,7 +636,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                             </>
                           )}
                         </tr>
-                        {isOpen && (
+                        {isOpen && !isHistorical && (
                           <tr className="store-expand-row">
                             <td colSpan={colCount}>
                               <EmployeeTable
@@ -519,6 +657,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                     <td className="ledger-name-col">{g.leaderName} total / weighted avg</td>
                     <td>{metricA.fmt(groupTotals[metricA.key])}</td>
                     <td>{metricB.fmt(groupTotals[metricB.key])}</td>
+                    {showPrevMonthColor && <td>{fmt$(prevMonthColSum(g.stores))}</td>}
                     {showGoals && (
                       <>
                         <td>{goalTotal > 0 ? fmt$(goalTotal) : '—'}</td>
@@ -541,6 +680,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
             <thead>
               <tr>
                 <th className="ledger-name-col">Store</th><th>{metricA.label}</th><th>{metricB.label}</th>
+                {showPrevMonthColor && <th>Prev Month Color</th>}
                 {showGoals && <><th>Goal</th><th>vs Goal</th></>}
               </tr>
             </thead>
@@ -557,6 +697,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                       </td>
                       <td>{metricA.fmt(s[metricA.key])}</td>
                       <td>{metricB.fmt(s[metricB.key])}</td>
+                      {showPrevMonthColor && <td>{s.prevMonthColor != null ? fmt$(s.prevMonthColor) : '—'}</td>}
                       {showGoals && (
                         <>
                           <td>{goal != null ? fmt$(goal) : '—'}</td>
@@ -564,7 +705,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                         </>
                       )}
                     </tr>
-                    {isOpen && (
+                    {isOpen && !isHistorical && (
                       <tr className="store-expand-row">
                         <td colSpan={colCount}>
                           <EmployeeTable
@@ -585,6 +726,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                 <td className="ledger-name-col">Company (weighted)</td>
                 <td>{metricA.fmt(t[metricA.key])}</td>
                 <td>{metricB.fmt(t[metricB.key])}</td>
+                {showPrevMonthColor && <td>{fmt$(prevMonthColSum(sortedFlat))}</td>}
                 {showGoals && (
                   <>
                     <td>{companyGoalTotal > 0 ? fmt$(companyGoalTotal) : '—'}</td>
@@ -620,10 +762,19 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
 }
 
 // ─── DL tab ─────────────────────────────────────────────────────────────────
-function DLTab({ report, query, onQuery }) {
+function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange }) {
   const [expanded, setExpanded] = useState({});
   const [expandedStore, setExpandedStore] = useState({});
-  const rows = useMemo(() => report.stores.map(s => ({ name: s.name, code: s.code, employees: s.employees, ...s.totals })), [report.stores]);
+  const isHistorical = !!(dateRange.start && dateRange.end);
+  const rows = useMemo(() => {
+    if (isHistorical) {
+      const totals = getRangeTotals(history, weeklyHistory, dateRange.start, dateRange.end);
+      return Object.entries(totals).map(([code, t]) => ({
+        name: STORE_CODE_TO_NAME[code] || `Store ${code}`, code, employees: [], ...historyTotalsToReportShape(t),
+      }));
+    }
+    return report.stores.map(s => ({ name: s.name, code: s.code, employees: s.employees, ...s.totals }));
+  }, [isHistorical, history, weeklyHistory, dateRange, report.stores]);
   const groups = useMemo(() => groupStoresByLeader(rows), [rows]);
 
   const filteredGroups = useMemo(() => {
@@ -652,6 +803,7 @@ function DLTab({ report, query, onQuery }) {
 
   return (
     <div className="tab-content">
+      <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
       <SearchBox value={query} onChange={onQuery} placeholder="Search DLs or stores…" />
       {!filteredGroups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No matches for "{query}".</p>}
 
@@ -675,9 +827,9 @@ function DLTab({ report, query, onQuery }) {
                       <div className="dl-stat"><span className="dl-stat-label">TSTH</span><span className="dl-stat-value">{fmtRate(t.tsth)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Hours</span><span className="dl-stat-value">{fmtNum(t.totalHours, 0)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Color</span><span className="dl-stat-value">{fmt$(t.colorSales)}</span></div>
-                      <div className="dl-stat"><span className="dl-stat-label">CPC</span><span className="dl-stat-value">{fmtNum(t.cpc)}</span></div>
+                      {!isHistorical && <div className="dl-stat"><span className="dl-stat-label">CPC</span><span className="dl-stat-value">{fmtNum(t.cpc)}</span></div>}
                       <div className="dl-stat"><span className="dl-stat-label">Retail</span><span className="dl-stat-value">{fmt$(t.retail)}</span></div>
-                      <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(t.rpc)}</span></div>
+                      {!isHistorical && <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(t.rpc)}</span></div>}
                     </div>
                   </button>
                   {isOpen && (
@@ -686,7 +838,10 @@ function DLTab({ report, query, onQuery }) {
                         <thead>
                           <tr>
                             <th className="ledger-name-col">Store</th>
-                            <th>Sales</th><th>TSTH</th><th>Total Hours</th><th>Color Sales</th><th>CPC</th><th>Retail</th><th>RPC</th>
+                            <th>Sales</th><th>TSTH</th><th>Total Hours</th><th>Color Sales</th>
+                            {!isHistorical && <><th>CPC</th></>}
+                            <th>Retail</th>
+                            {!isHistorical && <th>RPC</th>}
                           </tr>
                         </thead>
                         <tbody>
@@ -702,11 +857,11 @@ function DLTab({ report, query, onQuery }) {
                                   <td className="ledger-rate">{fmtRate(s.tsth)}</td>
                                   <td>{fmtNum(s.totalHours, 0)}</td>
                                   <td>{fmt$(s.colorSales)}</td>
-                                  <td>{fmtNum(s.cpc)}</td>
+                                  {!isHistorical && <td>{fmtNum(s.cpc)}</td>}
                                   <td>{fmt$(s.retail)}</td>
-                                  <td>{fmtNum(s.rpc)}</td>
+                                  {!isHistorical && <td>{fmtNum(s.rpc)}</td>}
                                 </tr>
-                                {isStoreOpen && (
+                                {isStoreOpen && !isHistorical && (
                                   <tr className="store-expand-row">
                                     <td colSpan={8}>
                                       <EmployeeTable
@@ -1765,6 +1920,8 @@ export default function App() {
   const [reviews, setReviews] = useState(null);
   const [history, setHistory] = useState({});
   const [weeklyHistory, setWeeklyHistory] = useState({});
+  const [dateRange, setDateRangeState] = useState({ start: null, end: null });
+  const setDateRange = (start, end) => setDateRangeState({ start, end });
   const [label, setLabel] = useState('');
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('Overview');
@@ -2003,7 +2160,7 @@ export default function App() {
           <OverviewTab report={report} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} />
         )}
         {!needsReport && tab === 'Stores' && report && (
-          <StoresTab report={report} query={queries.Stores} onQuery={v => setQuery('Stores', v)} />
+          <StoresTab report={report} query={queries.Stores} onQuery={v => setQuery('Stores', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} />
         )}
         {!needsReport && tab === 'Employees' && report && (
           <EmployeesTab report={report} query={queries.Employees} onQuery={v => setQuery('Employees', v)} />
@@ -2013,6 +2170,7 @@ export default function App() {
             report={report} query={queries.Retail} onQuery={v => setQuery('Retail', v)}
             title="Retail" metricA={{ key: 'retail', label: 'Retail', fmt: fmt$ }} metricB={{ key: 'rpc', label: 'RPC', fmt: fmtNum }}
             goalType="retailGoal" goals={goals}
+            history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
           />
         )}
         {!needsReport && tab === 'Color Sales' && report && (
@@ -2020,10 +2178,12 @@ export default function App() {
             report={report} query={queries['Color Sales']} onQuery={v => setQuery('Color Sales', v)}
             title="Color Sales" metricA={{ key: 'colorSales', label: 'Color Sales', fmt: fmt$ }} metricB={{ key: 'cpc', label: 'CPC', fmt: fmtNum }}
             goalType="colorGoal" goals={goals}
+            history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
+            showPrevMonthColor
           />
         )}
         {!needsReport && tab === 'DL' && report && (
-          <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} />
+          <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} />
         )}
         {tab === '60 Day Employee' && (
           <NewHireTab report={report} employeeRoster={employeeRoster} query={queries['60 Day Employee']} onQuery={v => setQuery('60 Day Employee', v)} />
