@@ -272,6 +272,35 @@ export async function parseGoalFile(file) {
   return { entries, periodLabel, fileName: file.name };
 }
 
+// ─── Manager roster (STORE | Manager) ──────────────────────────────────────
+// A simple two-column list — store name, manager name ("Open" for a vacant
+// position, kept as-is rather than treated as empty since it's meaningful).
+// Read by header text (case-insensitive) since column order isn't guaranteed.
+export async function parseManagerFile(file) {
+  const grid = await readWorkbookGrid(file);
+  if (grid.length < 2) throw new Error('This file does not have any manager rows in it.');
+
+  const header = grid[0];
+  const storeCol = findCol(header, 'Store');
+  const managerCol = findCol(header, 'Manager');
+  if (storeCol === -1 || managerCol === -1) {
+    throw new Error('Could not find the expected columns ("Store", "Manager") in this file.');
+  }
+
+  const entries = [];
+  for (let r = 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (!rowHasData(row)) continue;
+    const storeName = cellText(row[storeCol]);
+    if (!storeName) continue;
+    const managerName = cellText(row[managerCol]).replace(/\s+/g, ' ').trim();
+    entries.push({ storeName, managerName });
+  }
+  if (!entries.length) throw new Error('No manager rows found in this file.');
+
+  return { entries, fileName: file.name };
+}
+
 // ─── Reviews export (CSV) ───────────────────────────────────────────────────
 // A Google-reviews style export. The "location" column is a verbose listing
 // name that doesn't match our store naming — "location short name" is the

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDataByPrefix } from './db';
 import {
-  parseStylistReport, parseEmployeeStartDates, parseGoalFile, parseReviews, normalizeName,
+  parseStylistReport, parseEmployeeStartDates, parseGoalFile, parseManagerFile, parseReviews, normalizeName,
   parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory,
   buildWeeklyRecord, mergeWeeklyIntoHistory,
 } from './parser';
@@ -1367,9 +1367,10 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals }) {
 }
 
 // ─── Managers tab (store → manager assignment, powers the MANAGER tag) ─────
-function ManagersTab({ report, managers, onSaveManager }) {
+function ManagersTab({ report, managers, onSaveManager, onImportManagers }) {
   const [query, setQuery] = useState('');
   const [drafts, setDrafts] = useState({}); // { code: name } — in-progress edits
+  const [importing, setImporting] = useState(false);
 
   if (!report) {
     return <div className="empty-state"><p className="empty-title">No report yet</p><p>Upload a stylist report first, so there's a store list to assign managers to.</p></div>;
@@ -1387,11 +1388,28 @@ function ManagersTab({ report, managers, onSaveManager }) {
     if (raw === undefined) return;
     onSaveManager(code, raw.trim() || null);
   };
+  const handleImportFile = async file => {
+    setImporting(true);
+    await onImportManagers(file);
+    setImporting(false);
+  };
 
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
       <p className="section-hint">Assign who manages each store — type their name exactly as it appears in the stylist report so it gets a MANAGER tag wherever employees are listed (Stores, Employees, DL, Retail, Color Sales). The DL tab's "Managers" view rolls this up by DL, and this always saves even if the name doesn't match yet.</p>
+
+      {onImportManagers && (
+        <div className="goal-import-row">
+          <label className="goal-import-btn">
+            <input
+              type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+              onChange={e => { if (e.target.files[0]) handleImportFile(e.target.files[0]); e.target.value = ''; }}
+            />
+            {importing ? <span className="spinner small" /> : '📥'} Import Managers from file (Store | Manager columns)
+          </label>
+        </div>
+      )}
 
       <div className="ledger-scroll">
         <table className="ledger-table">
@@ -3112,6 +3130,31 @@ export default function App() {
     }
   }, [goals]);
 
+  const handleImportManagers = useCallback(async file => {
+    try {
+      const parsed = await parseManagerFile(file);
+      const next = { ...managers };
+      let matched = 0;
+      const unmatched = [];
+      parsed.entries.forEach(e => {
+        const code = getCodeForStoreName(e.storeName);
+        if (code) { next[code] = e.managerName; matched++; }
+        else unmatched.push(e.storeName);
+      });
+      setManagers(next);
+      const result = await saveData('store_managers', next);
+      if (isConfigured() && !result.ok) {
+        showToast(`Imported ${matched} managers, but couldn't sync to Supabase (${result.error})`, 'error');
+      } else if (unmatched.length) {
+        showToast(`Imported ${matched} managers from ${file.name} — ${unmatched.length} store name${unmatched.length > 1 ? 's' : ''} not recognized: ${unmatched.slice(0, 3).join(', ')}${unmatched.length > 3 ? '…' : ''}`, 'error');
+      } else {
+        showToast(`Imported ${matched} managers from ${file.name}`);
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }, [managers]);
+
   // A month's chunk for a large franchise (many stores, each with a full
   // per-employee sales/color/retail/haircuts breakdown) can be big enough
   // to risk a Supabase request-size or statement-timeout failure — and if
@@ -3325,7 +3368,7 @@ export default function App() {
           <SetupTab
             configured={isConfigured()} section={setupSection} onSection={setSetupSection}
             goalsProps={{ report, goals, onSaveGoal: handleSaveGoal, onImportGoals: handleImportGoals }}
-            managersProps={{ report, managers, onSaveManager: handleSaveManager }}
+            managersProps={{ report, managers, onSaveManager: handleSaveManager, onImportManagers: handleImportManagers }}
             historyProps={{ history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory }}
             uploadProps={{
               report, uploading, onFile: handleFile, onClear: handleClearAll,
