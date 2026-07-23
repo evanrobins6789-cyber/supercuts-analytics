@@ -1,9 +1,17 @@
 # Handoff — Supercuts Analytics
 
-Last updated: 2026-07-23, end of a long session that built the Homepage tab from scratch and iterated on it several rounds. Everything below is shipped and on `main` (commits `2bde12b` through `da3ba43` — see `git log`).
+Last updated: 2026-07-23, immediately after adding a long-format **News** tab on top of last session's Homepage build-out. Not yet pushed — see "What shipped this session" below.
 
 ## What this app is
-A Store Scoreboard / analytics dashboard for a Supercuts franchise (React SPA, Supabase-backed, deployed on Vercel). Tabs: **Homepage** (default landing tab), Overview, Stores, Employees, Retail, Color Sales, DL, 60 Day Employee, Reviews, Weekly, and Setup (which also holds Goals / Managers / Milestone Goals / **Homepage** (News & Events admin) / Historical Import / Upload as sub-sections). Has an in-app AI assistant, "Tilly," that answers questions about the business data via a serverless Anthropic API proxy (`api/chat.js`).
+A Store Scoreboard / analytics dashboard for a Supercuts franchise (React SPA, Supabase-backed, deployed on Vercel). Tabs: **Homepage** (default landing tab), **News**, Overview, Stores, Employees, Retail, Color Sales, DL, 60 Day Employee, Reviews, Weekly, and Setup (which also holds Goals / Managers / Milestone Goals / **Homepage** (News & Events admin) / Historical Import / Upload as sub-sections). Has an in-app AI assistant, "Tilly," that answers questions about the business data via a serverless Anthropic API proxy (`api/chat.js`).
+
+## What shipped this session — the News tab
+Added a dedicated long-format **News** tab, on top of the News & Updates feature already on the Homepage from last session:
+- **News posts can now attach a PDF** — `NewsComposer` (Setup → Homepage) gained a `PdfUploadField` next to the existing header-image field. `readPdfAsDataURL` (`App.js`) validates type/extension and caps size at `NEWS_PDF_MAX_MB` (8MB) before base64-encoding inline into the same `homepage_news` jsonb row images already live in — no re-encoding is possible for a PDF the way images get downscaled, so the cap is the only guard against payload bloat.
+- **Homepage News cards now navigate instead of opening a lightbox.** `HomepageMediaCard` gained an `onClick` prop that takes priority over the old `onImageClick` (still used by Events, unchanged) — tapping a News card calls `onOpenNews(id)`, which sets `tab='News'` and `openNews={id}` in `App`. Cards with a PDF attachment show a "📄 PDF" badge as a hint before clicking.
+- **`NewsTab` (new component in `App.js`)** renders every post in full — full header image, full body text (`white-space: pre-wrap`, no truncation, unlike the 2-line-clamped Homepage teaser), and an inline `<iframe>` PDF viewer plus a `download`-attribute link for the attachment. When arriving via a Homepage card tap, it scrolls to that post and flashes a 2.5s highlight ring (`useEffect` keyed on the `openNews` object — a fresh object reference each click, so re-tapping the same post re-triggers the scroll+highlight even though the id didn't change).
+- Wired the PDF-attachment flag into Tilly's context (`buildAIContext`) per standing practice — she now knows a post has a PDF attached, not its contents.
+- **Not done / deliberately skipped:** no in-app PDF *editing* (delete + re-add only, matching how News/Events already worked); no OCR/text-extraction of PDF content for Tilly.
 
 ## What shipped this session — the Homepage tab
 Built from nothing to a fairly rich landing page across several rounds of feedback. Current shape:
@@ -26,6 +34,7 @@ Not Homepage, but touched this session while fixing a Homepage-adjacent complain
 - Review text sent to Tilly is capped at 40 most-recent-negative / 15 most-recent-positive — aggregates/counts are uncapped, only raw quotes are bounded.
 - Manager name matching (Setup > Managers) is exact-normalized-name, not fuzzy.
 - Homepage News/Events admin (Setup > Homepage) has no password gate — anyone who can reach Setup can post/delete. Same posture as Goals/Managers before this session; add a gate the same way `GOALS_PASSWORD` does it in `App.js` if that's ever a problem.
+- News PDFs are base64-inlined into the single `homepage_news` Supabase row (same pattern as header images, capped at 8MB each via `NEWS_PDF_MAX_MB`) — every save/load moves the *whole* news array, so a handful of large PDFs accumulating over time will make that row (and every News edit) progressively heavier. Fine for occasional flyers/memos; if PDF posting becomes frequent, worth moving to real blob storage (Supabase Storage) instead of jsonb.
 - No test suite, and **no Node.js/npm in this sandboxed environment** — every change this session was verified by careful re-reading plus a `perl`-based brace/paren balance check, never an actual local build. **After every push, poll `gh api repos/evanrobins6789-cyber/supercuts-analytics/commits/<sha>/status --jq '.statuses[]'`** for the real GitHub↔Vercel compile check — this was done after every commit this session and everything came back green, but it's the only real verification that exists.
 
 ## Architecture notes for a fresh session

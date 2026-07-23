@@ -690,21 +690,73 @@ function ImageUploadField({ value, onChange, label, onError }) {
   );
 }
 
+// Reads an uploaded PDF as a data URL for inline storage — same jsonb-blob
+// approach as header images, but no re-encoding is possible for a PDF, so a
+// size cap stands in for the downscaling images get (keeps a single
+// long-lived news row from ballooning as posts accumulate).
+const NEWS_PDF_MAX_MB = 8;
+function readPdfAsDataURL(file, maxSizeMB = NEWS_PDF_MAX_MB) {
+  return new Promise((resolve, reject) => {
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      reject(new Error('Please choose a PDF file.'));
+      return;
+    }
+    if (file.size > maxSizeMB * 1024 * 1024) {
+      reject(new Error(`That PDF is ${(file.size / (1024 * 1024)).toFixed(1)}MB — please keep attachments under ${maxSizeMB}MB.`));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = ev => resolve({ dataUrl: ev.target.result, name: file.name, sizeKB: Math.round(file.size / 1024) });
+    reader.onerror = () => reject(new Error('Failed to read the PDF file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function PdfUploadField({ value, onChange, onError }) {
+  const [busy, setBusy] = useState(false);
+  const handleFile = async file => {
+    setBusy(true);
+    try {
+      onChange(await readPdfAsDataURL(file));
+    } catch (err) {
+      if (onError) onError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="homepage-image-field">
+      <label className="homepage-image-upload">
+        <input type="file" accept="application/pdf" style={{ display: 'none' }} onChange={e => { if (e.target.files[0]) handleFile(e.target.files[0]); e.target.value = ''; }} />
+        {busy ? <span className="spinner small" /> : (value ? '📄 Replace PDF' : '📄 Attach PDF (optional)')}
+      </label>
+      {value && (
+        <div className="homepage-pdf-field-preview">
+          <span>📄 {value.name} ({value.sizeKB} KB)</span>
+          <button type="button" className="homepage-delete-btn" onClick={() => onChange(null)} title="Remove PDF">✕</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NewsComposer({ onAdd, onImageError }) {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [image, setImage] = useState(null);
+  const [pdf, setPdf] = useState(null);
   const submit = e => {
     e.preventDefault();
     if (!title.trim()) return;
-    onAdd(title.trim(), body.trim(), image);
-    setTitle(''); setBody(''); setImage(null);
+    onAdd(title.trim(), body.trim(), image, pdf);
+    setTitle(''); setBody(''); setImage(null); setPdf(null);
   };
   return (
     <form className="homepage-composer" onSubmit={submit}>
       <input className="homepage-input" placeholder="Headline…" value={title} onChange={e => setTitle(e.target.value)} />
-      <textarea className="homepage-textarea" placeholder="Details (optional)…" value={body} onChange={e => setBody(e.target.value)} rows={2} />
+      <textarea className="homepage-textarea" placeholder="Details — as long as you like, shows in full on the News tab…" value={body} onChange={e => setBody(e.target.value)} rows={4} />
       <ImageUploadField value={image} onChange={setImage} onError={onImageError} label="Header image (optional)" />
+      <PdfUploadField value={pdf} onChange={setPdf} onError={onImageError} />
       <button type="submit" className="btn-primary homepage-post-btn" disabled={!title.trim()}>Post update</button>
     </form>
   );
@@ -738,23 +790,28 @@ function EventComposer({ onAdd, onImageError }) {
 // image, the whole card opens it full-size in the lightbox (onImageClick) —
 // the card itself is small/cropped, so this is how the poster/flyer text
 // actually gets read.
-function HomepageMediaCard({ image, badge, title, date, desc, onImageClick }) {
-  const clickable = !!(image && onImageClick);
+// `onClick` (e.g. "open this post on the News tab") takes priority over
+// `onImageClick` (the image lightbox, used by Events) — a card is one or the
+// other, never both, so there's no ambiguity about what a tap does.
+function HomepageMediaCard({ image, badge, title, date, desc, onImageClick, onClick }) {
+  const clickable = !!(onClick || (image && onImageClick));
+  const handleClick = onClick ? onClick : (image ? () => onImageClick(image) : undefined);
   return (
     <div
       className={`homepage-featured-card ${clickable ? 'homepage-featured-card--clickable' : ''}`}
       style={image ? { backgroundImage: `url(${image})` } : undefined}
-      onClick={clickable ? () => onImageClick(image) : undefined}
+      onClick={clickable ? handleClick : undefined}
       role={clickable ? 'button' : undefined}
       tabIndex={clickable ? 0 : undefined}
-      onKeyDown={clickable ? e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onImageClick(image); } } : undefined}
+      onKeyDown={clickable ? e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(); } } : undefined}
     >
       <div className="homepage-featured-overlay">
         {badge && <span className="homepage-featured-badge">{badge}</span>}
         <p className="homepage-featured-title">{title}</p>
         {date && <p className="homepage-featured-date">{date}</p>}
         {desc && <p className="homepage-featured-desc">{desc}</p>}
-        {clickable && <span className="homepage-featured-zoom-hint">🔍 Tap to view image</span>}
+        {onClick && <span className="homepage-featured-zoom-hint">📖 Tap to read full post</span>}
+        {!onClick && clickable && <span className="homepage-featured-zoom-hint">🔍 Tap to view image</span>}
       </div>
     </div>
   );
@@ -977,7 +1034,7 @@ const HOMEPAGE_BITMOJI_SLOTS = [
   { key: 'corevalues', corner: 'bottom-right', pool: 'curious' },
 ];
 
-function HomepageTab({ report, news, events, reviews }) {
+function HomepageTab({ report, news, events, reviews, onOpenNews }) {
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
   const storeRows = useMemo(() => report ? report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })) : [], [report]);
@@ -1000,7 +1057,7 @@ function HomepageTab({ report, news, events, reviews }) {
             {sortedNews.length ? (
               <div className="homepage-card-grid">
                 {sortedNews.map(n => (
-                  <HomepageMediaCard key={n.id} image={n.headerImage} title={n.title} date={fmtDateLong(n.date)} desc={n.body} onImageClick={setLightboxImage} />
+                  <HomepageMediaCard key={n.id} image={n.headerImage} badge={n.pdf ? '📄 PDF' : undefined} title={n.title} date={fmtDateLong(n.date)} desc={n.body} onClick={() => onOpenNews(n.id)} />
                 ))}
               </div>
             ) : <p className="empty-note">No news posted yet — post one from Setup → Homepage.</p>}
@@ -1037,6 +1094,54 @@ function HomepageTab({ report, news, events, reviews }) {
       </div>
 
       {lightboxImage && <ImageLightbox src={lightboxImage} onClose={() => setLightboxImage(null)} />}
+    </div>
+  );
+}
+
+// ─── News tab ───────────────────────────────────────────────────────────────
+// The long-format home for posts that only get a teaser card on the
+// Homepage — full body text, full-size header image, and an inline PDF
+// viewer for attachments. `openNews` (an object, so a fresh reference on
+// every click re-triggers the effect even for the same id) comes from a
+// Homepage card tap: scrolls to that post and flashes a highlight around it.
+function NewsTab({ news, openNews }) {
+  const sortedNews = useMemo(
+    () => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')),
+    [news]
+  );
+  const [highlightId, setHighlightId] = useState(null);
+  const postRefs = useRef({});
+
+  useEffect(() => {
+    if (!openNews?.id) return;
+    const el = postRefs.current[openNews.id];
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setHighlightId(openNews.id);
+    const t = setTimeout(() => setHighlightId(null), 2500);
+    return () => clearTimeout(t);
+  }, [openNews]);
+
+  return (
+    <div className="tab-content">
+      <p className="section-hint">Company updates and longer-format posts — post new ones from Setup → Homepage.</p>
+      {sortedNews.length ? sortedNews.map(n => (
+        <div
+          key={n.id}
+          ref={el => { postRefs.current[n.id] = el; }}
+          className={`news-post ${highlightId === n.id ? 'news-post--highlighted' : ''}`}
+        >
+          {n.headerImage && <img className="news-post-image" src={n.headerImage} alt="" />}
+          <p className="news-post-date">{fmtDateLong(n.date)}</p>
+          <p className="news-post-title">{n.title}</p>
+          {n.body && <p className="news-post-text">{n.body}</p>}
+          {n.pdf && (
+            <div className="news-post-pdf">
+              <iframe className="news-post-pdf-frame" src={n.pdf.dataUrl} title={n.pdf.name} />
+              <a className="news-post-pdf-link" href={n.pdf.dataUrl} download={n.pdf.name}>⬇ Download {n.pdf.name}</a>
+            </div>
+          )}
+        </div>
+      )) : <p className="empty-note">No news posted yet — post one from Setup → Homepage.</p>}
     </div>
   );
 }
@@ -2167,7 +2272,7 @@ function HomepageAdminTab({ news, events, onAddNews, onDeleteNews, onAddEvent, o
 
   return (
     <div className="tab-content">
-      <p className="section-hint">Post News &amp; Updates and log Events here — both support an optional header image. They show up on the Homepage tab; events also appear on its calendar, with the 3 soonest featured above it.</p>
+      <p className="section-hint">Post News &amp; Updates and log Events here — both support an optional header image, and News can also attach a PDF. News shows a teaser card on the Homepage that opens the full post (and PDF) on the News tab; events also appear on the Homepage calendar, with the 3 soonest featured above it.</p>
 
       <div className="homepage-admin-columns">
         <div className="homepage-section">
@@ -2179,7 +2284,7 @@ function HomepageAdminTab({ news, events, onAddNews, onDeleteNews, onAddEvent, o
                 {n.headerImage && <img className="homepage-admin-thumb" src={n.headerImage} alt="" />}
                 <div className="homepage-admin-row-body">
                   <p className="homepage-admin-row-title">{n.title}</p>
-                  <p className="homepage-admin-row-date">{fmtDateLong(n.date)}</p>
+                  <p className="homepage-admin-row-date">{fmtDateLong(n.date)}{n.pdf ? ' · 📄 PDF attached' : ''}</p>
                 </div>
                 <button className="homepage-delete-btn" onClick={() => onDeleteNews(n.id)} title="Delete">✕</button>
               </div>
@@ -3265,7 +3370,7 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
   if (news && news.length) {
     lines.push('NEWS & UPDATES posted on the Homepage (most recent first):');
     [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '')).forEach(n => {
-      lines.push(`${n.date}: ${n.title}${n.body ? ` — ${n.body}` : ''}`);
+      lines.push(`${n.date}: ${n.title}${n.body ? ` — ${n.body}` : ''}${n.pdf ? ' [has a PDF attachment]' : ''}`);
     });
     lines.push('');
   }
@@ -3702,7 +3807,7 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;`}<
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Homepage', 'Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Weekly', 'Setup'];
+const TABS = ['Homepage', 'News', 'Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Weekly', 'Setup'];
 
 export default function App() {
   const [report, setReport] = useState(null);
@@ -3734,6 +3839,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('Homepage');
   const [setupSection, setSetupSection] = useState('guide');
+  const [openNews, setOpenNews] = useState(null); // {id} — set on a Homepage News card tap, consumed by NewsTab to scroll/highlight
   const [toast, setToast] = useState(null);
   const [celebrate, setCelebrate] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -4028,8 +4134,13 @@ export default function App() {
     });
   }, []);
 
-  const handleAddNews = useCallback((title, body, headerImage) => {
-    const item = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, title, body, headerImage: headerImage || null, date: new Date().toISOString().slice(0, 10), createdAt: new Date().toISOString() };
+  const handleOpenNews = useCallback(id => {
+    setTab('News');
+    setOpenNews({ id });
+  }, []);
+
+  const handleAddNews = useCallback((title, body, headerImage, pdf) => {
+    const item = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, title, body, headerImage: headerImage || null, pdf: pdf || null, date: new Date().toISOString().slice(0, 10), createdAt: new Date().toISOString() };
     setNews(prev => {
       const next = [item, ...prev];
       saveData('homepage_news', next).then(result => {
@@ -4300,7 +4411,7 @@ export default function App() {
 
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
-  const needsReport = !report && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage';
+  const needsReport = !report && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News';
 
   return (
     <div className="app">
@@ -4325,7 +4436,10 @@ export default function App() {
       <main className="app-main">
         {needsReport && <div className="empty-state"><p className="empty-title">No report yet</p><p>Go to the Setup tab's Upload section to add this week's report.</p></div>}
         {tab === 'Homepage' && (
-          <HomepageTab report={report} news={news} events={events} reviews={reviews} />
+          <HomepageTab report={report} news={news} events={events} reviews={reviews} onOpenNews={handleOpenNews} />
+        )}
+        {tab === 'News' && (
+          <NewsTab news={news} openNews={openNews} />
         )}
         {!needsReport && tab === 'Overview' && report && (
           <OverviewTab report={report} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} />
