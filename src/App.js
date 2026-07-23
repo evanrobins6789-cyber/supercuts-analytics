@@ -245,6 +245,22 @@ function historyTotalsToReportShape(t) {
   };
 }
 
+// A `report` blob cached before CPH existed (e.g. sitting in Supabase from
+// an old upload) won't have `.cph` on its stores/employees — it's baked in
+// at parse time, not recomputed on load, unlike the historical/date-range
+// paths above which always derive it fresh. Patch it in here so CPH shows
+// up immediately rather than only after the next weekly upload.
+function ensureReportCph(report) {
+  if (!report) return report;
+  report.stores.forEach(s => {
+    s.employees.forEach(e => { e.cph = e.totalHours > 0 ? e.haircuts / e.totalHours : null; });
+    s.totals.cph = s.totals.totalHours > 0 ? s.totals.haircuts / s.totals.totalHours : null;
+  });
+  report.allEmployees = report.stores.flatMap(s => s.employees.map(e => ({ ...e, store: s.name })));
+  report.companyTotals.cph = report.companyTotals.totalHours > 0 ? report.companyTotals.haircuts / report.companyTotals.totalHours : null;
+  return report;
+}
+
 function getCurrentMonthRange() {
   const now = new Date();
   const first = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -1965,6 +1981,15 @@ function isoWeekInfo(dateISO) {
   const week = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
   return { isoYear, week };
 }
+// Inverse of isoWeekInfo — the Monday (ISO date) that starts week N of a
+// given ISO week-year. Jan 4th always falls in week 1, so week 1's Monday
+// is the Monday of the week containing Jan 4th.
+function isoWeekToMonday(isoYear, week) {
+  const jan4 = new Date(isoYear, 0, 4);
+  const jan4Day = (jan4.getDay() + 6) % 7; // Mon=0..Sun=6
+  const week1Monday = addDaysISO(jan4.toISOString().slice(0, 10), -jan4Day);
+  return addDaysISO(week1Monday, (week - 1) * 7);
+}
 
 const WEEKLY_METRICS = [
   { key: 'service', label: 'Service Sales', fmt: fmt$ },
@@ -2007,9 +2032,18 @@ function buildYoYRows(periods, granularity, metricKey, currentYear, previousYear
   const curMap = byYear.get(currentYear) || new Map();
   const prevMap = byYear.get(previousYear) || new Map();
   const buckets = Array.from(new Set([...curMap.keys(), ...prevMap.keys()])).sort((a, b) => a - b);
+  // Week labels always show the CURRENT year's actual dates for that week
+  // number — the previous year's matching week falls a few days off (that's
+  // the point of aligning by week-of-year), so one anchor date avoids
+  // showing two different, confusing date ranges on the same row.
+  const labelFor = b => {
+    if (granularity !== 'week') return MONTH_NAMES[b - 1];
+    const monday = isoWeekToMonday(currentYear, b);
+    return fmtDateRangeLong(monday, addDaysISO(monday, 6));
+  };
   return buckets.map(b => ({
     bucket: b,
-    label: granularity === 'week' ? `Week ${b}` : MONTH_NAMES[b - 1],
+    label: labelFor(b),
     current: curMap.has(b) ? weeklyMetricValue(curMap.get(b), metricKey) : null,
     previous: prevMap.has(b) ? weeklyMetricValue(prevMap.get(b), metricKey) : null,
   }));
@@ -2410,7 +2444,7 @@ export default function App() {
       loadDataByPrefix('daily_history_'), loadDataByPrefix('weekly_history_'),
       loadData('daily_history'), loadData('weekly_history'), // legacy single-row format, if anything was saved before chunking
     ]).then(([reportRes, rosterRes, goalsRes, reviewsRes, reviewNotesRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
-      if (reportRes.data) setReport(reportRes.data); else { setTab('Setup'); setSetupSection('upload'); }
+      if (reportRes.data) setReport(ensureReportCph(reportRes.data)); else { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
       if (reviewsRes.data) setReviews(reviewsRes.data);
