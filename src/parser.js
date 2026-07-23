@@ -77,6 +77,7 @@ function rollup(employees) {
     tsth: totalHours > 0 ? totalSales / totalHours : null,
     cpc: totalHaircuts > 0 ? totalColor / totalHaircuts : null,
     rpc: totalHaircuts > 0 ? totalRetail / totalHaircuts : null,
+    cph: totalHours > 0 ? totalHaircuts / totalHours : null,
   };
 }
 
@@ -152,6 +153,8 @@ export async function parseStylistReport(file) {
     if (!current) continue; // stray row before any store header
     if (!first && !last) continue; // blank/summary row (e.g. the file's own Grand Total)
 
+    const empHaircuts = numOf(row[col.haircuts]);
+    const empHours = numOf(row[col.totalHours]);
     current.employees.push({
       name: `${first} ${last}`.trim(),
       sales: numOf(row[col.sales]),
@@ -160,8 +163,11 @@ export async function parseStylistReport(file) {
       cpc: numOf(row[col.cpc]),
       rpc: numOf(row[col.rpc]),
       tsth: numOf(row[col.tsth]),
-      haircuts: numOf(row[col.haircuts]),
-      totalHours: numOf(row[col.totalHours]),
+      haircuts: empHaircuts,
+      totalHours: empHours,
+      // No CPH column in the source export — unlike CPC/RPC/TSTH, this one's
+      // ours to compute, so it only appears when both figures are actually present.
+      cph: empHours > 0 ? empHaircuts / empHours : null,
       prodHours: numOf(row[col.prodHours]),
       nonProdHours: numOf(row[col.nonProdHours]),
       daysWorked: numOf(row[col.daysWorked]),

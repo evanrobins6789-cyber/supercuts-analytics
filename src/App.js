@@ -14,6 +14,32 @@ const fmtInt = n => Number(n || 0).toLocaleString('en-US');
 const fmtRate = n => (n == null || isNaN(n) ? '—' : `$${n.toFixed(2)}`);
 const fmtNum = (n, d = 2) => (n == null || isNaN(n) ? '—' : Number(n).toFixed(d));
 
+// ─── Date display — named months everywhere, instead of raw ISO numbers ────
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+// "2026-05-14..." -> "May 14, 2026"
+function fmtDateLong(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  return `${MONTH_NAMES[m - 1]} ${d}, ${y}`;
+}
+// "2026-05" -> "May 2026"
+function fmtMonthLong(monthKey) {
+  if (!monthKey) return '';
+  const [y, m] = monthKey.split('-').map(Number);
+  if (!y || !m) return monthKey;
+  return `${MONTH_NAMES[m - 1]} ${y}`;
+}
+// "2026-05-01" + "2026-05-07" -> "May 1 – May 7, 2026" (or across months/years, spells both out)
+function fmtDateRangeLong(startISO, endISO) {
+  if (!startISO || !endISO) return '';
+  const [sy, sm, sd] = startISO.slice(0, 10).split('-').map(Number);
+  const [ey, em, ed] = endISO.slice(0, 10).split('-').map(Number);
+  if (!sy || !ey) return `${startISO} – ${endISO}`;
+  const startPart = sy === ey ? `${MONTH_NAMES[sm - 1]} ${sd}` : `${MONTH_NAMES[sm - 1]} ${sd}, ${sy}`;
+  return `${startPart} – ${MONTH_NAMES[em - 1]} ${ed}, ${ey}`;
+}
+
 // Store-level metrics shown on Overview / Stores.
 const STORE_METRICS = [
   { key: 'sales', label: 'Net Sales', fmt: fmt$ },
@@ -24,6 +50,7 @@ const STORE_METRICS = [
   { key: 'retail', label: 'Retail', fmt: fmt$ },
   { key: 'rpc', label: 'RPC', fmt: fmtNum },
   { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
+  { key: 'cph', label: 'CPH', fmt: n => fmtNum(n, 2) },
 ];
 
 // Employee-level metrics shown on Employees and within each Stores card.
@@ -36,6 +63,7 @@ const EMPLOYEE_METRICS = [
   { key: 'rpc', label: 'RPC', fmt: fmtNum },
   { key: 'tsth', label: 'TSTH', fmt: fmtRate },
   { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
+  { key: 'cph', label: 'CPH', fmt: n => fmtNum(n, 2) },
 ];
 
 function sortByMetric(rows, key, order = 'desc') {
@@ -70,6 +98,7 @@ function rollupRows(rows) {
     tsth: totalHours > 0 ? totalSales / totalHours : null,
     cpc: totalHaircuts > 0 ? totalColor / totalHaircuts : null,
     rpc: totalHaircuts > 0 ? totalRetail / totalHaircuts : null,
+    cph: totalHours > 0 ? totalHaircuts / totalHours : null,
   };
 }
 
@@ -149,6 +178,7 @@ function finalizeEmployee(e) {
     tsth: e.totalHours > 0 ? e.sales / e.totalHours : null,
     cpc: e.haircuts > 0 ? e.colorSales / e.haircuts : null,
     rpc: e.haircuts > 0 ? e.retail / e.haircuts : null,
+    cph: e.totalHours > 0 ? e.haircuts / e.totalHours : null,
   };
 }
 function getRangeTotals(history, weeklyHistory, startISO, endISO) {
@@ -210,6 +240,7 @@ function historyTotalsToReportShape(t) {
     tsth: hours > 0 ? service / hours : null,
     cpc: haircuts > 0 ? (t.color || 0) / haircuts : null,
     rpc: haircuts > 0 ? (t.retail || 0) / haircuts : null,
+    cph: hours > 0 ? haircuts / hours : null,
     employees: t?.employees || [],
   };
 }
@@ -444,6 +475,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
                   <div className="dl-stat"><span className="dl-stat-label">Retail</span><span className="dl-stat-value">{fmt$(s.retail)}</span></div>
                   {s.rpc != null && <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(s.rpc)}</span></div>}
                   <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(s.haircuts)}</span></div>
+                  {s.cph != null && <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(s.cph)}</span></div>}
                 </div>
               </button>
               {isOpen && hasEmployeeData && (
@@ -451,7 +483,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
                   <EmployeeTable
                     rows={sortByMetric(s.employees, 'sales', 'desc')}
                     showStoreCol={false}
-                    footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts }}
+                    footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph }}
                     footerLabel="Store total / weighted avg"
                   />
                 </div>
@@ -736,7 +768,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                                     <EmployeeTable
                                       rows={sortByMetric(s.employees, 'sales', 'desc')}
                                       showStoreCol={false}
-                                      footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts }}
+                                      footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph }}
                                       footerLabel="Store total / weighted avg"
                                     />
                                   </td>
@@ -809,7 +841,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                           <EmployeeTable
                             rows={sortByMetric(s.employees, 'sales', 'desc')}
                             showStoreCol={false}
-                            footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts }}
+                            footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph }}
                             footerLabel="Store total / weighted avg"
                           />
                         </td>
@@ -930,6 +962,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                       <div className="dl-stat"><span className="dl-stat-label">Retail</span><span className="dl-stat-value">{fmt$(t.retail)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(t.rpc)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(t.haircuts)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(t.cph)}</span></div>
                     </div>
                   </button>
                   {isOpen && (
@@ -943,6 +976,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                             <th>Retail</th>
                             <th>RPC</th>
                             <th>Cuts</th>
+                            <th>CPH</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -963,14 +997,15 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                                   <td>{fmt$(s.retail)}</td>
                                   <td>{fmtNum(s.rpc)}</td>
                                   <td>{fmtInt(s.haircuts)}</td>
+                                  <td>{fmtNum(s.cph)}</td>
                                 </tr>
                                 {isStoreOpen && hasEmployeeData && (
                                   <tr className="store-expand-row">
-                                    <td colSpan={9}>
+                                    <td colSpan={10}>
                                       <EmployeeTable
                                         rows={sortByMetric(s.employees, 'sales', 'desc')}
                                         showStoreCol={false}
-                                        footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts }}
+                                        footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph }}
                                         footerLabel="Store total / weighted avg"
                                       />
                                     </td>
@@ -1101,7 +1136,7 @@ function NewHireTab({ report, employeeRoster, query, onQuery }) {
             {sorted.map((r, i) => (
               <tr key={`${r.name}-${i}`}>
                 <td className="ledger-name-col">{r.name}</td>
-                <td>{new Date(r.startDate).toLocaleDateString('en-US')}</td>
+                <td>{fmtDateLong(r.startDate)}</td>
                 <td>{r.daysAgo}</td>
                 <td className="ledger-store-col">{r.store || '—'}</td>
                 <td className="ledger-store-col">{r.dl || '—'}</td>
@@ -1340,7 +1375,7 @@ function ReviewCard({ review, employeeMatch, notes, onAddNote }) {
       <div className="review-card-head">
         <StarRating value={review.rating} />
         <span className="review-user">{review.userName || 'Anonymous'}</span>
-        <span className="review-date">{review.postedAt ? review.postedAt.slice(0, 10) : ''}</span>
+        <span className="review-date">{review.postedAt ? fmtDateLong(review.postedAt) : ''}</span>
       </div>
       {review.message && <p className="review-message">{review.message}</p>}
       {employeeMatch && <p className="review-employee-tag">👤 Mentions: {employeeMatch}</p>}
@@ -1357,6 +1392,7 @@ const REVIEW_SORT_OPTIONS = [
   { key: 'reviews', label: 'Total Reviews' },
   { key: 'negative', label: 'Most Negative' },
   { key: 'positive', label: 'Most Positive' },
+  { key: 'noNotes', label: 'No Notes' },
 ];
 
 function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewNote }) {
@@ -1414,11 +1450,12 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
           ...s, avg,
           negCount: s.reviews.filter(isNegativeReview).length,
           posCount: s.reviews.filter(isPositiveReview).length,
+          noNotesCount: s.reviews.filter(r => !(reviewNotes?.[reviewKey(r)]?.length)).length,
           matchCount: matching ? matching.length : null,
         };
       })
       .filter(s => !matcher || s.matchCount > 0);
-  }, [storeMap, category, sentiment]);
+  }, [storeMap, category, sentiment, reviewNotes]);
 
   const filteredStores = useMemo(() => {
     if (!query.trim()) return storeRows;
@@ -1430,6 +1467,7 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
     const a2 = [...arr];
     if (sortBy === 'negative') a2.sort((a, b) => b.negCount - a.negCount);
     else if (sortBy === 'positive') a2.sort((a, b) => b.posCount - a.posCount);
+    else if (sortBy === 'noNotes') a2.sort((a, b) => b.noNotesCount - a.noNotesCount);
     else a2.sort((a, b) => b.reviews.length - a.reviews.length);
     return a2;
   };
@@ -1445,6 +1483,7 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
         avg: totalReviews ? totalRating / totalReviews : 0,
         neg: g.stores.reduce((s, st) => s + st.negCount, 0),
         pos: g.stores.reduce((s, st) => s + st.posCount, 0),
+        noNotes: g.stores.reduce((s, st) => s + st.noNotesCount, 0),
       };
     });
   }, [filteredStores, viewMode]);
@@ -1454,6 +1493,7 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
     const g2 = [...groups];
     if (sortBy === 'negative') g2.sort((a, b) => b.neg - a.neg);
     else if (sortBy === 'positive') g2.sort((a, b) => b.pos - a.pos);
+    else if (sortBy === 'noNotes') g2.sort((a, b) => b.noNotes - a.noNotes);
     else g2.sort((a, b) => b.totalReviews - a.totalReviews);
     return g2;
   }, [groups, sortBy]);
@@ -1497,6 +1537,7 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
             <div className="dl-stat"><span className="dl-stat-label">Avg Rating</span><span className={`dl-stat-value ${ratingClass(s.avg)}`}>{s.avg.toFixed(2)}★</span></div>
             <div className="dl-stat"><span className="dl-stat-label">Negative (1–3★)</span><span className="dl-stat-value">{s.negCount}</span></div>
             <div className="dl-stat"><span className="dl-stat-label">Positive (4–5★)</span><span className="dl-stat-value">{s.posCount}</span></div>
+            <div className="dl-stat"><span className="dl-stat-label">No Notes</span><span className="dl-stat-value">{s.noNotesCount}</span></div>
             {category && <div className="dl-stat"><span className="dl-stat-label">{activeCat.label}</span><span className="dl-stat-value">{s.matchCount}</span></div>}
           </div>
         </button>
@@ -1523,13 +1564,14 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
             <div className="dl-stat"><span className="dl-stat-label">Avg Rating</span><span className={`dl-stat-value ${ratingClass(g.avg)}`}>{g.avg.toFixed(2)}★</span></div>
             <div className="dl-stat"><span className="dl-stat-label">Negative (1–3★)</span><span className="dl-stat-value">{g.neg}</span></div>
             <div className="dl-stat"><span className="dl-stat-label">Positive (4–5★)</span><span className="dl-stat-value">{g.pos}</span></div>
+            <div className="dl-stat"><span className="dl-stat-label">No Notes</span><span className="dl-stat-value">{g.noNotes}</span></div>
           </div>
         </button>
         {isOpen && (
           <div className="ledger-scroll dl-store-table">
             <table className="ledger-table">
               <thead>
-                <tr><th className="ledger-name-col">Store</th><th>Reviews</th><th>Negative</th><th>Positive</th><th>Avg Rating</th></tr>
+                <tr><th className="ledger-name-col">Store</th><th>Reviews</th><th>Negative</th><th>Positive</th><th>No Notes</th><th>Avg Rating</th></tr>
               </thead>
               <tbody>
                 {sortedStores.map(s => {
@@ -1544,11 +1586,12 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
                         <td>{s.reviews.length}</td>
                         <td>{s.negCount}</td>
                         <td>{s.posCount}</td>
+                        <td>{s.noNotesCount}</td>
                         <td className={ratingClass(s.avg)}>{s.avg.toFixed(2)}★</td>
                       </tr>
                       {isStoreOpen && (
                         <tr className="store-expand-row">
-                          <td colSpan={5}>{renderReviewList(s)}</td>
+                          <td colSpan={6}>{renderReviewList(s)}</td>
                         </tr>
                       )}
                     </React.Fragment>
@@ -1742,7 +1785,7 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
         <div className="summary-grid">
           <div className="summary-tile"><p className="summary-tile-label">Days of History</p><p className="summary-tile-value">{summary.dayCount}</p></div>
           <div className="summary-tile"><p className="summary-tile-label">Stores Covered</p><p className="summary-tile-value">{summary.storeCount}</p></div>
-          <div className="summary-tile"><p className="summary-tile-label">Date Range</p><p className="summary-tile-value" style={{ fontSize: 15 }}>{summary.firstDate} → {summary.lastDate}</p></div>
+          <div className="summary-tile"><p className="summary-tile-label">Date Range</p><p className="summary-tile-value" style={{ fontSize: 15 }}>{fmtDateLong(summary.firstDate)} → {fmtDateLong(summary.lastDate)}</p></div>
           <div className="summary-tile"><p className="summary-tile-label">Total Hours</p><p className="summary-tile-value">{fmtNum(summary.totalHours, 0)}</p></div>
           <div className="summary-tile"><p className="summary-tile-label">Total Service Sales</p><p className="summary-tile-value">{fmt$(summary.totalService)}</p></div>
           <div className="summary-tile"><p className="summary-tile-label">Total Retail</p><p className="summary-tile-value">{fmt$(summary.totalRetail)}</p></div>
@@ -1778,7 +1821,7 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
               <tbody>
                 {monthCoverage.map(m => (
                   <tr key={m.month}>
-                    <td className="ledger-name-col">{m.month}</td>
+                    <td className="ledger-name-col">{fmtMonthLong(m.month)}</td>
                     <td>{m.present}</td>
                     <td>{m.expected}</td>
                     <td className={m.missing > 0 ? 'ledger-margin-neg' : ''}>{m.missing}</td>
@@ -1910,9 +1953,72 @@ function periodTotals(stores) {
   return t;
 }
 
+// ISO week number + ISO week-year (Monday-start weeks, matching isoWeekStart
+// above), so "week 12" of one year lines up with "week 12" of another for a
+// fair side-by-side comparison instead of drifting with where Jan 1 falls.
+function isoWeekInfo(dateISO) {
+  const d = new Date(dateISO + 'T00:00:00');
+  const day = (d.getDay() + 6) % 7; // Mon=0..Sun=6
+  d.setDate(d.getDate() - day + 3); // Thursday of this week
+  const isoYear = d.getFullYear();
+  const yearStart = new Date(isoYear, 0, 1);
+  const week = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return { isoYear, week };
+}
+
+const WEEKLY_METRICS = [
+  { key: 'service', label: 'Service Sales', fmt: fmt$ },
+  { key: 'color', label: 'Color Sales', fmt: fmt$ },
+  { key: 'retail', label: 'Retail', fmt: fmt$ },
+  { key: 'giftCards', label: 'Gift Cards', fmt: fmt$ },
+  { key: 'hours', label: 'Total Hours', fmt: n => fmtNum(n, 0) },
+  { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
+  { key: 'cph', label: 'CPH (Cuts per Hour)', fmt: n => fmtNum(n, 2) },
+];
+function weeklyMetricValue(t, key) {
+  if (key === 'cph') return t.hours > 0 ? t.haircuts / t.hours : null;
+  return t[key];
+}
+
+// One row per week-of-year (1–53) or month-of-year (1–12), with the current
+// and previous calendar year's totals for the chosen metric side by side —
+// only rows where at least one of the two years has data are included, and
+// multiple periods landing in the same bucket (e.g. a week split between an
+// uploaded partial week and a backfilled remainder) are summed together.
+function buildYoYRows(periods, granularity, metricKey, currentYear, previousYear) {
+  const byYear = new Map();
+  periods.forEach(p => {
+    let year, bucket;
+    if (granularity === 'week') {
+      const info = isoWeekInfo(p.startDate);
+      year = info.isoYear; bucket = info.week;
+    } else {
+      year = Number(p.month.slice(0, 4));
+      bucket = Number(p.month.slice(5, 7));
+    }
+    if (year !== currentYear && year !== previousYear) return;
+    if (!byYear.has(year)) byYear.set(year, new Map());
+    const yearMap = byYear.get(year);
+    const existing = yearMap.get(bucket) || { ...EMPTY_TOTALS };
+    addInto(existing, periodTotals(p.stores));
+    yearMap.set(bucket, existing);
+  });
+
+  const curMap = byYear.get(currentYear) || new Map();
+  const prevMap = byYear.get(previousYear) || new Map();
+  const buckets = Array.from(new Set([...curMap.keys(), ...prevMap.keys()])).sort((a, b) => a - b);
+  return buckets.map(b => ({
+    bucket: b,
+    label: granularity === 'week' ? `Week ${b}` : MONTH_NAMES[b - 1],
+    current: curMap.has(b) ? weeklyMetricValue(curMap.get(b), metricKey) : null,
+    previous: prevMap.has(b) ? weeklyMetricValue(prevMap.get(b), metricKey) : null,
+  }));
+}
+
 function WeeklyTab({ dailyHistory, weeklyHistory }) {
   const [granularity, setGranularity] = useState('week'); // 'week' | 'month'
   const [grouping, setGrouping] = useState('total'); // 'total' | 'dl'
+  const [metric, setMetric] = useState('service');
   const [expandedLeader, setExpandedLeader] = useState({});
 
   const weeks = useMemo(() => buildWeeklySnapshots(dailyHistory, weeklyHistory), [dailyHistory, weeklyHistory]);
@@ -1924,9 +2030,11 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
   }
 
   const toggleLeader = name => setExpandedLeader(prev => ({ ...prev, [name]: !prev[name] }));
-  const labelFor = p => (granularity === 'week' ? `${p.startDate} → ${p.endDate}` : p.month);
+  const currentYear = new Date().getFullYear();
+  const previousYear = currentYear - 1;
+  const activeMetric = WEEKLY_METRICS.find(m => m.key === metric);
 
-  // For "By DL": every store that appears in ANY period, grouped by leader once — then each period's totals are looked up per leader.
+  // For "By DL": every store that appears in ANY period, grouped by leader once.
   const dlGroups = useMemo(() => {
     if (grouping !== 'dl') return [];
     const allCodes = new Set();
@@ -1936,11 +2044,44 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
     return groups.map(g => ({ leaderName: g.leaderName, role: g.role, codes: g.stores.map(s => s.code) }));
   }, [periods, grouping]);
 
+  const totalRows = useMemo(
+    () => buildYoYRows(periods, granularity, metric, currentYear, previousYear),
+    [periods, granularity, metric, currentYear, previousYear]
+  );
+
+  const renderYoYTable = rows => (
+    <div className="ledger-scroll">
+      <table className="ledger-table">
+        <thead>
+          <tr>
+            <th className="ledger-name-col">{granularity === 'week' ? 'Week' : 'Month'}</th>
+            <th>{currentYear}</th>
+            <th>{previousYear}</th>
+            <th>Change</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => {
+            const diff = (r.current != null && r.previous != null) ? r.current - r.previous : null;
+            return (
+              <tr key={r.bucket}>
+                <td className="ledger-name-col">{r.label}</td>
+                <td>{r.current != null ? activeMetric.fmt(r.current) : '—'}</td>
+                <td>{r.previous != null ? activeMetric.fmt(r.previous) : '—'}</td>
+                <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${activeMetric.fmt(diff)}` : '—'}</td>
+              </tr>
+            );
+          })}
+          {!rows.length && <tr><td colSpan={4} className="empty-note" style={{ textAlign: 'center', padding: 16 }}>No {currentYear}/{previousYear} data yet for this view.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
+
   return (
     <div className="tab-content">
       <p className="section-hint">
-        Permanent snapshot fed by your weekly Stylist Report uploads (going forward) and the historical import (backfill).
-        Re-uploading the same week is always safe — it just replaces that one week's numbers, it never adds on top.
+        Year-over-year comparison — {currentYear} on the left, {previousYear} on the right, aligned by {granularity === 'week' ? 'week of the year' : 'calendar month'}.
       </p>
       <div className="ledger-head-row">
         <div className="view-toggle">
@@ -1951,35 +2092,25 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
           <button className={`view-toggle-btn ${grouping === 'total' ? 'active' : ''}`} onClick={() => setGrouping('total')}>Company Total</button>
           <button className={`view-toggle-btn ${grouping === 'dl' ? 'active' : ''}`} onClick={() => setGrouping('dl')}>By DL</button>
         </div>
+        <select className="sort-select" value={metric} onChange={e => setMetric(e.target.value)}>
+          {WEEKLY_METRICS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
+        </select>
       </div>
 
-      {grouping === 'total' && (
-        <div className="ledger-scroll">
-          <table className="ledger-table">
-            <thead><tr><th className="ledger-name-col">{granularity === 'week' ? 'Week' : 'Month'}</th><th>Service Sales</th><th>Color</th><th>Retail</th><th>Gift Cards</th><th>Cuts</th></tr></thead>
-            <tbody>
-              {[...periods].reverse().map(p => {
-                const t = periodTotals(p.stores);
-                return (
-                  <tr key={granularity === 'week' ? p.startDate : p.month}>
-                    <td className="ledger-name-col">{labelFor(p)}{p.source === 'daily' && granularity === 'week' && <span className="store-unmatched-flag"> (backfilled)</span>}</td>
-                    <td>{fmt$(t.service)}</td>
-                    <td>{fmt$(t.color)}</td>
-                    <td>{fmt$(t.retail)}</td>
-                    <td>{t.giftCards > 0 ? fmt$(t.giftCards) : '—'}</td>
-                    <td>{fmtInt(t.haircuts)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {grouping === 'total' && renderYoYTable(totalRows)}
 
       {grouping === 'dl' && (
         <div className="dl-list">
           {dlGroups.map(g => {
             const isOpen = !!expandedLeader[g.leaderName];
+            const rows = isOpen ? buildYoYRows(
+              periods.map(p => {
+                const subset = {};
+                g.codes.forEach(c => { if (p.stores[c]) subset[c] = p.stores[c]; });
+                return { ...p, stores: subset };
+              }),
+              granularity, metric, currentYear, previousYear
+            ) : [];
             return (
               <div key={g.leaderName} className="dl-card">
                 <button className="dl-card-head" onClick={() => toggleLeader(g.leaderName)}>
@@ -1989,30 +2120,7 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
                     <span className="dl-card-count">{g.role} · {g.codes.length} store{g.codes.length !== 1 ? 's' : ''}</span>
                   </div>
                 </button>
-                {isOpen && (
-                  <div className="ledger-scroll dl-store-table">
-                    <table className="ledger-table">
-                      <thead><tr><th className="ledger-name-col">{granularity === 'week' ? 'Week' : 'Month'}</th><th>Service Sales</th><th>Color</th><th>Retail</th><th>Gift Cards</th><th>Cuts</th></tr></thead>
-                      <tbody>
-                        {[...periods].reverse().map(p => {
-                          const subset = {};
-                          g.codes.forEach(c => { if (p.stores[c]) subset[c] = p.stores[c]; });
-                          const t = periodTotals(subset);
-                          return (
-                            <tr key={granularity === 'week' ? p.startDate : p.month}>
-                              <td className="ledger-name-col">{labelFor(p)}</td>
-                              <td>{fmt$(t.service)}</td>
-                              <td>{fmt$(t.color)}</td>
-                              <td>{fmt$(t.retail)}</td>
-                              <td>{t.giftCards > 0 ? fmt$(t.giftCards) : '—'}</td>
-                              <td>{fmtInt(t.haircuts)}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                {isOpen && <div className="dl-store-table">{renderYoYTable(rows)}</div>}
               </div>
             );
           })}
@@ -2217,8 +2325,8 @@ function SetupTab({ configured, section, onSection, goalsProps, historyProps, up
   ];
   return (
     <div className="tab-content setup-tab">
-      <div className="setup-status setup-status--warn">
-        If your name doesn't start with Evan and end in Robins, you're not supposed to be here.
+      <div className="setup-access-banner">
+        🚫 If your name doesn't start with Evan and end in Robins, you're not supposed to be here.
       </div>
       <div className={`setup-status ${configured ? 'setup-status--ok' : 'setup-status--warn'}`}>
         {configured
@@ -2366,7 +2474,7 @@ export default function App() {
     try {
       const parsed = await parseStylistReport(file);
       setReport(parsed);
-      setLabel(parsed.dateRangeLabel || '');
+      setLabel(parsed.startDateISO && parsed.endDateISO ? fmtDateRangeLong(parsed.startDateISO, parsed.endDateISO) : (parsed.dateRangeLabel || ''));
       const result = await saveData('stylist_report', parsed);
 
       // Also feed this week into the permanent weekly history. Keyed by the
