@@ -1323,7 +1323,7 @@ function ReviewNotes({ notes, onAdd }) {
       )}
       <div className="review-notes-input-row">
         <input
-          className="review-notes-input" value={draft} placeholder="Add a note (e.g. \"Called 7/22 - resolved - EJ\")…"
+          className="review-notes-input" value={draft} placeholder='Add a note (e.g. "Called 7/22 - resolved - EJ")…'
           onChange={e => setDraft(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') submit(); }}
         />
