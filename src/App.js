@@ -2176,13 +2176,14 @@ function monthRange(monthKey) {
   const end = `${monthKey}-${String(lastDay).padStart(2, '0')}`;
   return { start, end };
 }
-// Compact "who sold the most X" lookup: top 5 names by Sales/Retail/Color,
-// one line per month, built from the same per-employee data the date-range
-// tabs use (getRangeTotals + mergeEmployeesInto/finalizeEmployee) — without
-// this, Tilly has zero visibility into any employee, historical or current.
-function topEmployeeLine(employees) {
+// Compact "who sold the most X" lookup: top N names by Sales/Retail/Color,
+// one line per month (or per store per month), built from the same
+// per-employee data the date-range tabs use (getRangeTotals +
+// mergeEmployeesInto/finalizeEmployee) — without this, Tilly has zero
+// visibility into any employee, historical or current.
+function topEmployeeLine(employees, n = 5) {
   if (!employees.length) return null;
-  const topBy = key => [...employees].sort((a, b) => (b[key] || 0) - (a[key] || 0)).slice(0, 5)
+  const topBy = key => [...employees].sort((a, b) => (b[key] || 0) - (a[key] || 0)).slice(0, n)
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
@@ -2273,13 +2274,31 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
     });
 
     lines.push('');
-    lines.push('TOP EMPLOYEES BY MONTH (top 5 each for Sales, Retail, Color Sales — covers every store, from weekly uploads and Sales-Accrual/Attendance historical imports; a name/month missing here means no per-employee data exists for that period):');
+    lines.push('TOP EMPLOYEES BY MONTH, COMPANY-WIDE (top 5 each for Sales, Retail, Color Sales — quick reference only; a name/month missing here means no per-employee data exists for that period):');
     months.forEach(m => {
       const totals = monthlyTotals.get(m.month);
       const companyEmployees = {};
       Object.values(totals).forEach(t => { if (t.employees?.length) mergeEmployeesInto(companyEmployees, t.employees); });
       const line = topEmployeeLine(Object.values(companyEmployees).map(finalizeEmployee));
       if (line) lines.push(`${m.month} — ${line}`);
+    });
+
+    // Per-store, not just company-wide — needed for anything scoped to a
+    // specific leader's stores ("who sold the most retail in Amber's
+    // stores in November"): resolve the leader's stores from the DL roster
+    // above, then compare just those stores' lines for that month.
+    lines.push('');
+    lines.push('TOP EMPLOYEES BY MONTH BY STORE (top 3 each for Sales, Retail, Color Sales, per store — cross-reference against the DL/Area Supervisor groupings above to scope to a specific leader):');
+    months.forEach(m => {
+      const totals = monthlyTotals.get(m.month);
+      const storeLines = [];
+      Object.entries(totals).forEach(([code, t]) => {
+        if (!t.employees?.length) return;
+        const name = STORE_CODE_TO_NAME[code] || `Store ${code}`;
+        const line = topEmployeeLine(t.employees, 3);
+        if (line) storeLines.push(`  ${name} — ${line}`);
+      });
+      if (storeLines.length) { lines.push(`${m.month}:`); storeLines.forEach(l => lines.push(l)); }
     });
   }
 
