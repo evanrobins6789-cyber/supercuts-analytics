@@ -1192,15 +1192,18 @@ function NewsPostModal({ post, onClose }) {
 // `newsGroups` list — tapping any tile opens the full post in NewsPostModal.
 // `openNews` (an object, so a fresh reference on every click re-triggers the
 // effect even for the same id) comes from a Homepage card tap and opens that
-// post's modal directly.
-function NewsTab({ news, newsGroups, openNews }) {
+// post's modal directly — immediately consumed via `onConsumeOpenNews` so
+// leaving and returning to this tab (which remounts it) doesn't see a
+// still-set `openNews` and reopen the same post uninvited.
+function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews }) {
   const [selectedPost, setSelectedPost] = useState(null);
 
   useEffect(() => {
     if (!openNews?.id) return;
     const post = news.find(n => n.id === openNews.id);
     if (post) setSelectedPost(post);
-  }, [openNews, news]);
+    onConsumeOpenNews();
+  }, [openNews, news, onConsumeOpenNews]);
 
   // Ungrouped posts (or posts whose group was since deleted from the
   // manager) form a header-less bucket shown first; named groups follow in
@@ -4340,6 +4343,11 @@ export default function App() {
     setOpenNews({ id });
   }, []);
 
+  // Consumed by NewsTab right after it opens the deep-linked post, so
+  // leaving and coming back to the News tab (which remounts it) doesn't see
+  // a still-set `openNews` and reopen the same post uninvited.
+  const handleConsumeOpenNews = useCallback(() => setOpenNews(null), []);
+
   // Auto-registers a group the first time a post uses it — a group typed
   // into the composer's free-text field becomes manageable (rename/reorder/
   // recolor) without a separate "create group" step.
@@ -4737,7 +4745,7 @@ export default function App() {
           <HomepageTab report={report} news={news} events={events} reviews={reviews} onOpenNews={handleOpenNews} />
         )}
         {tab === 'News' && (
-          <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} />
+          <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} />
         )}
         {!needsReport && tab === 'Overview' && report && (
           <OverviewTab report={report} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} />
