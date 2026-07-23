@@ -1418,9 +1418,12 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
   const [expandedStore, setExpandedStore] = useState({});
   const [expandedLeader, setExpandedLeader] = useState({});
   const [sortBy, setSortBy] = useState('reviews');
+  const [mentionedOnly, setMentionedOnly] = useState(false);
 
   const selectCategory = key => { setCategory(prev => prev === key ? null : key); setSentiment(null); };
   const selectSentiment = key => { setSentiment(prev => prev === key ? null : key); setCategory(null); };
+  const employeesForCode = code => report?.stores.find(st => st.code === code)?.employees || null;
+  const reviewHasMention = r => !!detectEmployeeMention(r.message, employeesForCode(r.code));
 
   if (!reviews) {
     return <div className="empty-state"><p className="empty-title">No reviews uploaded yet</p><p>Go to the Setup tab's Upload section and add the reviews export.</p></div>;
@@ -1453,10 +1456,13 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
   }, [negative]);
 
   const storeRows = useMemo(() => {
-    const matcher = category
+    const sentimentMatcher = category
       ? r => isNegativeReview(r) && reviewMatchesCategory(r.message, category)
       : sentiment === 'pos' ? isPositiveReview
       : sentiment === 'neg' ? isNegativeReview
+      : null;
+    const matcher = (sentimentMatcher || mentionedOnly)
+      ? r => (!sentimentMatcher || sentimentMatcher(r)) && (!mentionedOnly || reviewHasMention(r))
       : null;
     return Array.from(storeMap.values())
       .map(s => {
@@ -1471,7 +1477,7 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
         };
       })
       .filter(s => !matcher || s.matchCount > 0);
-  }, [storeMap, category, sentiment, reviewNotes]);
+  }, [storeMap, category, sentiment, mentionedOnly, reviewNotes, report]);
 
   const filteredStores = useMemo(() => {
     if (!query.trim()) return storeRows;
@@ -1524,6 +1530,7 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
     if (category) reviewList = reviewList.filter(r => isNegativeReview(r) && reviewMatchesCategory(r.message, category));
     else if (sentiment === 'pos') reviewList = reviewList.filter(isPositiveReview);
     else if (sentiment === 'neg') reviewList = reviewList.filter(isNegativeReview);
+    if (mentionedOnly) reviewList = reviewList.filter(r => !!detectEmployeeMention(r.message, employeesForStore));
     return (
       <div className="dl-store-table review-list">
         {reviewList.map((r, i) => (
@@ -1646,6 +1653,12 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
       </div>
       {category && <button className="btn-ghost btn-clear-filter" onClick={() => setCategory(null)}>Clear "{activeCat.label}" filter</button>}
 
+      <div className="view-toggle" style={{ alignSelf: 'flex-start' }}>
+        <button className={`view-toggle-btn ${mentionedOnly ? 'active' : ''}`} onClick={() => setMentionedOnly(v => !v)}>
+          {mentionedOnly ? '✓ ' : ''}Only reviews mentioning an employee by name
+        </button>
+      </div>
+
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores…" />
       <div className="ledger-head-row">
         <div className="view-toggle">
@@ -1743,18 +1756,32 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
   const [processingAttendance, setProcessingAttendance] = useState(false);
   const [log, setLog] = useState([]);
 
+  // try/catch here is defense-in-depth: onImportSalesBatch/onImportAttendanceBatch
+  // already catch their own errors, but if anything unexpected still throws,
+  // this guarantees the spinner clears and something is shown instead of the
+  // UI silently hanging with no feedback at all.
   const handleSalesFiles = async fileList => {
     setProcessingSales(true);
-    const lines = await onImportSalesBatch(fileList);
-    setLog(prev => [...lines, ...prev]);
-    setProcessingSales(false);
+    try {
+      const lines = await onImportSalesBatch(fileList);
+      setLog(prev => [...lines, ...prev]);
+    } catch (err) {
+      setLog(prev => [`✗ Unexpected error: ${err.message}`, ...prev]);
+    } finally {
+      setProcessingSales(false);
+    }
   };
 
   const handleAttendanceFiles = async fileList => {
     setProcessingAttendance(true);
-    const lines = await onImportAttendanceBatch(fileList);
-    setLog(prev => [...lines, ...prev]);
-    setProcessingAttendance(false);
+    try {
+      const lines = await onImportAttendanceBatch(fileList);
+      setLog(prev => [...lines, ...prev]);
+    } catch (err) {
+      setLog(prev => [`✗ Unexpected error: ${err.message}`, ...prev]);
+    } finally {
+      setProcessingAttendance(false);
+    }
   };
 
   const summary = historySummary(history);
@@ -2651,8 +2678,14 @@ export default function App() {
       if (isConfigured() && (recoveredDaily.length || recoveredWeekly.length)) {
         Promise.all([
           ...recoveredDaily.map(key => {
+            // Key is either `daily_history_YYYY-MM` (whole month) or
+            // `daily_history_YYYY-MM__STORECODE` (a month split by store
+            // because it was too large for one request) — match accordingly.
+            const [month, code] = key.replace('daily_history_', '').split('__');
             const chunk = {};
-            Object.entries(mergedDaily).forEach(([k, rec]) => { if (`daily_history_${rec.date.slice(0, 7)}` === key) chunk[k] = rec; });
+            Object.entries(mergedDaily).forEach(([k, rec]) => {
+              if (rec.date.slice(0, 7) === month && (!code || rec.code === code)) chunk[k] = rec;
+            });
             return saveData(key, chunk);
           }),
           ...recoveredWeekly.map(key => {
@@ -2829,6 +2862,15 @@ export default function App() {
     }
   }, [goals]);
 
+  // A month's chunk for a large franchise (many stores, each with a full
+  // per-employee sales/color/retail/haircuts breakdown) can be big enough
+  // to risk a Supabase request-size or statement-timeout failure — and if
+  // that failure throws instead of returning a clean {error}, it was being
+  // silently swallowed (nothing caught it), so the import LOOKED successful
+  // while nothing actually persisted. Split any oversized month by store so
+  // no single request risks that, and always catch so a real failure is
+  // never silent again.
+  const HISTORY_CHUNK_SIZE_LIMIT = 350_000; // chars of JSON, conservative
   const saveHistoryMonthChunks = async (working, touchedMonths) => {
     let ok = true;
     let lastError = null;
@@ -2836,8 +2878,27 @@ export default function App() {
     for (const month of touchedMonths) {
       const chunk = {};
       Object.entries(working).forEach(([key, rec]) => { if (rec.date.slice(0, 7) === month) chunk[key] = rec; });
-      const result = await saveData(`daily_history_${month}`, chunk);
-      if (!result.ok) { ok = false; lastError = result.error; failedMonths.push(month); }
+      try {
+        const json = JSON.stringify(chunk);
+        let results;
+        if (json.length <= HISTORY_CHUNK_SIZE_LIMIT) {
+          results = [await saveData(`daily_history_${month}`, chunk)];
+        } else {
+          const byStore = new Map();
+          Object.entries(chunk).forEach(([key, rec]) => {
+            if (!byStore.has(rec.code)) byStore.set(rec.code, {});
+            byStore.get(rec.code)[key] = rec;
+          });
+          results = [];
+          for (const [code, sub] of byStore) {
+            results.push(await saveData(`daily_history_${month}__${code}`, sub));
+          }
+        }
+        const failed = results.filter(r => !r.ok);
+        if (failed.length) { ok = false; lastError = failed[0].error; failedMonths.push(month); }
+      } catch (err) {
+        ok = false; lastError = err.message; failedMonths.push(month);
+      }
     }
     return { ok, error: lastError, failedMonths };
   };
