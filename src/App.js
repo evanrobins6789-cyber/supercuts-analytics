@@ -540,48 +540,199 @@ function TopTenChart({ title, emoji, rows, metricKey, formatter, color }) {
   );
 }
 
-function NewsComposer({ onAdd }) {
+// Reads an uploaded image, downscales it to a reasonable header-banner size,
+// and re-encodes as a JPEG data URL — a phone photo can be several MB, and
+// these get stored inline in the same Supabase jsonb payload as everything
+// else, so an unresized image would bloat every load/save. maxDim 960 / 0.72
+// quality lands most photos in the tens-of-KB range, plenty for a banner.
+function readImageAsDataURL(file, maxDim = 960, quality = 0.72) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const scale = maxDim / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width; canvas.height = height;
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = () => reject(new Error('Could not read this image — try a different file.'));
+      img.src = ev.target.result;
+    };
+    reader.onerror = () => reject(new Error('Failed to read the image file.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function ImageUploadField({ value, onChange, label, onError }) {
+  const [busy, setBusy] = useState(false);
+  const handleFile = async file => {
+    setBusy(true);
+    try {
+      onChange(await readImageAsDataURL(file));
+    } catch (err) {
+      if (onError) onError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="homepage-image-field">
+      <label className="homepage-image-upload">
+        <input type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { if (e.target.files[0]) handleFile(e.target.files[0]); e.target.value = ''; }} />
+        {busy ? <span className="spinner small" /> : (value ? '🖼 Replace image' : `🖼 ${label}`)}
+      </label>
+      {value && (
+        <div className="homepage-image-preview-wrap">
+          <img className="homepage-image-preview" src={value} alt="" />
+          <button type="button" className="homepage-delete-btn" onClick={() => onChange(null)} title="Remove image">✕</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NewsComposer({ onAdd, onImageError }) {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
+  const [image, setImage] = useState(null);
   const submit = e => {
     e.preventDefault();
     if (!title.trim()) return;
-    onAdd(title.trim(), body.trim());
-    setTitle(''); setBody('');
+    onAdd(title.trim(), body.trim(), image);
+    setTitle(''); setBody(''); setImage(null);
   };
   return (
     <form className="homepage-composer" onSubmit={submit}>
       <input className="homepage-input" placeholder="Headline…" value={title} onChange={e => setTitle(e.target.value)} />
       <textarea className="homepage-textarea" placeholder="Details (optional)…" value={body} onChange={e => setBody(e.target.value)} rows={2} />
+      <ImageUploadField value={image} onChange={setImage} onError={onImageError} label="Header image (optional)" />
       <button type="submit" className="btn-primary homepage-post-btn" disabled={!title.trim()}>Post update</button>
     </form>
   );
 }
 
-function EventComposer({ onAdd }) {
+function EventComposer({ onAdd, onImageError }) {
   const [title, setTitle] = useState('');
   const [date, setDate] = useState('');
   const [description, setDescription] = useState('');
+  const [image, setImage] = useState(null);
   const submit = e => {
     e.preventDefault();
     if (!title.trim() || !date) return;
-    onAdd(title.trim(), date, description.trim());
-    setTitle(''); setDate(''); setDescription('');
+    onAdd(title.trim(), date, description.trim(), image);
+    setTitle(''); setDate(''); setDescription(''); setImage(null);
   };
   return (
     <form className="homepage-composer" onSubmit={submit}>
       <input className="homepage-input" placeholder="Event name…" value={title} onChange={e => setTitle(e.target.value)} />
       <input type="date" className="date-range-input" value={date} onChange={e => setDate(e.target.value)} />
       <textarea className="homepage-textarea" placeholder="Details (optional)…" value={description} onChange={e => setDescription(e.target.value)} rows={2} />
+      <ImageUploadField value={image} onChange={setImage} onError={onImageError} label="Header image (optional)" />
       <button type="submit" className="btn-primary homepage-post-btn" disabled={!title.trim() || !date}>Add event</button>
     </form>
   );
 }
 
-function HomepageTab({ report, news, events, onAddNews, onDeleteNews, onAddEvent, onDeleteEvent }) {
+// The 3 soonest upcoming events, shown as large banner cards above the
+// calendar grid — the "featured" strip the user asked for.
+function FeaturedEvents({ events, todayISO }) {
+  const upcoming = useMemo(
+    () => events.filter(ev => ev.date >= todayISO).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 3),
+    [events, todayISO]
+  );
+  const daysUntil = iso => {
+    const diff = Math.round((new Date(`${iso}T00:00:00`) - new Date(`${todayISO}T00:00:00`)) / 86400000);
+    if (diff === 0) return 'Today 🎉';
+    if (diff === 1) return 'Tomorrow';
+    return `In ${diff} days`;
+  };
+  if (!upcoming.length) return <p className="empty-note">No upcoming events on the calendar.</p>;
+  return (
+    <div className="homepage-featured-events">
+      {upcoming.map(ev => (
+        <div key={ev.id} className="homepage-featured-card" style={ev.headerImage ? { backgroundImage: `url(${ev.headerImage})` } : undefined}>
+          <div className="homepage-featured-overlay">
+            <span className="homepage-featured-badge">{daysUntil(ev.date)}</span>
+            <p className="homepage-featured-title">{ev.title}</p>
+            <p className="homepage-featured-date">{fmtDateLong(ev.date)}</p>
+            {ev.description && <p className="homepage-featured-desc">{ev.description}</p>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const CAL_WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+// Plain month-grid calendar — Sun-start, prev/next nav, a colored pill per
+// event landing on that day (capped at 2 visible + an overflow count).
+function EventsCalendar({ events, todayISO }) {
+  const [cal, setCal] = useState(() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; });
+  const monthLabel = fmtMonthLong(`${cal.y}-${String(cal.m + 1).padStart(2, '0')}`);
+
+  const eventsByDay = useMemo(() => {
+    const map = {};
+    const monthKey = `${cal.y}-${String(cal.m + 1).padStart(2, '0')}`;
+    events.forEach(ev => {
+      if (!ev.date || !ev.date.startsWith(monthKey)) return;
+      const day = Number(ev.date.slice(8, 10));
+      (map[day] = map[day] || []).push(ev);
+    });
+    return map;
+  }, [events, cal]);
+
+  const cells = useMemo(() => {
+    const firstWeekday = new Date(cal.y, cal.m, 1).getDay();
+    const daysInMonth = new Date(cal.y, cal.m + 1, 0).getDate();
+    const arr = [];
+    for (let i = 0; i < firstWeekday; i++) arr.push(null);
+    for (let d = 1; d <= daysInMonth; d++) arr.push(d);
+    while (arr.length % 7 !== 0) arr.push(null);
+    return arr;
+  }, [cal]);
+
+  const prevMonth = () => setCal(c => (c.m === 0 ? { y: c.y - 1, m: 11 } : { y: c.y, m: c.m - 1 }));
+  const nextMonth = () => setCal(c => (c.m === 11 ? { y: c.y + 1, m: 0 } : { y: c.y, m: c.m + 1 }));
+
+  return (
+    <div className="homepage-calendar">
+      <div className="homepage-calendar-head">
+        <button type="button" className="homepage-cal-nav" onClick={prevMonth} aria-label="Previous month">‹</button>
+        <p className="homepage-calendar-month">{monthLabel}</p>
+        <button type="button" className="homepage-cal-nav" onClick={nextMonth} aria-label="Next month">›</button>
+      </div>
+      <div className="homepage-calendar-weekdays">
+        {CAL_WEEKDAYS.map((d, i) => <span key={i}>{d}</span>)}
+      </div>
+      <div className="homepage-calendar-grid">
+        {cells.map((day, i) => {
+          if (day == null) return <div key={i} className="homepage-cal-cell homepage-cal-cell--empty" />;
+          const iso = `${cal.y}-${String(cal.m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+          const dayEvents = eventsByDay[day] || [];
+          return (
+            <div key={i} className={`homepage-cal-cell ${iso === todayISO ? 'homepage-cal-cell--today' : ''}`}>
+              <span className="homepage-cal-daynum">{day}</span>
+              {dayEvents.slice(0, 2).map(ev => <span key={ev.id} className="homepage-cal-pill" title={ev.title}>{ev.title}</span>)}
+              {dayEvents.length > 2 && <span className="homepage-cal-more">+{dayEvents.length - 2} more</span>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function HomepageTab({ report, news, events }) {
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
-  const sortedEvents = useMemo(() => [...events].sort((a, b) => (a.date || '').localeCompare(b.date || '')), [events]);
   const storeRows = useMemo(() => report ? report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })) : [], [report]);
 
   return (
@@ -596,38 +747,23 @@ function HomepageTab({ report, news, events, onAddNews, onDeleteNews, onAddEvent
         <div className="homepage-main">
           <div className="homepage-section">
             <p className="section-label">📣 News &amp; Updates</p>
-            <NewsComposer onAdd={onAddNews} />
             <div className="homepage-feed">
               {sortedNews.map(n => (
                 <div className="homepage-feed-item" key={n.id}>
-                  <div className="homepage-feed-item-head">
-                    <p className="homepage-feed-item-title">{n.title}</p>
-                    <button className="homepage-delete-btn" onClick={() => onDeleteNews(n.id)} title="Delete">✕</button>
-                  </div>
+                  {n.headerImage && <img className="homepage-feed-item-image" src={n.headerImage} alt="" />}
+                  <p className="homepage-feed-item-title">{n.title}</p>
                   {n.body && <p className="homepage-feed-item-body">{n.body}</p>}
                   <p className="homepage-feed-item-date">{fmtDateLong(n.date)}</p>
                 </div>
               ))}
-              {!sortedNews.length && <p className="empty-note">No news posted yet — add the first update above.</p>}
+              {!sortedNews.length && <p className="empty-note">No news posted yet — post one from Setup → Homepage.</p>}
             </div>
           </div>
 
           <div className="homepage-section">
             <p className="section-label">📅 Upcoming Events</p>
-            <EventComposer onAdd={onAddEvent} />
-            <div className="homepage-feed">
-              {sortedEvents.map(ev => (
-                <div className={`homepage-feed-item ${ev.date < todayISO ? 'homepage-feed-item--past' : ''}`} key={ev.id}>
-                  <div className="homepage-feed-item-head">
-                    <p className="homepage-feed-item-title">{ev.title}{ev.date < todayISO && <span className="homepage-past-tag">Past</span>}</p>
-                    <button className="homepage-delete-btn" onClick={() => onDeleteEvent(ev.id)} title="Delete">✕</button>
-                  </div>
-                  {ev.description && <p className="homepage-feed-item-body">{ev.description}</p>}
-                  <p className="homepage-feed-item-date">{fmtDateLong(ev.date)}</p>
-                </div>
-              ))}
-              {!sortedEvents.length && <p className="empty-note">No events on the calendar yet — add one above.</p>}
-            </div>
+            <FeaturedEvents events={events} todayISO={todayISO} />
+            <EventsCalendar events={events} todayISO={todayISO} />
           </div>
         </div>
 
@@ -1763,6 +1899,59 @@ function ManagersTab({ report, managers, onSaveManager, onImportManagers }) {
         </table>
       </div>
       {!stores.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
+    </div>
+  );
+}
+
+// ─── Homepage admin (Setup > Homepage) — compose/manage News & Events ──────
+// Posting lives here, not on the Homepage tab itself, so the public-facing
+// landing page stays read-only and can't be edited by accident — same split
+// as Goals/Managers (edit in Setup, display everywhere else).
+function HomepageAdminTab({ news, events, onAddNews, onDeleteNews, onAddEvent, onDeleteEvent, onImageError }) {
+  const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '')), [news]);
+  const sortedEvents = useMemo(() => [...events].sort((a, b) => (a.date || '').localeCompare(b.date || '')), [events]);
+
+  return (
+    <div className="tab-content">
+      <p className="section-hint">Post News &amp; Updates and log Events here — both support an optional header image. They show up on the Homepage tab; events also appear on its calendar, with the 3 soonest featured above it.</p>
+
+      <div className="homepage-admin-columns">
+        <div className="homepage-section">
+          <p className="section-label">📣 News &amp; Updates</p>
+          <NewsComposer onAdd={onAddNews} onImageError={onImageError} />
+          <div className="homepage-admin-list">
+            {sortedNews.map(n => (
+              <div className="homepage-admin-row" key={n.id}>
+                {n.headerImage && <img className="homepage-admin-thumb" src={n.headerImage} alt="" />}
+                <div className="homepage-admin-row-body">
+                  <p className="homepage-admin-row-title">{n.title}</p>
+                  <p className="homepage-admin-row-date">{fmtDateLong(n.date)}</p>
+                </div>
+                <button className="homepage-delete-btn" onClick={() => onDeleteNews(n.id)} title="Delete">✕</button>
+              </div>
+            ))}
+            {!sortedNews.length && <p className="empty-note">Nothing posted yet.</p>}
+          </div>
+        </div>
+
+        <div className="homepage-section">
+          <p className="section-label">📅 Events</p>
+          <EventComposer onAdd={onAddEvent} onImageError={onImageError} />
+          <div className="homepage-admin-list">
+            {sortedEvents.map(ev => (
+              <div className="homepage-admin-row" key={ev.id}>
+                {ev.headerImage && <img className="homepage-admin-thumb" src={ev.headerImage} alt="" />}
+                <div className="homepage-admin-row-body">
+                  <p className="homepage-admin-row-title">{ev.title}</p>
+                  <p className="homepage-admin-row-date">{fmtDateLong(ev.date)}</p>
+                </div>
+                <button className="homepage-delete-btn" onClick={() => onDeleteEvent(ev.id)} title="Delete">✕</button>
+              </div>
+            ))}
+            {!sortedEvents.length && <p className="empty-note">No events logged yet.</p>}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -3185,11 +3374,12 @@ const SETUP_SECTIONS = [
   { key: 'goals', label: 'Goals' },
   { key: 'managers', label: 'Managers' },
   { key: 'milestoneGoals', label: 'Milestone Goals' },
+  { key: 'homepage', label: 'Homepage' },
   { key: 'history', label: 'Historical Import' },
   { key: 'upload', label: 'Upload' },
 ];
 
-function SetupTab({ configured, section, onSection, goalsProps, managersProps, milestoneGoalsProps, historyProps, uploadProps }) {
+function SetupTab({ configured, section, onSection, goalsProps, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps }) {
   const steps = [
     { n: 1, title: 'Export this week\u2019s stylist report', body: 'Run the report with every store and every employee under it, covering the week you want to see.' },
     { n: 2, title: 'Upload it', body: 'Go to the Upload section below and drop it into the "Stylist Report" slot. The date range fills in automatically.' },
@@ -3217,6 +3407,7 @@ function SetupTab({ configured, section, onSection, goalsProps, managersProps, m
       {section === 'goals' && <GoalsTab {...goalsProps} />}
       {section === 'managers' && <ManagersTab {...managersProps} />}
       {section === 'milestoneGoals' && <MilestoneGoalsTab {...milestoneGoalsProps} />}
+      {section === 'homepage' && <HomepageAdminTab {...homepageAdminProps} />}
       {section === 'history' && <HistoricalImportTab {...historyProps} />}
       {section === 'upload' && <UploadTab {...uploadProps} />}
 
@@ -3583,8 +3774,8 @@ export default function App() {
     });
   }, []);
 
-  const handleAddNews = useCallback((title, body) => {
-    const item = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, title, body, date: new Date().toISOString().slice(0, 10), createdAt: new Date().toISOString() };
+  const handleAddNews = useCallback((title, body, headerImage) => {
+    const item = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, title, body, headerImage: headerImage || null, date: new Date().toISOString().slice(0, 10), createdAt: new Date().toISOString() };
     setNews(prev => {
       const next = [item, ...prev];
       saveData('homepage_news', next).then(result => {
@@ -3604,8 +3795,8 @@ export default function App() {
     });
   }, []);
 
-  const handleAddEvent = useCallback((title, date, description) => {
-    const item = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, title, date, description, createdAt: new Date().toISOString() };
+  const handleAddEvent = useCallback((title, date, description, headerImage) => {
+    const item = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, title, date, description, headerImage: headerImage || null, createdAt: new Date().toISOString() };
     setEvents(prev => {
       const next = [...prev, item];
       saveData('homepage_events', next).then(result => {
@@ -3880,7 +4071,7 @@ export default function App() {
       <main className="app-main">
         {needsReport && <div className="empty-state"><p className="empty-title">No report yet</p><p>Go to the Setup tab's Upload section to add this week's report.</p></div>}
         {tab === 'Homepage' && (
-          <HomepageTab report={report} news={news} events={events} onAddNews={handleAddNews} onDeleteNews={handleDeleteNews} onAddEvent={handleAddEvent} onDeleteEvent={handleDeleteEvent} />
+          <HomepageTab report={report} news={news} events={events} />
         )}
         {!needsReport && tab === 'Overview' && report && (
           <OverviewTab report={report} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} />
@@ -3932,6 +4123,7 @@ export default function App() {
             goalsProps={{ report, goals, onSaveGoal: handleSaveGoal, onImportGoals: handleImportGoals }}
             managersProps={{ report, managers, onSaveManager: handleSaveManager, onImportManagers: handleImportManagers }}
             milestoneGoalsProps={{ report, milestoneGoals, onSaveMilestoneGoal: handleSaveMilestoneGoal, onImportMilestoneGoals: handleImportMilestoneGoals }}
+            homepageAdminProps={{ news, events, onAddNews: handleAddNews, onDeleteNews: handleDeleteNews, onAddEvent: handleAddEvent, onDeleteEvent: handleDeleteEvent, onImageError: msg => showToast(msg, 'error') }}
             historyProps={{ history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory }}
             uploadProps={{
               report, uploading, onFile: handleFile, onClear: handleClearAll,
