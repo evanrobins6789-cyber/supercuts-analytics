@@ -307,15 +307,17 @@
 }
 
 /* ─── Milestone thermometer ──────────────────────────────────────────── */
-.thermo-wrap { display: flex; align-items: center; gap: 8px; min-width: 130px; }
-.thermo-bar { position: relative; flex: 1; height: 12px; min-width: 70px; background: var(--line); border-radius: 6px; overflow: hidden; }
+.thermo-wrap { display: flex; align-items: center; gap: 6px; min-width: 96px; }
+.thermo-bar-col { flex: 1; min-width: 60px; display: flex; flex-direction: column; gap: 2px; }
+.thermo-bar { position: relative; height: 12px; background: var(--line); border-radius: 6px; overflow: hidden; }
 .thermo-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 6px; transition: width 0.3s ease; }
 .thermo-bar--behind .thermo-fill { background: var(--red-deep); }
 .thermo-bar--onpace .thermo-fill { background: var(--gold); }
 .thermo-bar--hit .thermo-fill { background: var(--green); }
 .thermo-bar--none .thermo-fill { background: var(--line); }
 .thermo-goal-tick { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--navy); }
-.thermo-pct { font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; white-space: nowrap; min-width: 36px; text-align: right; }
+.thermo-milestone-label { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: var(--ink-soft); white-space: nowrap; }
+.thermo-pct { font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; white-space: nowrap; min-width: 32px; text-align: right; }
 
 /* ─── Empty / loading ────────────────────────────────────────────────── */
 .empty-note { font-size: 12.5px; color: var(--ink-soft); }
@@ -443,8 +445,8 @@
 
 /* Core Values sidebar widget (below Shoutouts) */
 .homepage-corevalue-card { animation: homepage-fade-in 0.4s ease; }
-.homepage-corevalue-title { font-family: 'Barlow Condensed', sans-serif; font-size: 19px; font-weight: 700; color: var(--navy); display: flex; align-items: center; }
-.homepage-corevalue-title .homepage-hero-subtitle { color: var(--ink-soft); font-size: 14px; }
+.homepage-corevalue-title { font-family: 'Barlow Condensed', sans-serif; font-size: 19px; font-weight: 700; text-transform: uppercase; color: var(--navy); display: flex; align-items: center; }
+.homepage-corevalue-title .homepage-hero-subtitle { color: var(--ink-soft); font-size: 14px; text-transform: none; font-weight: 400; }
 .homepage-corevalue-body-wrap { max-height: 150px; overflow-y: auto; margin-top: 6px; }
 .homepage-corevalue-body { font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; }
 

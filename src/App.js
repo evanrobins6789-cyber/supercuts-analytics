@@ -14,10 +14,9 @@ import './App.css';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip);
 
-// ─── Bitmoji peeks — a mascot that pops in near a corner of whatever it's
-// mounted on, holds for a beat, then ducks back out. Purely decorative
-// (aria-hidden), picks a random image from `pool` each time it appears so
-// repeat visits don't always show the same character.
+// ─── Bitmoji peeks — Homepage-only. One mascot at a time, hopping between a
+// fixed set of named spots that are each anchored to a real widget's corner
+// (never a free-floating page position) — see BITMOJI_PEEK_CORNERS below.
 const BITMOJI_PEEK_CORNERS = {
   'bottom-right': { style: { right: -8, bottom: -10 }, hiddenT: 'translateY(65%) rotate(6deg)', shownT: 'translateY(20%) rotate(0deg)' },
   'bottom-left': { style: { left: -8, bottom: -10 }, hiddenT: 'translateY(65%) rotate(-6deg)', shownT: 'translateY(20%) rotate(0deg)' },
@@ -25,35 +24,51 @@ const BITMOJI_PEEK_CORNERS = {
   'top-left': { style: { left: -8, top: -10 }, hiddenT: 'translateY(-65%) rotate(-6deg)', shownT: 'translateY(-16%) rotate(0deg)' },
 };
 
-function BitmojiPeek({ pool, corner = 'bottom-right', size = 72, minDelay = 9000, maxDelay = 22000, visibleFor = 3200 }) {
+// Drives ONE shared "which spot is active right now" state so only a single
+// bitmoji is ever visible across the whole page — individual BitmojiPeek
+// instances are dumb/controlled, just rendering whatever this says. Picks a
+// different spot than last time so it visibly hops around rather than
+// sitting still.
+function useBitmojiCycler(slots, { visibleFor = 3800, minGap = 4500, maxGap = 11000 } = {}) {
+  const [activeKey, setActiveKey] = useState(null);
   const [img, setImg] = useState(null);
-  const [visible, setVisible] = useState(false);
+  const lastKeyRef = useRef(null);
 
   useEffect(() => {
     let showTimer, hideTimer, cancelled = false;
     const scheduleNext = () => {
-      const delay = minDelay + Math.random() * (maxDelay - minDelay);
+      const gap = minGap + Math.random() * (maxGap - minGap);
       showTimer = setTimeout(() => {
         if (cancelled) return;
+        let next = slots[Math.floor(Math.random() * slots.length)];
+        if (slots.length > 1) {
+          while (next.key === lastKeyRef.current) next = slots[Math.floor(Math.random() * slots.length)];
+        }
+        lastKeyRef.current = next.key;
+        const pool = BITMOJI_POOLS[next.pool] || BITMOJI_POOLS.all;
         setImg(pool[Math.floor(Math.random() * pool.length)]);
-        setVisible(true);
+        setActiveKey(next.key);
         hideTimer = setTimeout(() => {
           if (cancelled) return;
-          setVisible(false);
+          setActiveKey(null);
           scheduleNext();
         }, visibleFor);
-      }, delay);
+      }, gap);
     };
     scheduleNext();
     return () => { cancelled = true; clearTimeout(showTimer); clearTimeout(hideTimer); };
-  }, [pool, minDelay, maxDelay, visibleFor]);
+  }, [slots, visibleFor, minGap, maxGap]);
 
+  return { activeKey, img };
+}
+
+function BitmojiPeek({ img, active, corner = 'bottom-right', size = 72 }) {
   if (!img) return null;
   const c = BITMOJI_PEEK_CORNERS[corner] || BITMOJI_PEEK_CORNERS['bottom-right'];
   return (
     <img
       src={img} alt="" aria-hidden="true" className="bitmoji-peek"
-      style={{ ...c.style, width: size, height: size, opacity: visible ? 1 : 0, transform: visible ? c.shownT : c.hiddenT }}
+      style={{ ...c.style, width: size, height: size, opacity: active ? 1 : 0, transform: active ? c.shownT : c.hiddenT }}
     />
   );
 }
@@ -62,6 +77,14 @@ const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-US', { minimumFraction
 const fmtInt = n => Number(n || 0).toLocaleString('en-US');
 const fmtRate = n => (n == null || isNaN(n) ? '—' : `$${n.toFixed(2)}`);
 const fmtNum = (n, d = 2) => (n == null || isNaN(n) ? '—' : Number(n).toFixed(d));
+// Compact $ for tight spaces (thermometer labels) — $45,231 -> "$45K"
+const fmtCompact$ = n => {
+  if (n == null || isNaN(n)) return '—';
+  const abs = Math.abs(n);
+  if (abs >= 10000) return `$${Math.round(n / 1000)}K`;
+  if (abs >= 1000) return `$${(n / 1000).toFixed(1)}K`;
+  return `$${Math.round(n)}`;
+};
 
 // ─── Date display — named months everywhere, instead of raw ISO numbers ────
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -148,6 +171,11 @@ function withManagerFlag(employees, managers, code) {
 // bar, and the exact % off to the right — % is against Milestone specifically
 // (not Goal), and is allowed to read over 100% rather than clamping the label
 // once a store blows past its stretch target.
+// `milestone` is the only required target — pass `goal` too when there's a
+// separate "have to hit" number below the stretch target (shows as a tick
+// mark on the bar); omit it for a single-target progress bar (Retail/Color).
+// The milestone $ figure renders inside the bar itself (compact-formatted)
+// so a summary row doesn't need its own separate "Milestone" column to show it.
 function MilestoneThermometer({ actual, goal, milestone }) {
   if (milestone == null || milestone <= 0) return <span className="empty-note">—</span>;
   const pct = actual != null ? (actual / milestone) * 100 : null;
@@ -156,9 +184,12 @@ function MilestoneThermometer({ actual, goal, milestone }) {
   const status = pct == null ? 'none' : goal != null && actual < goal ? 'behind' : pct < 100 ? 'onpace' : 'hit';
   return (
     <div className="thermo-wrap">
-      <div className={`thermo-bar thermo-bar--${status}`}>
-        <div className="thermo-fill" style={{ width: `${fillPct}%` }} />
-        {goalPct != null && <div className="thermo-goal-tick" style={{ left: `${goalPct}%` }} title={`Goal: ${fmt$(goal)}`} />}
+      <div className="thermo-bar-col">
+        <div className={`thermo-bar thermo-bar--${status}`}>
+          <div className="thermo-fill" style={{ width: `${fillPct}%` }} />
+          {goalPct != null && <div className="thermo-goal-tick" style={{ left: `${goalPct}%` }} title={`Goal: ${fmt$(goal)}`} />}
+        </div>
+        <span className="thermo-milestone-label">of {fmtCompact$(milestone)}</span>
       </div>
       <span className="thermo-pct">{pct != null ? `${Math.round(pct)}%` : '—'}</span>
     </div>
@@ -843,7 +874,7 @@ const CORE_VALUES = [
 // Sidebar widget (below Shoutouts) — cycles the 4 "Our Core Values" every
 // 20s. Used to live in the hero banner; moved down here so the hero can go
 // back to a plain, non-cycling welcome.
-function CoreValuesWidget() {
+function CoreValuesWidget({ bitmojiImg, bitmojiActive }) {
   const [index, setIndex] = useCarousel(CORE_VALUES.length, 20000);
   const v = CORE_VALUES[index];
   return (
@@ -864,7 +895,7 @@ function CoreValuesWidget() {
           <button key={cv.n} type="button" className={`homepage-hero-dot homepage-hero-dot--dark ${i === index ? 'active' : ''}`} onClick={() => setIndex(i)} aria-label={`Show ${cv.title}`} />
         ))}
       </div>
-      <BitmojiPeek pool={BITMOJI_POOLS.curious} corner="bottom-right" minDelay={9000} maxDelay={20000} />
+      <BitmojiPeek img={bitmojiImg} active={bitmojiActive} corner="bottom-right" />
     </div>
   );
 }
@@ -887,7 +918,7 @@ function matchCoreValueCategories(message) {
 // Cycles through 5-star reviews that name a stylist by name (via the same
 // detectEmployeeMention used on the Reviews tab) — a little "shoutouts" wall
 // for the front desk to leave running. 10s per review, pauses on hover.
-function ReviewSpotlightWidget({ report, reviews }) {
+function ReviewSpotlightWidget({ report, reviews, bitmojiImg, bitmojiActive }) {
   const [paused, setPaused] = useState(false);
   const spotlightReviews = useMemo(() => {
     if (!reviews || !report) return [];
@@ -932,16 +963,26 @@ function ReviewSpotlightWidget({ report, reviews }) {
           )}
         </div>
       )}
-      <BitmojiPeek pool={BITMOJI_POOLS.positive} corner="top-right" minDelay={5000} maxDelay={12000} />
+      <BitmojiPeek img={bitmojiImg} active={bitmojiActive} corner="top-right" />
     </div>
   );
 }
+
+const HOMEPAGE_BITMOJI_SLOTS = [
+  { key: 'hero', corner: 'bottom-right', pool: 'curious' },
+  { key: 'news', corner: 'top-right', pool: 'curious' },
+  { key: 'events', corner: 'bottom-left', pool: 'positive' },
+  { key: 'top10', corner: 'bottom-right', pool: 'positive' },
+  { key: 'spotlight', corner: 'top-right', pool: 'positive' },
+  { key: 'corevalues', corner: 'bottom-right', pool: 'curious' },
+];
 
 function HomepageTab({ report, news, events, reviews }) {
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
   const storeRows = useMemo(() => report ? report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })) : [], [report]);
   const [lightboxImage, setLightboxImage] = useState(null);
+  const { activeKey: bitmojiKey, img: bitmojiImg } = useBitmojiCycler(HOMEPAGE_BITMOJI_SLOTS);
 
   return (
     <div className="tab-content">
@@ -949,7 +990,7 @@ function HomepageTab({ report, news, events, reviews }) {
         <p className="homepage-hero-eyebrow">{fmtDateLong(todayISO)}</p>
         <p className="homepage-hero-title">Welcome back 👋</p>
         <p className="homepage-hero-sub">Here's what's new, what's coming up, and who's leading the pack this period.</p>
-        <BitmojiPeek pool={BITMOJI_POOLS.curious} corner="bottom-right" minDelay={5000} maxDelay={14000} />
+        <BitmojiPeek img={bitmojiImg} active={bitmojiKey === 'hero'} corner="bottom-right" />
       </div>
 
       <div className="homepage-grid">
@@ -963,14 +1004,14 @@ function HomepageTab({ report, news, events, reviews }) {
                 ))}
               </div>
             ) : <p className="empty-note">No news posted yet — post one from Setup → Homepage.</p>}
-            <BitmojiPeek pool={BITMOJI_POOLS.curious} corner="top-right" minDelay={8000} maxDelay={20000} />
+            <BitmojiPeek img={bitmojiImg} active={bitmojiKey === 'news'} corner="top-right" />
           </div>
 
           <div className="homepage-section">
             <p className="section-label">📅 Upcoming Events</p>
             <FeaturedEvents events={events} todayISO={todayISO} onImageClick={setLightboxImage} />
             <EventsCalendar events={events} todayISO={todayISO} />
-            <BitmojiPeek pool={BITMOJI_POOLS.positive} corner="bottom-left" minDelay={9000} maxDelay={22000} />
+            <BitmojiPeek img={bitmojiImg} active={bitmojiKey === 'events'} corner="bottom-left" />
           </div>
 
           <div className="homepage-section">
@@ -985,13 +1026,13 @@ function HomepageTab({ report, news, events, reviews }) {
                 ))}
               </div>
             ) : <p className="empty-note">Upload a stylist report to see the Top 10 leaderboards.</p>}
-            <BitmojiPeek pool={BITMOJI_POOLS.positive} corner="bottom-right" minDelay={6000} maxDelay={16000} />
+            <BitmojiPeek img={bitmojiImg} active={bitmojiKey === 'top10'} corner="bottom-right" />
           </div>
         </div>
 
         <div className="homepage-sidebar">
-          <ReviewSpotlightWidget report={report} reviews={reviews} />
-          <CoreValuesWidget />
+          <ReviewSpotlightWidget report={report} reviews={reviews} bitmojiImg={bitmojiImg} bitmojiActive={bitmojiKey === 'spotlight'} />
+          <CoreValuesWidget bitmojiImg={bitmojiImg} bitmojiActive={bitmojiKey === 'corevalues'} />
         </div>
       </div>
 
@@ -1013,7 +1054,6 @@ function OverviewTab({ report, selected, onSelect, query, onQuery }) {
 
   return (
     <div className="tab-content">
-      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores…" />
       <p className="section-hint">Tap any metric to see the top 10 and bottom 10 stores for it.</p>
       <div className="summary-grid">
@@ -1073,7 +1113,6 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
 
   return (
     <div className="tab-content">
-      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores or employees…" />
 
@@ -1214,7 +1253,6 @@ function EmployeesTab({ report, query, onQuery, managers }) {
 
   return (
     <div className="tab-content">
-      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       <SearchBox value={query} onChange={onQuery} placeholder="Search employees or stores…" />
       <div className="ledger-head-row">
         <p className="section-label">{filtered.length} of {report.employeeCount} employees</p>
@@ -1325,7 +1363,6 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
 
   return (
     <div className="tab-content">
-      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
       <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
 
@@ -1366,10 +1403,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                     {showPrevMonthColor && <div className="dl-stat"><span className="dl-stat-label">Prev Month Color</span><span className="dl-stat-value">{fmt$(prevMonthColSum(g.stores))}</span></div>}
                     {showGoals && <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{goalTotal > 0 ? fmt$(goalTotal) : '—'}</span></div>}
                     {showGoals && (
-                      <div className="dl-stat">
-                        <span className="dl-stat-label">vs Goal</span>
-                        <span className={`dl-stat-value ${vsGoalClass(groupDiff)}`}>{groupDiff != null ? `${groupDiff >= 0 ? '+' : ''}${fmt$(groupDiff)}` : '—'}</span>
-                      </div>
+                      <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupTotals[metricA.key]} milestone={goalTotal} /></div>
                     )}
                   </div>
                 </button>
@@ -1590,7 +1624,6 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
 
   return (
     <div className="tab-content">
-      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
       <SearchBox value={query} onChange={onQuery} placeholder="Search DLs or stores…" />
 
@@ -1628,7 +1661,6 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                       <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(t.haircuts)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(t.cph)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{groupGoal > 0 ? fmt$(groupGoal) : '—'}</span></div>
-                      <div className="dl-stat"><span className="dl-stat-label">Milestone</span><span className="dl-stat-value">{groupMilestone > 0 ? fmt$(groupMilestone) : '—'}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupActual} goal={groupGoal} milestone={groupMilestone} /></div>
                     </div>
                   </div>
@@ -1718,7 +1750,6 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                       <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(t.haircuts)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(t.cph)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{groupGoal > 0 ? fmt$(groupGoal) : '—'}</span></div>
-                      <div className="dl-stat"><span className="dl-stat-label">Milestone</span><span className="dl-stat-value">{groupMilestone > 0 ? fmt$(groupMilestone) : '—'}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupActual} goal={groupGoal} milestone={groupMilestone} /></div>
                     </div>
                   </button>
@@ -1877,7 +1908,6 @@ function NewHireTab({ report, employeeRoster, query, onQuery }) {
 
   return (
     <div className="tab-content">
-      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       <SearchBox value={query} onChange={onQuery} placeholder="Search employees, stores, or DL…" />
       <div className="ledger-head-row">
         <p className="section-label">{filtered.length} employee{filtered.length !== 1 ? 's' : ''} hired in the last 60 days</p>
@@ -2620,7 +2650,6 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
 
   return (
     <div className="tab-content">
-      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       <div className="summary-grid">
         <div className="summary-tile"><p className="summary-tile-label">Total Reviews</p><p className="summary-tile-value">{totalCount}</p></div>
         <div className="summary-tile"><p className="summary-tile-label">Overall Average</p><p className={`summary-tile-value ${ratingClass(overallAvg)}`}>{overallAvg.toFixed(2)}★</p></div>
@@ -3132,7 +3161,6 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
 
   return (
     <div className="tab-content">
-      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       <p className="section-hint">
         Year-over-year comparison — {currentYear} on the left, {previousYear} on the right, aligned by {granularity === 'week' ? 'week of the year' : 'calendar month'}.
       </p>
