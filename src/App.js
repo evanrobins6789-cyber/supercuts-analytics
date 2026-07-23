@@ -2222,11 +2222,31 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews) {
       lines.push(`${m.month}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Gift Cards $${Math.round(t.giftCards)}, Hours ${Math.round(t.hours)}`);
     });
 
+    // Per-store breakdown + top employees, computed once per month from the
+    // same getRangeTotals() the date-range tabs use — without this, "how did
+    // Store X do in retail last month" has no store-level answer at all,
+    // only the isolated company-wide total above.
+    const RECENT_MONTHS_WITH_STORE_DETAIL = 6;
+    lines.push('');
+    lines.push(`PER-STORE HISTORY BY MONTH, most recent ${Math.min(RECENT_MONTHS_WITH_STORE_DETAIL, months.length)} months only (older months only have the company-wide total above — say so rather than guessing a store's number for an older month):`);
+    const recentMonths = months.slice(-RECENT_MONTHS_WITH_STORE_DETAIL);
+    const monthlyTotals = new Map();
+    months.forEach(m => {
+      const { start, end } = monthRange(m.month);
+      monthlyTotals.set(m.month, getRangeTotals(history, weeklyHistory, start, end));
+    });
+    recentMonths.forEach(m => {
+      lines.push(`${m.month}:`);
+      Object.entries(monthlyTotals.get(m.month)).forEach(([code, t]) => {
+        const name = STORE_CODE_TO_NAME[code] || `Store ${code}`;
+        lines.push(`  ${name}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Hours ${Math.round(t.hours)}`);
+      });
+    });
+
     lines.push('');
     lines.push('TOP EMPLOYEES BY MONTH (top 5 each for Sales, Retail, Color Sales — covers every store, from weekly uploads and Sales-Accrual/Attendance historical imports; a name/month missing here means no per-employee data exists for that period):');
     months.forEach(m => {
-      const { start, end } = monthRange(m.month);
-      const totals = getRangeTotals(history, weeklyHistory, start, end);
+      const totals = monthlyTotals.get(m.month);
       const companyEmployees = {};
       Object.values(totals).forEach(t => { if (t.employees?.length) mergeEmployeesInto(companyEmployees, t.employees); });
       const line = topEmployeeLine(Object.values(companyEmployees).map(finalizeEmployee));
