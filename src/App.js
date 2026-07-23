@@ -669,17 +669,6 @@ function getPrevMonthRange() {
   return { start: toISO(first), end: toISO(last) };
 }
 
-// Milestone goals are monthly, so progress toward one always compares
-// against month-to-date actuals — regardless of whatever date range the DL
-// tab itself is currently filtered to — the same "always this one specific
-// period" approach already used for Prev Month Color above.
-function getCurrentMonthRange() {
-  const now = new Date();
-  const first = new Date(now.getFullYear(), now.getMonth(), 1);
-  const toISO = d => d.toISOString().slice(0, 10);
-  return { start: toISO(first), end: toISO(now) };
-}
-
 // ─── Single-focus store tabs (Retail, Color Sales) — grouped by DL ─────────
 function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers }) {
   const [sortBy, setSortBy] = useState(metricA.key);
