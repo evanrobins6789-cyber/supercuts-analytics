@@ -2189,6 +2189,18 @@ function topEmployeeLine(employees) {
 function buildAIContext(report, history, weeklyHistory, goals, reviews) {
   const lines = [];
 
+  // Static reference info, independent of any report/date — who manages
+  // which stores, so a question naming a leader ("Amber's stores", "how did
+  // Lisa Hair's group do") can be resolved instead of coming back empty.
+  lines.push('DL / AREA SUPERVISOR STORE GROUPINGS (who manages which stores — use this whenever a question references a leader by name; every store below belongs to exactly one of these leaders):');
+  LEADER_ROSTER_SECTIONS.forEach(sec => {
+    sec.leaders.forEach(l => {
+      const storeNames = l.storeCodes.map(c => STORE_CODE_TO_NAME[c] || `Store ${c}`).join(', ');
+      lines.push(`${l.name} (${sec.role}): ${storeNames}`);
+    });
+  });
+  lines.push('');
+
   if (report) {
     const t = report.companyTotals;
     lines.push(`CURRENT REPORT PERIOD: ${report.dateRangeLabel || 'unknown'}`);
