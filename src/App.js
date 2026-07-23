@@ -23,6 +23,7 @@ const STORE_METRICS = [
   { key: 'cpc', label: 'CPC', fmt: fmtNum },
   { key: 'retail', label: 'Retail', fmt: fmt$ },
   { key: 'rpc', label: 'RPC', fmt: fmtNum },
+  { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
 ];
 
 // Employee-level metrics shown on Employees and within each Stores card.
@@ -34,6 +35,7 @@ const EMPLOYEE_METRICS = [
   { key: 'cpc', label: 'CPC', fmt: fmtNum },
   { key: 'rpc', label: 'RPC', fmt: fmtNum },
   { key: 'tsth', label: 'TSTH', fmt: fmtRate },
+  { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
 ];
 
 function sortByMetric(rows, key, order = 'desc') {
@@ -45,6 +47,9 @@ function sortByMetric(rows, key, order = 'desc') {
   }
   return arr;
 }
+
+// Green when at/above goal, red when under — used everywhere a "vs Goal" cell renders.
+function vsGoalClass(diff) { return diff == null ? '' : diff < 0 ? 'ledger-margin-neg' : 'ledger-margin-pos'; }
 
 // Re-aggregate a set of already-rolled-up rows (stores, or store totals) one
 // level higher (e.g. up to a District Leader). Sums the additive fields and
@@ -209,13 +214,22 @@ function historyTotalsToReportShape(t) {
   };
 }
 
+function getCurrentMonthRange() {
+  const now = new Date();
+  const first = new Date(now.getFullYear(), now.getMonth(), 1);
+  const toISO = d => d.toISOString().slice(0, 10);
+  return { start: toISO(first), end: toISO(now) };
+}
+
 function DateRangeBar({ start, end, onChange }) {
+  const applyCurrentMonth = () => { const r = getCurrentMonthRange(); onChange(r.start, r.end); };
   return (
     <div className="date-range-bar">
       <span className="date-range-label">Date range:</span>
       <input type="date" className="date-range-input" value={start || ''} onChange={e => onChange(e.target.value || null, end)} />
       <span className="date-range-to">to</span>
       <input type="date" className="date-range-input" value={end || ''} onChange={e => onChange(start, e.target.value || null)} />
+      <button className="date-range-quick-btn" onClick={applyCurrentMonth}>Current Month</button>
       {(start || end) && (
         <button className="btn-ghost date-range-clear" onClick={() => onChange(null, null)}>Clear — use current report</button>
       )}
@@ -429,6 +443,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
                   {s.cpc != null && <div className="dl-stat"><span className="dl-stat-label">CPC</span><span className="dl-stat-value">{fmtNum(s.cpc)}</span></div>}
                   <div className="dl-stat"><span className="dl-stat-label">Retail</span><span className="dl-stat-value">{fmt$(s.retail)}</span></div>
                   {s.rpc != null && <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(s.rpc)}</span></div>}
+                  <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(s.haircuts)}</span></div>
                 </div>
               </button>
               {isOpen && hasEmployeeData && (
@@ -436,7 +451,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
                   <EmployeeTable
                     rows={sortByMetric(s.employees, 'sales', 'desc')}
                     showStoreCol={false}
-                    footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours }}
+                    footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts }}
                     footerLabel="Store total / weighted avg"
                   />
                 </div>
@@ -565,6 +580,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   const [sortBy, setSortBy] = useState(metricA.key);
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
   const [expanded, setExpanded] = useState({});
+  const [expandedLeader, setExpandedLeader] = useState({});
   const isHistorical = !!(dateRange?.start && dateRange?.end);
   const getGoal = code => (goalType && goals?.[code]?.[goalType] != null ? goals[code][goalType] : null);
   const showGoals = !!goalType;
@@ -603,6 +619,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   }, [isHistorical, history, weeklyHistory, dateRange, report.stores, goals, goalType, showPrevMonthColor, prevMonthColorByCode]);
   const groups = useMemo(() => groupStoresByLeader(rows), [rows]);
   const toggleStore = code => setExpanded(prev => ({ ...prev, [code]: !prev[code] }));
+  const toggleLeader = name => setExpandedLeader(prev => ({ ...prev, [name]: !prev[name] }));
 
   const filteredGroups = useMemo(() => {
     if (!query.trim()) return groups;
@@ -652,83 +669,107 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
         </select>
       </div>
 
-      {viewMode === 'dl' && filteredGroups.map(g => {
-        const groupTotals = rollupRows(g.stores);
-        const sortedStores = sortByMetric(g.stores, sortBy, 'desc');
-        const goalTotal = groupGoalTotal(g.stores);
-        return (
-          <div key={g.leaderName} className="store-group">
-            <p className="store-group-title">
-              {g.leaderName} <span className="store-group-count">{g.role} · {g.stores.length} store{g.stores.length !== 1 ? 's' : ''}</span>
-            </p>
-            <div className="ledger-scroll">
-              <table className="ledger-table">
-                <thead>
-                  <tr>
-                    <th className="ledger-name-col">Store</th><th>{metricA.label}</th><th>{metricB.label}</th>
-                    {showPrevMonthColor && <th>Prev Month Color</th>}
-                    {showGoals && <><th>Goal</th><th>vs Goal</th></>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedStores.map(s => {
-                    const goal = getGoal(s.code);
-                    const diff = s.vsGoal;
-                    const isOpen = !!expanded[s.code];
-                    const hasEmployeeData = s.employees.length > 0;
-                    return (
-                      <React.Fragment key={s.name}>
-                        <tr className={hasEmployeeData ? 'store-row-clickable' : ''} onClick={hasEmployeeData ? () => toggleStore(s.code) : undefined}>
-                          <td className="ledger-name-col">
-                            {hasEmployeeData && <span className={`mini-chevron ${isOpen ? 'mini-chevron--open' : ''}`}>▸</span>} {s.name}
-                          </td>
-                          <td>{metricA.fmt(s[metricA.key])}</td>
-                          <td>{metricB.fmt(s[metricB.key])}</td>
-                          {showPrevMonthColor && <td>{s.prevMonthColor != null ? fmt$(s.prevMonthColor) : '—'}</td>}
+      {viewMode === 'dl' && (
+        <div className="dl-list">
+          {filteredGroups.map(g => {
+            const groupTotals = rollupRows(g.stores);
+            const sortedStores = sortByMetric(g.stores, sortBy, 'desc');
+            const goalTotal = groupGoalTotal(g.stores);
+            const groupDiff = goalTotal > 0 ? groupTotals[metricA.key] - goalTotal : null;
+            const isLeaderOpen = !!expandedLeader[g.leaderName];
+            return (
+              <div key={g.leaderName} className="dl-card">
+                <button className="dl-card-head" onClick={() => toggleLeader(g.leaderName)}>
+                  <div className="dl-card-name-wrap">
+                    <span className={`dl-chevron ${isLeaderOpen ? 'dl-chevron--open' : ''}`}>▸</span>
+                    <span className="dl-card-name">{g.leaderName}</span>
+                    <span className="dl-card-count">{g.role} · {g.stores.length} store{g.stores.length !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div className="dl-card-stats">
+                    <div className="dl-stat"><span className="dl-stat-label">{metricA.label}</span><span className="dl-stat-value">{metricA.fmt(groupTotals[metricA.key])}</span></div>
+                    <div className="dl-stat"><span className="dl-stat-label">{metricB.label}</span><span className="dl-stat-value">{metricB.fmt(groupTotals[metricB.key])}</span></div>
+                    {showPrevMonthColor && <div className="dl-stat"><span className="dl-stat-label">Prev Month Color</span><span className="dl-stat-value">{fmt$(prevMonthColSum(g.stores))}</span></div>}
+                    {showGoals && <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{goalTotal > 0 ? fmt$(goalTotal) : '—'}</span></div>}
+                    {showGoals && (
+                      <div className="dl-stat">
+                        <span className="dl-stat-label">vs Goal</span>
+                        <span className={`dl-stat-value ${vsGoalClass(groupDiff)}`}>{groupDiff != null ? `${groupDiff >= 0 ? '+' : ''}${fmt$(groupDiff)}` : '—'}</span>
+                      </div>
+                    )}
+                  </div>
+                </button>
+                {isLeaderOpen && (
+                  <div className="ledger-scroll dl-store-table">
+                    <table className="ledger-table">
+                      <thead>
+                        <tr>
+                          <th className="ledger-name-col">Store</th><th>{metricA.label}</th><th>{metricB.label}</th>
+                          {showPrevMonthColor && <th>Prev Month Color</th>}
+                          {showGoals && <><th>Goal</th><th>vs Goal</th></>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedStores.map(s => {
+                          const goal = getGoal(s.code);
+                          const diff = s.vsGoal;
+                          const isOpen = !!expanded[s.code];
+                          const hasEmployeeData = s.employees.length > 0;
+                          return (
+                            <React.Fragment key={s.name}>
+                              <tr className={hasEmployeeData ? 'store-row-clickable' : ''} onClick={hasEmployeeData ? () => toggleStore(s.code) : undefined}>
+                                <td className="ledger-name-col">
+                                  {hasEmployeeData && <span className={`mini-chevron ${isOpen ? 'mini-chevron--open' : ''}`}>▸</span>} {s.name}
+                                </td>
+                                <td>{metricA.fmt(s[metricA.key])}</td>
+                                <td>{metricB.fmt(s[metricB.key])}</td>
+                                {showPrevMonthColor && <td>{s.prevMonthColor != null ? fmt$(s.prevMonthColor) : '—'}</td>}
+                                {showGoals && (
+                                  <>
+                                    <td>{goal != null ? fmt$(goal) : '—'}</td>
+                                    <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${fmt$(diff)}` : '—'}</td>
+                                  </>
+                                )}
+                              </tr>
+                              {isOpen && s.employees.length > 0 && (
+                                <tr className="store-expand-row">
+                                  <td colSpan={colCount}>
+                                    <EmployeeTable
+                                      rows={sortByMetric(s.employees, 'sales', 'desc')}
+                                      showStoreCol={false}
+                                      footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts }}
+                                      footerLabel="Store total / weighted avg"
+                                    />
+                                  </td>
+                                </tr>
+                              )}
+                            </React.Fragment>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr className="ledger-avg-row">
+                          <td className="ledger-name-col">{g.leaderName} total / weighted avg</td>
+                          <td>{metricA.fmt(groupTotals[metricA.key])}</td>
+                          <td>{metricB.fmt(groupTotals[metricB.key])}</td>
+                          {showPrevMonthColor && <td>{fmt$(prevMonthColSum(g.stores))}</td>}
                           {showGoals && (
                             <>
-                              <td>{goal != null ? fmt$(goal) : '—'}</td>
-                              <td className={diff != null && diff < 0 ? 'ledger-margin-neg' : ''}>{diff != null ? `${diff >= 0 ? '+' : ''}${fmt$(diff)}` : '—'}</td>
+                              <td>{goalTotal > 0 ? fmt$(goalTotal) : '—'}</td>
+                              <td className={vsGoalClass(groupDiff)}>
+                                {groupDiff != null ? `${groupDiff >= 0 ? '+' : ''}${fmt$(groupDiff)}` : '—'}
+                              </td>
                             </>
                           )}
                         </tr>
-                        {isOpen && s.employees.length > 0 && (
-                          <tr className="store-expand-row">
-                            <td colSpan={colCount}>
-                              <EmployeeTable
-                                rows={sortByMetric(s.employees, 'sales', 'desc')}
-                                showStoreCol={false}
-                                footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours }}
-                                footerLabel="Store total / weighted avg"
-                              />
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr className="ledger-avg-row">
-                    <td className="ledger-name-col">{g.leaderName} total / weighted avg</td>
-                    <td>{metricA.fmt(groupTotals[metricA.key])}</td>
-                    <td>{metricB.fmt(groupTotals[metricB.key])}</td>
-                    {showPrevMonthColor && <td>{fmt$(prevMonthColSum(g.stores))}</td>}
-                    {showGoals && (
-                      <>
-                        <td>{goalTotal > 0 ? fmt$(goalTotal) : '—'}</td>
-                        <td className={goalTotal > 0 && groupTotals[metricA.key] - goalTotal < 0 ? 'ledger-margin-neg' : ''}>
-                          {goalTotal > 0 ? `${groupTotals[metricA.key] - goalTotal >= 0 ? '+' : ''}${fmt$(groupTotals[metricA.key] - goalTotal)}` : '—'}
-                        </td>
-                      </>
-                    )}
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          </div>
-        );
-      })}
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {viewMode === 'flat' && (
         <div className="ledger-scroll">
@@ -758,7 +799,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                       {showGoals && (
                         <>
                           <td>{goal != null ? fmt$(goal) : '—'}</td>
-                          <td className={diff != null && diff < 0 ? 'ledger-margin-neg' : ''}>{diff != null ? `${diff >= 0 ? '+' : ''}${fmt$(diff)}` : '—'}</td>
+                          <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${fmt$(diff)}` : '—'}</td>
                         </>
                       )}
                     </tr>
@@ -768,7 +809,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                           <EmployeeTable
                             rows={sortByMetric(s.employees, 'sales', 'desc')}
                             showStoreCol={false}
-                            footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours }}
+                            footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts }}
                             footerLabel="Store total / weighted avg"
                           />
                         </td>
@@ -787,7 +828,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                 {showGoals && (
                   <>
                     <td>{companyGoalTotal > 0 ? fmt$(companyGoalTotal) : '—'}</td>
-                    <td className={companyGoalTotal > 0 && t[metricA.key] - companyGoalTotal < 0 ? 'ledger-margin-neg' : ''}>
+                    <td className={companyGoalTotal > 0 ? vsGoalClass(t[metricA.key] - companyGoalTotal) : ''}>
                       {companyGoalTotal > 0 ? `${t[metricA.key] - companyGoalTotal >= 0 ? '+' : ''}${fmt$(t[metricA.key] - companyGoalTotal)}` : '—'}
                     </td>
                   </>
@@ -888,6 +929,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                       <div className="dl-stat"><span className="dl-stat-label">CPC</span><span className="dl-stat-value">{fmtNum(t.cpc)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Retail</span><span className="dl-stat-value">{fmt$(t.retail)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(t.rpc)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(t.haircuts)}</span></div>
                     </div>
                   </button>
                   {isOpen && (
@@ -900,6 +942,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                             <th>CPC</th>
                             <th>Retail</th>
                             <th>RPC</th>
+                            <th>Cuts</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -919,14 +962,15 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                                   <td>{fmtNum(s.cpc)}</td>
                                   <td>{fmt$(s.retail)}</td>
                                   <td>{fmtNum(s.rpc)}</td>
+                                  <td>{fmtInt(s.haircuts)}</td>
                                 </tr>
                                 {isStoreOpen && hasEmployeeData && (
                                   <tr className="store-expand-row">
-                                    <td colSpan={8}>
+                                    <td colSpan={9}>
                                       <EmployeeTable
                                         rows={sortByMetric(s.employees, 'sales', 'desc')}
                                         showStoreCol={false}
-                                        footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours }}
+                                        footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts }}
                                         footerLabel="Store total / weighted avg"
                                       />
                                     </td>
@@ -1028,7 +1072,7 @@ function NewHireTab({ report, employeeRoster, query, onQuery }) {
     return (
       <div className="empty-state">
         <p className="empty-title">No employee start-date file uploaded</p>
-        <p>Go to the Upload tab and add the "Employee Start Dates" file to see who's new.</p>
+        <p>Go to the Setup tab's Upload section and add the "Employee Start Dates" file to see who's new.</p>
       </div>
     );
   }
@@ -1252,7 +1296,44 @@ function StarRating({ value }) {
   return <span className="star-rating">{'★'.repeat(value)}{'☆'.repeat(Math.max(0, 5 - value))}</span>;
 }
 
-function ReviewCard({ review, employeeMatch }) {
+// Reviews have no id from the source export — this composite is stable
+// across reloads/re-uploads (unlike an array index) so notes can survive
+// a fresh reviews-file upload without being tied to array position.
+function reviewKey(r) { return `${r.code}|${r.postedAt}|${r.userName}|${r.rating}`; }
+
+function ReviewNotes({ notes, onAdd }) {
+  const [draft, setDraft] = useState('');
+  const submit = () => {
+    const text = draft.trim();
+    if (!text) return;
+    onAdd(text);
+    setDraft('');
+  };
+  return (
+    <div className="review-notes">
+      {notes.length > 0 && (
+        <div className="review-notes-list">
+          {[...notes].reverse().map((n, i) => (
+            <div key={i} className="review-notes-entry">
+              <span className="review-notes-entry-date">{new Date(n.at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+              <span className="review-notes-entry-text">{n.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="review-notes-input-row">
+        <input
+          className="review-notes-input" value={draft} placeholder="Add a note (e.g. \"Called 7/22 - resolved - EJ\")…"
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+        />
+        <button className="review-notes-add" onClick={submit} disabled={!draft.trim()}>Add</button>
+      </div>
+    </div>
+  );
+}
+
+function ReviewCard({ review, employeeMatch, notes, onAddNote }) {
   const tone = review.rating <= 2 ? 'neg' : review.rating >= 4 ? 'pos' : 'neu';
   return (
     <div className={`review-card review-card--${tone}`}>
@@ -1263,6 +1344,7 @@ function ReviewCard({ review, employeeMatch }) {
       </div>
       {review.message && <p className="review-message">{review.message}</p>}
       {employeeMatch && <p className="review-employee-tag">👤 Mentions: {employeeMatch}</p>}
+      {onAddNote && <ReviewNotes notes={notes || []} onAdd={text => onAddNote(reviewKey(review), text)} />}
     </div>
   );
 }
@@ -1277,15 +1359,19 @@ const REVIEW_SORT_OPTIONS = [
   { key: 'positive', label: 'Most Positive' },
 ];
 
-function ReviewsTab({ report, reviews, query, onQuery }) {
+function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewNote }) {
   const [viewMode, setViewMode] = useState('flat'); // 'flat' | 'dl'
   const [category, setCategory] = useState(null);
+  const [sentiment, setSentiment] = useState(null); // null | 'pos' | 'neg'
   const [expandedStore, setExpandedStore] = useState({});
   const [expandedLeader, setExpandedLeader] = useState({});
   const [sortBy, setSortBy] = useState('reviews');
 
+  const selectCategory = key => { setCategory(prev => prev === key ? null : key); setSentiment(null); };
+  const selectSentiment = key => { setSentiment(prev => prev === key ? null : key); setCategory(null); };
+
   if (!reviews) {
-    return <div className="empty-state"><p className="empty-title">No reviews uploaded yet</p><p>Go to the Upload tab and add the reviews export.</p></div>;
+    return <div className="empty-state"><p className="empty-title">No reviews uploaded yet</p><p>Go to the Setup tab's Upload section and add the reviews export.</p></div>;
   }
 
   const allReviews = reviews.reviews;
@@ -1315,9 +1401,14 @@ function ReviewsTab({ report, reviews, query, onQuery }) {
   }, [negative]);
 
   const storeRows = useMemo(() => {
+    const matcher = category
+      ? r => isNegativeReview(r) && reviewMatchesCategory(r.message, category)
+      : sentiment === 'pos' ? isPositiveReview
+      : sentiment === 'neg' ? isNegativeReview
+      : null;
     return Array.from(storeMap.values())
       .map(s => {
-        const matching = category ? s.reviews.filter(r => isNegativeReview(r) && reviewMatchesCategory(r.message, category)) : null;
+        const matching = matcher ? s.reviews.filter(matcher) : null;
         const avg = s.reviews.length ? s.reviews.reduce((a, r) => a + r.rating, 0) / s.reviews.length : 0;
         return {
           ...s, avg,
@@ -1326,8 +1417,8 @@ function ReviewsTab({ report, reviews, query, onQuery }) {
           matchCount: matching ? matching.length : null,
         };
       })
-      .filter(s => !category || s.matchCount > 0);
-  }, [storeMap, category]);
+      .filter(s => !matcher || s.matchCount > 0);
+  }, [storeMap, category, sentiment]);
 
   const filteredStores = useMemo(() => {
     if (!query.trim()) return storeRows;
@@ -1373,13 +1464,17 @@ function ReviewsTab({ report, reviews, query, onQuery }) {
 
   const renderReviewList = s => {
     const employeesForStore = report?.stores.find(st => st.code === s.code)?.employees || null;
-    const reviewList = category
-      ? s.reviews.filter(r => isNegativeReview(r) && reviewMatchesCategory(r.message, category))
-      : [...s.reviews].sort((a, b) => b.postedAt.localeCompare(a.postedAt));
+    let reviewList = [...s.reviews].sort((a, b) => b.postedAt.localeCompare(a.postedAt));
+    if (category) reviewList = reviewList.filter(r => isNegativeReview(r) && reviewMatchesCategory(r.message, category));
+    else if (sentiment === 'pos') reviewList = reviewList.filter(isPositiveReview);
+    else if (sentiment === 'neg') reviewList = reviewList.filter(isNegativeReview);
     return (
       <div className="dl-store-table review-list">
         {reviewList.map((r, i) => (
-          <ReviewCard key={i} review={r} employeeMatch={detectEmployeeMention(r.message, employeesForStore)} />
+          <ReviewCard
+            key={i} review={r} employeeMatch={detectEmployeeMention(r.message, employeesForStore)}
+            notes={reviewNotes?.[reviewKey(r)]} onAddNote={onAddReviewNote}
+          />
         ))}
         {!reviewList.length && <p className="empty-note" style={{ padding: '12px' }}>No reviews to show here.</p>}
       </div>
@@ -1472,14 +1567,19 @@ function ReviewsTab({ report, reviews, query, onQuery }) {
       <div className="summary-grid">
         <div className="summary-tile"><p className="summary-tile-label">Total Reviews</p><p className="summary-tile-value">{totalCount}</p></div>
         <div className="summary-tile"><p className="summary-tile-label">Overall Average</p><p className={`summary-tile-value ${ratingClass(overallAvg)}`}>{overallAvg.toFixed(2)}★</p></div>
-        <div className="summary-tile"><p className="summary-tile-label">Positive (4–5★)</p><p className="summary-tile-value">{positive.length}<span className={`summary-tile-sub ${ratingClass(posAvg)}`}> · {posAvg.toFixed(2)}★ avg</span></p></div>
-        <div className="summary-tile"><p className="summary-tile-label">Negative (1–3★)</p><p className="summary-tile-value">{negative.length}<span className={`summary-tile-sub ${ratingClass(negAvg)}`}> · {negAvg.toFixed(2)}★ avg</span></p></div>
+        <button className={`summary-tile ${sentiment === 'pos' ? 'summary-tile--active' : ''}`} onClick={() => selectSentiment('pos')}>
+          <p className="summary-tile-label">Positive (4–5★)</p><p className="summary-tile-value">{positive.length}<span className={`summary-tile-sub ${ratingClass(posAvg)}`}> · {posAvg.toFixed(2)}★ avg</span></p>
+        </button>
+        <button className={`summary-tile ${sentiment === 'neg' ? 'summary-tile--active' : ''}`} onClick={() => selectSentiment('neg')}>
+          <p className="summary-tile-label">Negative (1–3★)</p><p className="summary-tile-value">{negative.length}<span className={`summary-tile-sub ${ratingClass(negAvg)}`}> · {negAvg.toFixed(2)}★ avg</span></p>
+        </button>
       </div>
+      {sentiment && <button className="btn-ghost btn-clear-filter" onClick={() => setSentiment(null)}>Clear "{sentiment === 'pos' ? 'Positive' : 'Negative'}" filter</button>}
 
       <p className="section-hint">Tap a category to see negative (1–3★) reviews mentioning it, grouped by store.</p>
       <div className="summary-grid">
         {REVIEW_CATEGORIES.map(c => (
-          <button key={c.key} className={`summary-tile ${category === c.key ? 'summary-tile--active' : ''}`} onClick={() => setCategory(category === c.key ? null : c.key)}>
+          <button key={c.key} className={`summary-tile ${category === c.key ? 'summary-tile--active' : ''}`} onClick={() => selectCategory(c.key)}>
             <p className="summary-tile-label">{c.label}</p>
             <p className="summary-tile-value">{categoryCounts[c.key]}</p>
           </button>
@@ -1752,13 +1852,14 @@ function expandDateRange(start, end) {
   }
   return dates;
 }
-const EMPTY_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0 };
+const EMPTY_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0 };
 function addInto(target, src) {
   target.service += src.service || 0;
   target.retail += src.retail || 0;
   target.color += src.color || 0;
   target.hours += src.hours || 0;
   target.giftCards += src.giftCards || 0;
+  target.haircuts += src.haircuts || 0;
 }
 
 // Builds one row per week — a real uploaded Stylist Report week where one
@@ -1855,7 +1956,7 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
       {grouping === 'total' && (
         <div className="ledger-scroll">
           <table className="ledger-table">
-            <thead><tr><th className="ledger-name-col">{granularity === 'week' ? 'Week' : 'Month'}</th><th>Service Sales</th><th>Color</th><th>Retail</th><th>Gift Cards</th></tr></thead>
+            <thead><tr><th className="ledger-name-col">{granularity === 'week' ? 'Week' : 'Month'}</th><th>Service Sales</th><th>Color</th><th>Retail</th><th>Gift Cards</th><th>Cuts</th></tr></thead>
             <tbody>
               {[...periods].reverse().map(p => {
                 const t = periodTotals(p.stores);
@@ -1866,6 +1967,7 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
                     <td>{fmt$(t.color)}</td>
                     <td>{fmt$(t.retail)}</td>
                     <td>{t.giftCards > 0 ? fmt$(t.giftCards) : '—'}</td>
+                    <td>{fmtInt(t.haircuts)}</td>
                   </tr>
                 );
               })}
@@ -1890,7 +1992,7 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
                 {isOpen && (
                   <div className="ledger-scroll dl-store-table">
                     <table className="ledger-table">
-                      <thead><tr><th className="ledger-name-col">{granularity === 'week' ? 'Week' : 'Month'}</th><th>Service Sales</th><th>Color</th><th>Retail</th><th>Gift Cards</th></tr></thead>
+                      <thead><tr><th className="ledger-name-col">{granularity === 'week' ? 'Week' : 'Month'}</th><th>Service Sales</th><th>Color</th><th>Retail</th><th>Gift Cards</th><th>Cuts</th></tr></thead>
                       <tbody>
                         {[...periods].reverse().map(p => {
                           const subset = {};
@@ -1903,6 +2005,7 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
                               <td>{fmt$(t.color)}</td>
                               <td>{fmt$(t.retail)}</td>
                               <td>{t.giftCards > 0 ? fmt$(t.giftCards) : '—'}</td>
+                              <td>{fmtInt(t.haircuts)}</td>
                             </tr>
                           );
                         })}
@@ -1924,6 +2027,23 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
 // each question, so the AI answers from your real numbers instead of guessing.
 // Covers the live report AND the full permanent history (every Historical
 // Import + every weekly upload, ever), rolled up by month so it stays compact.
+function monthRange(monthKey) {
+  const [y, m] = monthKey.split('-').map(Number);
+  const start = `${monthKey}-01`;
+  const lastDay = new Date(y, m, 0).getDate();
+  const end = `${monthKey}-${String(lastDay).padStart(2, '0')}`;
+  return { start, end };
+}
+// Compact "who sold the most X" lookup: top 5 names by Sales/Retail/Color,
+// one line per month, built from the same per-employee data the date-range
+// tabs use (getRangeTotals + mergeEmployeesInto/finalizeEmployee) — without
+// this, Tilly has zero visibility into any employee, historical or current.
+function topEmployeeLine(employees) {
+  if (!employees.length) return null;
+  const topBy = key => [...employees].sort((a, b) => (b[key] || 0) - (a[key] || 0)).slice(0, 5)
+    .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
+  return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
+}
 function buildAIContext(report, history, weeklyHistory, goals, reviews) {
   const lines = [];
 
@@ -1939,6 +2059,10 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews) {
       const goalStr = goal ? ` | Color Goal: ${goal.colorGoal ?? 'none'}, Retail Goal: ${goal.retailGoal ?? 'none'}` : '';
       lines.push(`${s.name}: Sales $${Math.round(st.sales)}, TSTH $${st.tsth != null ? st.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(st.totalHours)}, Color $${Math.round(st.colorSales)}, Retail $${Math.round(st.retail)}, CPC ${st.cpc != null ? st.cpc.toFixed(2) : 'n/a'}, RPC ${st.rpc != null ? st.rpc.toFixed(2) : 'n/a'}${goalStr}`);
     });
+    if (report.allEmployees?.length) {
+      const line = topEmployeeLine(report.allEmployees);
+      if (line) { lines.push(''); lines.push(`TOP EMPLOYEES THIS PERIOD (top 5 each) — ${line}`); }
+    }
   } else {
     lines.push('No current stylist report is loaded on the site right now.');
   }
@@ -1955,6 +2079,17 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews) {
       const t = periodTotals(m.stores);
       lines.push(`${m.month}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Gift Cards $${Math.round(t.giftCards)}, Hours ${Math.round(t.hours)}`);
     });
+
+    lines.push('');
+    lines.push('TOP EMPLOYEES BY MONTH (top 5 each for Sales, Retail, Color Sales — covers every store, from weekly uploads and Sales-Accrual/Attendance historical imports; a name/month missing here means no per-employee data exists for that period):');
+    months.forEach(m => {
+      const { start, end } = monthRange(m.month);
+      const totals = getRangeTotals(history, weeklyHistory, start, end);
+      const companyEmployees = {};
+      Object.values(totals).forEach(t => { if (t.employees?.length) mergeEmployeesInto(companyEmployees, t.employees); });
+      const line = topEmployeeLine(Object.values(companyEmployees).map(finalizeEmployee));
+      if (line) lines.push(`${m.month} — ${line}`);
+    });
   }
 
   if (reviews?.reviews?.length) {
@@ -1969,17 +2104,42 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews) {
   return lines.join('\n');
 }
 
+// Small badge for the header, next to the title — a scissors mark in the
+// app's own navy/red/gold palette (ties into "Supercuts" and the Cuts metric).
+function HeaderLogo({ size = 36 }) {
+  return (
+    <svg viewBox="0 0 40 40" width={size} height={size} xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <circle cx="20" cy="20" r="19" fill="#C23B3B" stroke="#C9A227" strokeWidth="1.5" />
+      <g stroke="#fff" strokeWidth="2.1" strokeLinecap="round" fill="none">
+        <line x1="14" y1="14" x2="26" y2="26" />
+        <line x1="26" y1="14" x2="14" y2="26" />
+      </g>
+      <circle cx="13" cy="13" r="2.6" fill="none" stroke="#fff" strokeWidth="1.8" />
+      <circle cx="13" cy="27" r="2.6" fill="none" stroke="#fff" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
 function RobinNestIcon({ size = 28 }) {
   return (
     <svg viewBox="0 0 40 40" width={size} height={size} xmlns="http://www.w3.org/2000/svg">
-      <ellipse cx="20" cy="30.5" rx="15" ry="5.5" fill="#8B5E3C" />
-      <path d="M6 30 Q20 23 34 30" stroke="#6B4423" strokeWidth="1.4" fill="none" strokeLinecap="round" />
-      <path d="M8.5 27.5 Q20 21.5 31.5 27.5" stroke="#6B4423" strokeWidth="1.4" fill="none" strokeLinecap="round" />
-      <ellipse cx="19.5" cy="19.5" rx="9" ry="8" fill="#5B7C8D" />
-      <ellipse cx="19.5" cy="23" rx="6" ry="5" fill="#D2691E" />
-      <circle cx="20" cy="11.5" r="6" fill="#5B7C8D" />
-      <circle cx="22.5" cy="10.5" r="1.1" fill="#1A1A1A" />
-      <path d="M26 11.5 L30 12.5 L26 13.5 Z" fill="#E8A33D" />
+      <defs>
+        <linearGradient id="robinBody" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#6B8CA3" />
+          <stop offset="100%" stopColor="#3F5A6E" />
+        </linearGradient>
+      </defs>
+      <ellipse cx="20" cy="31" rx="16" ry="5.5" fill="#B5722F" />
+      <path d="M5 30.5 Q20 25 35 30.5" stroke="#8A5423" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+      <path d="M7 28 Q20 23.5 33 28" stroke="#8A5423" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+      <path d="M9.5 25.8 Q20 22 30.5 25.8" stroke="#8A5423" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+      <path d="M8 21 Q3 22.5 4 26 Q8.5 24.5 11 21.5 Z" fill="#3F5A6E" />
+      <ellipse cx="20.5" cy="20" rx="9.5" ry="8.5" fill="url(#robinBody)" />
+      <ellipse cx="20" cy="24" rx="6.2" ry="5.2" fill="#D9714B" />
+      <circle cx="21" cy="11.5" r="6.2" fill="url(#robinBody)" />
+      <circle cx="23" cy="10.5" r="1.7" fill="#fff" />
+      <circle cx="23.4" cy="10.5" r="0.9" fill="#1A1A1A" />
+      <path d="M27 11.8 L31 12.8 L27 14 Z" fill="#E8A33D" />
     </svg>
   );
 }
@@ -2015,7 +2175,7 @@ function AIChatWidget({ report, history, weeklyHistory, goals, reviews }) {
   return (
     <>
       <button className="ai-chat-fab" onClick={() => setOpen(o => !o)} aria-label="Chat with Tilly">
-        {open ? <span className="ai-chat-fab-close">✕</span> : <RobinNestIcon />}
+        {open ? <span className="ai-chat-fab-close">✕</span> : <RobinNestIcon size={38} />}
       </button>
       {open && (
         <div className="ai-chat-panel">
@@ -2040,21 +2200,43 @@ function AIChatWidget({ report, history, weeklyHistory, goals, reviews }) {
 }
 
 // ─── Setup tab ──────────────────────────────────────────────────────────────
-function SetupTab({ configured }) {
+const SETUP_SECTIONS = [
+  { key: 'guide', label: 'Guide' },
+  { key: 'goals', label: 'Goals' },
+  { key: 'history', label: 'Historical Import' },
+  { key: 'upload', label: 'Upload' },
+];
+
+function SetupTab({ configured, section, onSection, goalsProps, historyProps, uploadProps }) {
   const steps = [
     { n: 1, title: 'Export this week\u2019s stylist report', body: 'Run the report with every store and every employee under it, covering the week you want to see.' },
-    { n: 2, title: 'Upload it', body: 'Go to the Upload tab and drop it into the "Stylist Report" slot. The date range fills in automatically.' },
+    { n: 2, title: 'Upload it', body: 'Go to the Upload section below and drop it into the "Stylist Report" slot. The date range fills in automatically.' },
     { n: 3, title: 'Optionally upload employee start dates', body: 'A simple Employee Name + Start Date export. Drop it into the "Employee Start Dates" slot to power the "60 Day Employee" tab, which shows anyone hired in the last 60 days along with their store, DL, and sales — even if they don\u2019t have sales data yet.' },
     { n: 4, title: 'Explore the tabs', body: 'Overview: tap a metric to see the top/bottom 10 stores. Stores: every location, click one to see its employees. Employees: every stylist company-wide. Retail / Color Sales: grouped by DL, or toggle to a flat list. DL: rolled-up totals per leader, click to expand their stores. 60 Day Employee: recent hires. Reviews: totals, negative-review categories, and per-store review lists with employee call-outs. Every tab has a search box.' },
     { n: 5, title: 'Next week', body: 'Just upload a new stylist report the same way \u2014 it replaces this week\u2019s data for everyone viewing the site.' },
   ];
   return (
     <div className="tab-content setup-tab">
+      <div className="setup-status setup-status--warn">
+        If your name doesn't start with Evan and end in Robins, you're not supposed to be here.
+      </div>
       <div className={`setup-status ${configured ? 'setup-status--ok' : 'setup-status--warn'}`}>
         {configured
           ? '✓ Connected to Supabase — your data syncs across devices.'
           : '⚠ Supabase not connected — data is only saved on this device.'}
       </div>
+
+      <div className="view-toggle">
+        {SETUP_SECTIONS.map(s => (
+          <button key={s.key} className={`view-toggle-btn ${section === s.key ? 'active' : ''}`} onClick={() => onSection(s.key)}>{s.label}</button>
+        ))}
+      </div>
+
+      {section === 'goals' && <GoalsTab {...goalsProps} />}
+      {section === 'history' && <HistoricalImportTab {...historyProps} />}
+      {section === 'upload' && <UploadTab {...uploadProps} />}
+
+      {section === 'guide' && <>
       <div className="setup-section">
         {steps.map(s => (
           <div key={s.n} className="setup-step">
@@ -2085,18 +2267,20 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;`}<
           <p className="step-body">Then add <code>REACT_APP_SUPABASE_URL</code> and <code>REACT_APP_SUPABASE_ANON_KEY</code> as environment variables in Vercel, using the values from Supabase → Settings → API.</p>
         </div>
       )}
+      </>}
     </div>
   );
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Goals', 'Weekly', 'Historical Import', 'Upload', 'Setup'];
+const TABS = ['Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Weekly', 'Setup'];
 
 export default function App() {
   const [report, setReport] = useState(null);
   const [employeeRoster, setEmployeeRoster] = useState(null);
   const [goals, setGoals] = useState({});
   const [reviews, setReviews] = useState(null);
+  const [reviewNotes, setReviewNotes] = useState({});
   const [history, setHistory] = useState({});
   const [weeklyHistory, setWeeklyHistory] = useState({});
   const [dateRange, setDateRangeState] = useState({ start: null, end: null });
@@ -2104,6 +2288,7 @@ export default function App() {
   const [label, setLabel] = useState('');
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('Overview');
+  const [setupSection, setSetupSection] = useState('guide');
   const [toast, setToast] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadingRoster, setUploadingRoster] = useState(false);
@@ -2113,14 +2298,15 @@ export default function App() {
 
   useEffect(() => {
     Promise.all([
-      loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('reviews'),
+      loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('reviews'), loadData('review_notes'),
       loadDataByPrefix('daily_history_'), loadDataByPrefix('weekly_history_'),
       loadData('daily_history'), loadData('weekly_history'), // legacy single-row format, if anything was saved before chunking
-    ]).then(([reportRes, rosterRes, goalsRes, reviewsRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
-      if (reportRes.data) setReport(reportRes.data); else setTab('Upload');
+    ]).then(([reportRes, rosterRes, goalsRes, reviewsRes, reviewNotesRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
+      if (reportRes.data) setReport(reportRes.data); else { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
       if (reviewsRes.data) setReviews(reviewsRes.data);
+      if (reviewNotesRes.data) setReviewNotes(reviewNotesRes.data);
 
       const mergedDaily = {};
       (dailyChunksRes.data || []).forEach(chunk => Object.assign(mergedDaily, chunk.payload));
@@ -2235,7 +2421,8 @@ export default function App() {
     await clearData('stylist_report');
     setReport(null);
     setLabel('');
-    setTab('Upload');
+    setTab('Setup');
+    setSetupSection('upload');
     showToast('Stylist report cleared');
   };
 
@@ -2270,6 +2457,21 @@ export default function App() {
     setReviews(null);
     showToast('Reviews cleared');
   };
+
+  // Notes live in their own db key (not inside reviews.reviews) so they
+  // survive a fresh re-upload of the reviews export, which rebuilds that
+  // array from scratch every time.
+  const handleAddReviewNote = useCallback((key, text) => {
+    setReviewNotes(prev => {
+      const next = { ...prev, [key]: [...(prev[key] || []), { text, at: new Date().toISOString() }] };
+      saveData('review_notes', next).then(result => {
+        if (isConfigured() && !result.ok) {
+          showToast(`Note saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+        }
+      });
+      return next;
+    });
+  }, []);
 
   const handleSaveGoal = useCallback((storeCode, field, value) => {
     setGoals(prev => {
@@ -2382,7 +2584,7 @@ export default function App() {
 
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
-  const needsReport = !report && tab !== 'Upload' && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Goals' && tab !== 'Reviews' && tab !== 'Historical Import' && tab !== 'Weekly';
+  const needsReport = !report && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Reviews' && tab !== 'Weekly';
 
   return (
     <div className="app">
@@ -2390,8 +2592,11 @@ export default function App() {
 
       <header className="app-header">
         <div className="header-left">
-          <h1 className="app-title">Store Scoreboard</h1>
-          <p className="app-subtitle">{label || 'Weekly performance across every location'}</p>
+          <HeaderLogo />
+          <div>
+            <h1 className="app-title">Supercuts Metrics</h1>
+            <p className="app-subtitle">{label || 'Weekly performance across every location'}</p>
+          </div>
         </div>
       </header>
 
@@ -2401,7 +2606,7 @@ export default function App() {
         ))}
       </nav>
       <main className="app-main">
-        {needsReport && <div className="empty-state"><p className="empty-title">No report yet</p><p>Go to the Upload tab to add this week's report.</p></div>}
+        {needsReport && <div className="empty-state"><p className="empty-title">No report yet</p><p>Go to the Setup tab's Upload section to add this week's report.</p></div>}
         {!needsReport && tab === 'Overview' && report && (
           <OverviewTab report={report} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} />
         )}
@@ -2435,28 +2640,26 @@ export default function App() {
           <NewHireTab report={report} employeeRoster={employeeRoster} query={queries['60 Day Employee']} onQuery={v => setQuery('60 Day Employee', v)} />
         )}
         {tab === 'Reviews' && (
-          <ReviewsTab report={report} reviews={reviews} query={queries.Reviews} onQuery={v => setQuery('Reviews', v)} />
-        )}
-        {tab === 'Goals' && (
-          <GoalsTab report={report} goals={goals} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} />
+          <ReviewsTab
+            report={report} reviews={reviews} query={queries.Reviews} onQuery={v => setQuery('Reviews', v)}
+            reviewNotes={reviewNotes} onAddReviewNote={handleAddReviewNote}
+          />
         )}
         {tab === 'Weekly' && (
           <WeeklyTab dailyHistory={history} weeklyHistory={weeklyHistory} />
         )}
-        {tab === 'Historical Import' && (
-          <HistoricalImportTab
-            history={history} onImportSalesBatch={handleImportSalesBatch}
-            onImportAttendanceBatch={handleImportAttendanceBatch} onClearHistory={handleClearHistory}
+        {tab === 'Setup' && (
+          <SetupTab
+            configured={isConfigured()} section={setupSection} onSection={setSetupSection}
+            goalsProps={{ report, goals, onSaveGoal: handleSaveGoal, onImportGoals: handleImportGoals }}
+            historyProps={{ history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory }}
+            uploadProps={{
+              report, uploading, onFile: handleFile, onClear: handleClearAll,
+              employeeRoster, uploadingRoster, onRosterFile: handleRosterFile, onClearRoster: handleClearRoster,
+              reviews, uploadingReviews, onReviewsFile: handleReviewsFile, onClearReviews: handleClearReviews,
+            }}
           />
         )}
-        {tab === 'Upload' && (
-          <UploadTab
-            report={report} uploading={uploading} onFile={handleFile} onClear={handleClearAll}
-            employeeRoster={employeeRoster} uploadingRoster={uploadingRoster} onRosterFile={handleRosterFile} onClearRoster={handleClearRoster}
-            reviews={reviews} uploadingReviews={uploadingReviews} onReviewsFile={handleReviewsFile} onClearReviews={handleClearReviews}
-          />
-        )}
-        {tab === 'Setup' && <SetupTab configured={isConfigured()} />}
       </main>
       <AIChatWidget report={report} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} />
     </div>

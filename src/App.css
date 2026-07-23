@@ -3,6 +3,7 @@
   --navy-2: #1F3A63;
   --red: #C23B3B;
   --red-deep: #9B2E2E;
+  --green: #2E7D4F;
   --gold: #C9A227;
   --silver: #9AA7B4;
   --bronze: #B5722F;
@@ -22,6 +23,7 @@
   display: flex; align-items: flex-start; justify-content: space-between;
   padding: 22px 20px 16px; background: var(--navy); color: #fff;
 }
+.header-left { display: flex; align-items: center; gap: 12px; }
 .app-title {
   font-family: 'Barlow Condensed', sans-serif;
   font-weight: 700; font-size: 30px; letter-spacing: 0.01em; text-transform: uppercase;
@@ -136,6 +138,11 @@
 .date-range-input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--navy); background: #fff; }
 .date-range-to { font-size: 12px; color: var(--ink-soft); }
 .date-range-clear { font-size: 11.5px; padding: 5px 10px; }
+.date-range-quick-btn {
+  font-family: 'Inter', sans-serif; font-size: 11.5px; font-weight: 600; padding: 6px 12px; border-radius: 20px;
+  background: var(--paper); border: 1px solid var(--line); color: var(--navy); cursor: pointer;
+}
+.date-range-quick-btn:hover { border-color: var(--red); color: var(--red-deep); }
 .date-range-note { font-size: 11px; color: var(--ink-soft); font-style: italic; flex-basis: 100%; }
 
 /* ─── Employee focus mode (click a name to dim everyone else) ───────── */
@@ -223,6 +230,8 @@
 .ledger-table tbody tr:hover { background: rgba(194,59,59,0.08); }
 .ledger-table tbody tr:hover .ledger-name-col { background: #F3E3E3; }
 .ledger-rate { font-weight: 600; color: var(--red-deep); }
+.ledger-margin-neg { color: var(--red-deep); font-weight: 600; }
+.ledger-margin-pos { color: var(--green); font-weight: 600; }
 .ledger-avg-row { border-top: 2px solid var(--red); font-weight: 600; background: rgba(194,59,59,0.06); }
 .ledger-avg-row td { padding-top: 9px; padding-bottom: 9px; }
 .ledger-avg-row .ledger-name-col { background: #F3E3E3; }
@@ -271,11 +280,13 @@
 .dl-chevron--open { transform: rotate(90deg); }
 .dl-card-name { font-family: 'Barlow Condensed', sans-serif; font-size: 18px; font-weight: 600; color: var(--navy); }
 .dl-card-count { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); margin-left: auto; }
-.dl-card-stats { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+.dl-card-stats { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; }
 @media (max-width: 760px) { .dl-card-stats { grid-template-columns: repeat(3, 1fr); } }
 .dl-stat { display: flex; flex-direction: column; }
 .dl-stat-label { font-size: 9.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.02em; }
 .dl-stat-value { font-family: 'IBM Plex Mono', monospace; font-size: 13px; font-weight: 600; color: var(--navy); }
+.dl-stat-value.ledger-margin-pos { color: var(--green); }
+.dl-stat-value.ledger-margin-neg { color: var(--red-deep); }
 .dl-store-table { border: none; box-shadow: none; border-top: 1px solid var(--line); border-radius: 0; }
 
 /* ─── Reviews tab ────────────────────────────────────────────────────── */
@@ -287,7 +298,7 @@
 .store-group-role-label { margin-bottom: 4px; }
 .review-list { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .review-card { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; border-left: 3px solid var(--line); }
-.review-card--pos { border-left-color: #2E7D4F; }
+.review-card--pos { border-left-color: var(--green); }
 .review-card--neg { border-left-color: var(--red); }
 .review-card--neu { border-left-color: var(--gold); }
 .review-card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -297,7 +308,18 @@
 .review-message { font-size: 13px; color: var(--navy); line-height: 1.5; margin-top: 6px; }
 .review-employee-tag { font-size: 11.5px; color: var(--red-deep); font-weight: 600; margin-top: 6px; }
 
-.rating-good { color: #2E7D4F !important; }
+.review-notes { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.review-notes-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+.review-notes-entry { font-size: 12px; color: var(--navy); display: flex; gap: 8px; }
+.review-notes-entry-date { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--ink-soft); flex: none; white-space: nowrap; }
+.review-notes-input-row { display: flex; gap: 6px; }
+.review-notes-input { flex: 1; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; font-family: 'Inter', sans-serif; font-size: 12px; }
+.review-notes-input:focus { outline: none; border-color: var(--red); }
+.review-notes-add { background: var(--navy); color: #fff; border: none; border-radius: 6px; padding: 6px 12px; font-size: 11.5px; font-weight: 600; cursor: pointer; }
+.review-notes-add:hover { background: var(--navy-2); }
+.review-notes-add:disabled { opacity: 0.5; cursor: default; }
+
+.rating-good { color: var(--green) !important; }
 .rating-bad { color: var(--red) !important; }
 .app-loading { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
 .spinner { border: 2px solid var(--line); border-top-color: var(--red); border-radius: 50%; animation: spin 0.7s linear infinite; }
@@ -307,19 +329,19 @@
 
 /* ─── AI Chat widget ─────────────────────────────────────────────────── */
 .ai-chat-fab {
-  position: fixed; bottom: 24px; right: 24px; width: 56px; height: 56px; border-radius: 50%;
+  position: fixed; bottom: 24px; right: 24px; width: 72px; height: 72px; border-radius: 50%;
   background: #fff; border: 2px solid var(--red); cursor: pointer;
   box-shadow: 0 4px 14px rgba(0,0,0,0.25); z-index: 1000; display: flex; align-items: center; justify-content: center;
 }
-.ai-chat-fab-close { font-size: 20px; color: var(--red); font-weight: 700; }
+.ai-chat-fab-close { font-size: 26px; color: var(--red); font-weight: 700; }
 .ai-chat-fab:hover { transform: scale(1.05); }
 .ai-chat-panel {
-  position: fixed; bottom: 90px; right: 24px; width: 340px; max-width: calc(100vw - 32px); max-height: 60vh;
+  position: fixed; bottom: 106px; right: 24px; width: 420px; max-width: calc(100vw - 32px); max-height: 72vh;
   background: var(--card); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.25);
   display: flex; flex-direction: column; z-index: 1000; overflow: hidden;
 }
-.ai-chat-header { font-family: 'Barlow Condensed', sans-serif; font-size: 16px; font-weight: 700; color: var(--navy); padding: 12px 14px; border-bottom: 1px solid var(--line); margin: 0; }
-.ai-chat-messages { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-height: 120px; }
+.ai-chat-header { font-family: 'Barlow Condensed', sans-serif; font-size: 18px; font-weight: 700; color: var(--navy); padding: 14px 16px; border-bottom: 1px solid var(--line); margin: 0; }
+.ai-chat-messages { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; min-height: 220px; }
 .ai-chat-empty { font-size: 12px; color: var(--ink-soft); font-style: italic; }
 .ai-chat-msg { font-size: 13px; line-height: 1.5; padding: 8px 10px; border-radius: 10px; white-space: pre-wrap; }
 .ai-chat-msg--user { background: var(--navy); color: #fff; align-self: flex-end; max-width: 85%; }
