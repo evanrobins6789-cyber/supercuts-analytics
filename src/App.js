@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDataByPrefix } from './db';
 import {
   parseStylistReport, parseEmployeeStartDates, parseGoalFile, parseReviews, normalizeName,
@@ -2627,6 +2627,17 @@ export default function App() {
   const [reviews, setReviews] = useState(null);
   const [reviewNotes, setReviewNotes] = useState({});
   const [history, setHistory] = useState({});
+  // Sales-Accrual and Attendance historical imports are two independent
+  // upload slots that can be fired off close together — both handlers would
+  // otherwise read the same `history` snapshot, merge their own file in, and
+  // whichever's setHistory/save landed last would silently overwrite the
+  // other's data (both in memory and in what gets persisted). historyRef
+  // always holds the latest value so a handler starting mid-import reads
+  // fresh data instead of a stale closure, and importChainRef serializes the
+  // two handlers so they never merge+save concurrently off the same base.
+  const historyRef = useRef(history);
+  useEffect(() => { historyRef.current = history; }, [history]);
+  const importChainRef = useRef(Promise.resolve());
   const [weeklyHistory, setWeeklyHistory] = useState({});
   const [dateRange, setDateRangeState] = useState({ start: null, end: null });
   const setDateRange = (start, end) => setDateRangeState({ start, end });
@@ -2916,55 +2927,75 @@ export default function App() {
     return { ok, error: lastError, failedMonths };
   };
 
-  const handleImportSalesBatch = useCallback(async fileList => {
-    let working = history;
-    const touchedMonths = new Set();
-    const lines = [];
-    for (const file of fileList) {
-      try {
-        const parsed = await parseSalesAccrualFile(file);
-        working = mergeSalesIntoHistory(working, parsed.records);
-        parsed.records.forEach(r => touchedMonths.add(r.date.slice(0, 7)));
-        lines.push(`✓ ${file.name} — ${parsed.records.length} store-days`);
-      } catch (err) {
-        lines.push(`✗ ${file.name} — ${err.message}`);
+  // Both batch handlers below are queued through importChainRef instead of
+  // running as soon as they're called — Sales-Accrual and Attendance are two
+  // independent upload slots, and firing both close together used to let
+  // them merge+save concurrently off the same stale `history` snapshot, so
+  // whichever finished last silently discarded the other's data. Queuing
+  // forces them to run one at a time, each starting from historyRef.current
+  // (updated synchronously, not just via the setHistory/useEffect roundtrip)
+  // so the second one always sees the first one's result.
+  const handleImportSalesBatch = useCallback(fileList => {
+    const task = async () => {
+      let working = historyRef.current;
+      const touchedMonths = new Set();
+      const lines = [];
+      for (const file of fileList) {
+        try {
+          const parsed = await parseSalesAccrualFile(file);
+          working = mergeSalesIntoHistory(working, parsed.records);
+          parsed.records.forEach(r => touchedMonths.add(r.date.slice(0, 7)));
+          lines.push(`✓ ${file.name} — ${parsed.records.length} store-days`);
+        } catch (err) {
+          lines.push(`✗ ${file.name} — ${err.message}`);
+        }
       }
-    }
-    setHistory(working);
-    const result = await saveHistoryMonthChunks(working, touchedMonths);
-    if (isConfigured() && !result.ok) {
-      lines.push(`✗ Couldn't sync ${result.failedMonths.join(', ')} to Supabase (${result.error}) — this data is safe on this device (it'll auto-retry syncing next time you load the app), but won't show up on other devices until it does. Try the import again or reload the page to trigger a retry.`);
-      showToast(`Imported, but couldn't sync to Supabase (${result.error})`, 'error');
-    } else {
-      showToast(`Processed ${fileList.length} sales file${fileList.length !== 1 ? 's' : ''}`);
-    }
-    return lines;
-  }, [history]);
+      historyRef.current = working;
+      setHistory(working);
+      const result = await saveHistoryMonthChunks(working, touchedMonths);
+      if (isConfigured() && !result.ok) {
+        lines.push(`✗ Couldn't sync ${result.failedMonths.join(', ')} to Supabase (${result.error}) — this data is safe on this device (it'll auto-retry syncing next time you load the app), but won't show up on other devices until it does. Try the import again or reload the page to trigger a retry.`);
+        showToast(`Imported, but couldn't sync to Supabase (${result.error})`, 'error');
+      } else {
+        showToast(`Processed ${fileList.length} sales file${fileList.length !== 1 ? 's' : ''}`);
+      }
+      return lines;
+    };
+    const queued = importChainRef.current.then(task, task);
+    importChainRef.current = queued.then(() => {}, () => {});
+    return queued;
+  }, []);
 
-  const handleImportAttendanceBatch = useCallback(async fileList => {
-    let working = history;
-    const touchedMonths = new Set();
-    const lines = [];
-    for (const file of fileList) {
-      try {
-        const parsed = await parseAttendanceHistoryFile(file);
-        working = mergeAttendanceIntoHistory(working, parsed.records);
-        parsed.records.forEach(r => touchedMonths.add(r.date.slice(0, 7)));
-        lines.push(`✓ ${file.name} — ${parsed.records.length} store-days`);
-      } catch (err) {
-        lines.push(`✗ ${file.name} — ${err.message}`);
+  const handleImportAttendanceBatch = useCallback(fileList => {
+    const task = async () => {
+      let working = historyRef.current;
+      const touchedMonths = new Set();
+      const lines = [];
+      for (const file of fileList) {
+        try {
+          const parsed = await parseAttendanceHistoryFile(file);
+          working = mergeAttendanceIntoHistory(working, parsed.records);
+          parsed.records.forEach(r => touchedMonths.add(r.date.slice(0, 7)));
+          lines.push(`✓ ${file.name} — ${parsed.records.length} store-days`);
+        } catch (err) {
+          lines.push(`✗ ${file.name} — ${err.message}`);
+        }
       }
-    }
-    setHistory(working);
-    const result = await saveHistoryMonthChunks(working, touchedMonths);
-    if (isConfigured() && !result.ok) {
-      lines.push(`✗ Couldn't sync ${result.failedMonths.join(', ')} to Supabase (${result.error}) — this data is safe on this device (it'll auto-retry syncing next time you load the app), but won't show up on other devices until it does. Try the import again or reload the page to trigger a retry.`);
-      showToast(`Imported, but couldn't sync to Supabase (${result.error})`, 'error');
-    } else {
-      showToast(`Processed ${fileList.length} attendance file${fileList.length !== 1 ? 's' : ''}`);
-    }
-    return lines;
-  }, [history]);
+      historyRef.current = working;
+      setHistory(working);
+      const result = await saveHistoryMonthChunks(working, touchedMonths);
+      if (isConfigured() && !result.ok) {
+        lines.push(`✗ Couldn't sync ${result.failedMonths.join(', ')} to Supabase (${result.error}) — this data is safe on this device (it'll auto-retry syncing next time you load the app), but won't show up on other devices until it does. Try the import again or reload the page to trigger a retry.`);
+        showToast(`Imported, but couldn't sync to Supabase (${result.error})`, 'error');
+      } else {
+        showToast(`Processed ${fileList.length} attendance file${fileList.length !== 1 ? 's' : ''}`);
+      }
+      return lines;
+    };
+    const queued = importChainRef.current.then(task, task);
+    importChainRef.current = queued.then(() => {}, () => {});
+    return queued;
+  }, []);
 
   const handleClearHistory = async () => {
     if (!window.confirm('Clear all historical data? This cannot be undone.')) return;
