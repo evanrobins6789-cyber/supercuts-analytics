@@ -2668,6 +2668,16 @@ export default function App() {
       (dailyChunksRes.data || []).forEach(chunk => Object.assign(mergedDaily, chunk.payload));
       if (legacyDailyRes.data) Object.assign(mergedDaily, legacyDailyRes.data);
       setHistory(mergedDaily);
+      // Diagnostic only (console, not user-facing) — this data has silently
+      // gone missing on refresh more than once; logging exactly what came
+      // back on load makes the next repro concrete instead of another round
+      // of guessing. Safe to leave in permanently, it's cheap and inert.
+      {
+        const dailyRecords = Object.values(mergedDaily);
+        const withEmployees = dailyRecords.filter(r => r.employees && Object.keys(r.employees).length).length;
+        console.log(`[history load] ${(dailyChunksRes.data || []).length} chunk(s) from Supabase: ${(dailyChunksRes.data || []).map(c => c.key).join(', ') || 'none'}`);
+        console.log(`[history load] ${dailyRecords.length} store-day record(s) merged, ${withEmployees} with employee-level detail, ${(dailyChunksRes.localOnlyKeys || []).length} local-only chunk(s) pending Supabase sync${(dailyChunksRes.localOnlyKeys || []).length ? `: ${dailyChunksRes.localOnlyKeys.join(', ')}` : ''}.`);
+      }
 
       const mergedWeekly = {};
       (weeklyChunksRes.data || []).forEach(chunk => Object.assign(mergedWeekly, chunk.payload));
@@ -2892,6 +2902,9 @@ export default function App() {
       try {
         const json = JSON.stringify(chunk);
         const useSplit = json.length > HISTORY_CHUNK_SIZE_LIMIT;
+        const recordCount = Object.keys(chunk).length;
+        const withEmployees = Object.values(chunk).filter(r => r.employees && Object.keys(r.employees).length).length;
+        console.log(`[history save] ${month}: ${recordCount} record(s), ${withEmployees} with employee-level detail, ${json.length} chars — ${useSplit ? 'splitting per store' : 'single chunk'}`);
         let results;
         if (!useSplit) {
           results = [await saveData(`daily_history_${month}`, chunk)];
@@ -2907,8 +2920,9 @@ export default function App() {
           }
         }
         const failed = results.filter(r => !r.ok);
-        if (failed.length) { ok = false; lastError = failed[0].error; failedMonths.push(month); }
+        if (failed.length) { ok = false; lastError = failed[0].error; failedMonths.push(month); console.error(`[history save] ${month} FAILED:`, failed.map(r => r.error)); }
         else {
+          console.log(`[history save] ${month}: saved OK (${useSplit ? `${results.length} per-store chunk(s)` : '1 chunk'})`);
           // `chunk` always holds the FULL current month's data, so whichever
           // format we just wrote is complete on its own — clean up the OTHER
           // format's leftover row(s) for this month so a stale copy can't
