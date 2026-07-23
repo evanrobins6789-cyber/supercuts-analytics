@@ -445,8 +445,13 @@
 
 /* Core Values sidebar widget (below Shoutouts) */
 .homepage-corevalue-card { animation: homepage-fade-in 0.4s ease; }
-.homepage-corevalue-title { font-family: 'Barlow Condensed', sans-serif; font-size: 19px; font-weight: 700; text-transform: uppercase; color: var(--navy); display: flex; align-items: center; }
-.homepage-corevalue-title .homepage-hero-subtitle { color: var(--ink-soft); font-size: 14px; text-transform: none; font-weight: 400; }
+.homepage-corevalue-title {
+  font-family: 'Barlow Condensed', sans-serif; font-size: 19px; font-weight: 700;
+  text-transform: uppercase; color: var(--navy); display: flex; align-items: center; flex-wrap: wrap;
+}
+.homepage-corevalue-title .homepage-hero-subtitle {
+  font-family: inherit; font-size: inherit; font-weight: inherit; text-transform: inherit; color: inherit; opacity: 1;
+}
 .homepage-corevalue-body-wrap { max-height: 150px; overflow-y: auto; margin-top: 6px; }
 .homepage-corevalue-body { font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; }
 
