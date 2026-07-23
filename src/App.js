@@ -427,6 +427,22 @@ function UploadTab({ report, uploading, onFile, onClear, employeeRoster, uploadi
   );
 }
 
+// ─── Homepage ───────────────────────────────────────────────────────────────
+// Advances `index` every `intervalMs`, wrapping around; pass `paused` to
+// freeze it (e.g. on hover). Returns a setter too so dots/nav can jump
+// directly. Shared by the core-values hero and the review spotlight so both
+// auto-advancing widgets stay in sync with one implementation.
+function useCarousel(length, intervalMs, paused = false) {
+  const [index, setIndex] = useState(0);
+  useEffect(() => {
+    if (paused || length <= 1) return undefined;
+    const id = setInterval(() => setIndex(i => (i + 1) % length), intervalMs);
+    return () => clearInterval(id);
+  }, [length, intervalMs, paused]);
+  useEffect(() => { if (index >= length && length > 0) setIndex(0); }, [length, index]);
+  return [index, setIndex];
+}
+
 // ─── Homepage — Top 10 widgets ─────────────────────────────────────────────
 // Paints a plain white rect behind the chart on every frame — a chart.js
 // canvas is transparent by default, so without this the exported PNG has no
@@ -640,6 +656,22 @@ function EventComposer({ onAdd, onImageError }) {
   );
 }
 
+// One card style shared by the News grid and the featured-events strip, so
+// "mirror the size of the featured events" is true by construction — same
+// component, same CSS, not just a matched width.
+function HomepageMediaCard({ image, badge, title, date, desc }) {
+  return (
+    <div className="homepage-featured-card" style={image ? { backgroundImage: `url(${image})` } : undefined}>
+      <div className="homepage-featured-overlay">
+        {badge && <span className="homepage-featured-badge">{badge}</span>}
+        <p className="homepage-featured-title">{title}</p>
+        {date && <p className="homepage-featured-date">{date}</p>}
+        {desc && <p className="homepage-featured-desc">{desc}</p>}
+      </div>
+    </div>
+  );
+}
+
 // The 3 soonest upcoming events, shown as large banner cards above the
 // calendar grid — the "featured" strip the user asked for.
 function FeaturedEvents({ events, todayISO }) {
@@ -655,16 +687,12 @@ function FeaturedEvents({ events, todayISO }) {
   };
   if (!upcoming.length) return <p className="empty-note">No upcoming events on the calendar.</p>;
   return (
-    <div className="homepage-featured-events">
+    <div className="homepage-card-grid">
       {upcoming.map(ev => (
-        <div key={ev.id} className="homepage-featured-card" style={ev.headerImage ? { backgroundImage: `url(${ev.headerImage})` } : undefined}>
-          <div className="homepage-featured-overlay">
-            <span className="homepage-featured-badge">{daysUntil(ev.date)}</span>
-            <p className="homepage-featured-title">{ev.title}</p>
-            <p className="homepage-featured-date">{fmtDateLong(ev.date)}</p>
-            {ev.description && <p className="homepage-featured-desc">{ev.description}</p>}
-          </div>
-        </div>
+        <HomepageMediaCard
+          key={ev.id} image={ev.headerImage} badge={daysUntil(ev.date)}
+          title={ev.title} date={fmtDateLong(ev.date)} desc={ev.description}
+        />
       ))}
     </div>
   );
@@ -730,34 +758,121 @@ function EventsCalendar({ events, todayISO }) {
   );
 }
 
-function HomepageTab({ report, news, events }) {
+// "Our Core Values" — the 4 operating principles from the salon's internal
+// poster, cycled in the hero banner (20s each) instead of a static welcome.
+const CORE_VALUES = [
+  { n: 1, icon: '💙', title: 'Serve', subtitle: 'Others First', body: "Service isn't something we do — it's the heart of who we are. We put our guests and co-workers first, listen with empathy, and go the extra mile to create an exceptional experience. We give more than we get." },
+  { n: 2, icon: '🌱', title: 'Grow', subtitle: 'Every Day', body: "We're committed to continuous improvement, embracing feedback and coaching each other beyond our comfort zone to achieve excellence. We embrace learning from our mistakes — mistakes made from lack of caring are simply unacceptable." },
+  { n: 3, icon: '🤝', title: 'Be a Super Teammate', subtitle: '', body: "We take responsibility for our relationships, treating everyone with kindness, gratitude, honesty, and fairness. Working as a team, we hold each other accountable to meet our salon goals — we never let our team down." },
+  { n: 4, icon: '⭐', title: 'Commit to Excellence', subtitle: '', body: "How we do something speaks volumes about who we are. The attitude and effort we put in elevates the experience for our guests and co-workers. Accountability to these high standards isn't just a value — it's a way of working." },
+];
+
+function CoreValuesHero() {
+  const [index, setIndex] = useCarousel(CORE_VALUES.length, 20000);
+  const v = CORE_VALUES[index];
+  return (
+    <div className="homepage-hero">
+      <p className="homepage-hero-eyebrow">Welcome back 👋 — Our Core Values</p>
+      <div key={v.n} className="homepage-hero-value">
+        <p className="homepage-hero-title"><span className="homepage-hero-icon">{v.icon}</span>{v.title}{v.subtitle && <span className="homepage-hero-subtitle"> {v.subtitle}</span>}</p>
+        <p className="homepage-hero-sub">{v.body}</p>
+      </div>
+      <div className="homepage-hero-dots">
+        {CORE_VALUES.map((cv, i) => (
+          <button key={cv.n} type="button" className={`homepage-hero-dot ${i === index ? 'active' : ''}`} onClick={() => setIndex(i)} aria-label={`Show ${cv.title}`} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Keyword tags for celebrating WHY a 5-star review is great, matched against
+// the salon's core operating principles — separate from REVIEW_CATEGORIES
+// above, which uses complaint-shaped keywords to bucket NEGATIVE reviews.
+const CORE_VALUE_CATEGORIES = [
+  { key: 'quality', label: 'Quality', emoji: '💇', keywords: ['quality', 'skilled', 'talented', 'best haircut', 'great haircut', 'amazing haircut', 'perfect cut', 'professional', 'precise', 'expert', 'flawless', 'exceptional', 'great color', 'amazing color', 'love my hair', 'love my color'] },
+  { key: 'convenience', label: 'Convenience', emoji: '⏱️', keywords: ['convenient', 'quick', 'fast', 'easy to book', 'walk-in', 'walk in', 'no wait', 'short wait', 'in and out', 'efficient', 'flexible', 'on time', 'punctual', 'easy scheduling'] },
+  { key: 'hospitality', label: 'Hospitality', emoji: '🤗', keywords: ['friendly', 'welcoming', 'kind', 'warm', 'polite', 'attentive', 'hospitality', 'greeted', 'made me feel', 'caring', 'genuine', 'personable', 'sweet', 'nice staff'] },
+  { key: 'atmosphere', label: 'Atmosphere', emoji: '✨', keywords: ['atmosphere', 'clean', 'cozy', 'vibe', 'relaxing', 'comfortable', 'ambiance', 'inviting', 'great space', 'nice place', 'environment'] },
+];
+function matchCoreValueCategories(message) {
+  if (!message) return [];
+  const text = message.toLowerCase();
+  return CORE_VALUE_CATEGORIES.filter(c => c.keywords.some(kw => text.includes(kw)));
+}
+
+// Cycles through 5-star reviews that name a stylist by name (via the same
+// detectEmployeeMention used on the Reviews tab) — a little "shoutouts" wall
+// for the front desk to leave running. 7s per review, pauses on hover.
+function ReviewSpotlightWidget({ report, reviews }) {
+  const [paused, setPaused] = useState(false);
+  const spotlightReviews = useMemo(() => {
+    if (!reviews || !report) return [];
+    return reviews.reviews
+      .filter(r => r.rating === 5)
+      .map(r => {
+        const employees = report.stores.find(st => st.code === r.code)?.employees || null;
+        const mention = detectEmployeeMention(r.message, employees);
+        return mention ? { ...r, mention, categories: matchCoreValueCategories(r.message) } : null;
+      })
+      .filter(Boolean);
+  }, [reviews, report]);
+  const [index] = useCarousel(spotlightReviews.length, 7000, paused);
+  const current = spotlightReviews[index];
+
+  return (
+    <div className="homepage-widget homepage-spotlight" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
+      <div className="homepage-widget-head">
+        <p className="homepage-widget-title">🌟 Shoutouts</p>
+        {spotlightReviews.length > 1 && <span className="homepage-spotlight-count">{index + 1} / {spotlightReviews.length}</span>}
+      </div>
+      {!current ? (
+        <p className="empty-note">No 5-star reviews naming a stylist yet.</p>
+      ) : (
+        <div key={reviewKey(current)} className="homepage-spotlight-card">
+          {current.categories.length > 0 && (
+            <div className="homepage-spotlight-tags">
+              {current.categories.map(c => <span key={c.key} className="homepage-spotlight-tag">{c.emoji} {c.label}</span>)}
+            </div>
+          )}
+          <p className="homepage-spotlight-stars">⭐⭐⭐⭐⭐</p>
+          <div className="homepage-spotlight-quote-wrap"><p className="homepage-spotlight-quote">“{current.message}”</p></div>
+          <p className="homepage-spotlight-mention">💇 Shoutout to <strong>{current.mention}</strong>!</p>
+          <p className="homepage-spotlight-meta">
+            {current.userName || 'A happy guest'} · {STORE_CODE_TO_NAME[current.code] || current.code}
+            {current.postedAt ? ` · ${fmtDateLong(current.postedAt)}` : ''}
+          </p>
+          {spotlightReviews.length > 1 && (
+            <div className="homepage-spotlight-progress-track">
+              <span key={index} className={`homepage-spotlight-progress-fill ${paused ? 'homepage-spotlight-progress-fill--paused' : ''}`} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HomepageTab({ report, news, events, reviews }) {
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
   const storeRows = useMemo(() => report ? report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })) : [], [report]);
 
   return (
     <div className="tab-content">
-      <div className="homepage-hero">
-        <p className="homepage-hero-eyebrow">{fmtDateLong(todayISO)}</p>
-        <p className="homepage-hero-title">Welcome back 👋</p>
-        <p className="homepage-hero-sub">Here's what's new, what's coming up, and who's leading the pack this period.</p>
-      </div>
+      <CoreValuesHero />
 
       <div className="homepage-grid">
         <div className="homepage-main">
           <div className="homepage-section">
             <p className="section-label">📣 News &amp; Updates</p>
-            <div className="homepage-feed">
-              {sortedNews.map(n => (
-                <div className="homepage-feed-item" key={n.id}>
-                  {n.headerImage && <img className="homepage-feed-item-image" src={n.headerImage} alt="" />}
-                  <p className="homepage-feed-item-title">{n.title}</p>
-                  {n.body && <p className="homepage-feed-item-body">{n.body}</p>}
-                  <p className="homepage-feed-item-date">{fmtDateLong(n.date)}</p>
-                </div>
-              ))}
-              {!sortedNews.length && <p className="empty-note">No news posted yet — post one from Setup → Homepage.</p>}
-            </div>
+            {sortedNews.length ? (
+              <div className="homepage-card-grid">
+                {sortedNews.map(n => (
+                  <HomepageMediaCard key={n.id} image={n.headerImage} title={n.title} date={fmtDateLong(n.date)} desc={n.body} />
+                ))}
+              </div>
+            ) : <p className="empty-note">No news posted yet — post one from Setup → Homepage.</p>}
           </div>
 
           <div className="homepage-section">
@@ -765,17 +880,24 @@ function HomepageTab({ report, news, events }) {
             <FeaturedEvents events={events} todayISO={todayISO} />
             <EventsCalendar events={events} todayISO={todayISO} />
           </div>
+
+          <div className="homepage-section">
+            <p className="section-label">🏆 Top 10 Leaderboards</p>
+            {report ? (
+              <div className="homepage-top10-grid">
+                {TOP_TEN_METRICS.map(m => (
+                  <TopTenChart
+                    key={m.key} title={m.label} emoji={m.emoji} rows={storeRows} metricKey={m.key}
+                    formatter={STORE_METRICS.find(sm => sm.key === m.key).fmt} color={m.color}
+                  />
+                ))}
+              </div>
+            ) : <p className="empty-note">Upload a stylist report to see the Top 10 leaderboards.</p>}
+          </div>
         </div>
 
         <div className="homepage-sidebar">
-          {report ? TOP_TEN_METRICS.map(m => (
-            <TopTenChart
-              key={m.key} title={m.label} emoji={m.emoji} rows={storeRows} metricKey={m.key}
-              formatter={STORE_METRICS.find(sm => sm.key === m.key).fmt} color={m.color}
-            />
-          )) : (
-            <div className="homepage-widget"><p className="empty-note">Upload a stylist report to see the Top 10 leaderboards.</p></div>
-          )}
+          <ReviewSpotlightWidget report={report} reviews={reviews} />
         </div>
       </div>
     </div>
@@ -4071,7 +4193,7 @@ export default function App() {
       <main className="app-main">
         {needsReport && <div className="empty-state"><p className="empty-title">No report yet</p><p>Go to the Setup tab's Upload section to add this week's report.</p></div>}
         {tab === 'Homepage' && (
-          <HomepageTab report={report} news={news} events={events} />
+          <HomepageTab report={report} news={news} events={events} reviews={reviews} />
         )}
         {!needsReport && tab === 'Overview' && report && (
           <OverviewTab report={report} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} />

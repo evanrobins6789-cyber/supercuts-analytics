@@ -412,13 +412,24 @@
 .ai-chat-send:hover { background: var(--red-deep); }
 
 /* ─── Homepage ───────────────────────────────────────────────────────── */
+@keyframes homepage-fade-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
 .homepage-hero {
   background: linear-gradient(120deg, var(--navy), var(--navy-2));
   border-radius: 16px; padding: 24px 26px; color: #fff;
 }
 .homepage-hero-eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #B9C6D6; text-transform: uppercase; letter-spacing: 0.05em; }
-.homepage-hero-title { font-family: 'Barlow Condensed', sans-serif; font-size: 32px; font-weight: 700; margin-top: 4px; }
-.homepage-hero-sub { font-size: 13px; color: #B9C6D6; margin-top: 6px; max-width: 520px; }
+.homepage-hero-value { animation: homepage-fade-in 0.5s ease; }
+.homepage-hero-title { font-family: 'Barlow Condensed', sans-serif; font-size: 32px; font-weight: 700; margin-top: 6px; }
+.homepage-hero-icon { margin-right: 10px; }
+.homepage-hero-subtitle { font-weight: 400; opacity: 0.85; }
+.homepage-hero-sub { font-size: 13px; color: #B9C6D6; margin-top: 6px; max-width: 640px; }
+.homepage-hero-dots { display: flex; gap: 6px; margin-top: 16px; }
+.homepage-hero-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.35);
+  border: none; cursor: pointer; padding: 0; transition: all 0.2s ease;
+}
+.homepage-hero-dot.active { background: #fff; width: 22px; border-radius: 5px; }
 
 .homepage-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }
 @media (max-width: 900px) { .homepage-grid { grid-template-columns: 1fr; } }
@@ -444,15 +455,6 @@
 .homepage-post-btn { align-self: flex-start; }
 .homepage-post-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-.homepage-feed { display: flex; flex-direction: column; gap: 10px; }
-.homepage-feed-item {
-  border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px;
-  background: var(--paper); overflow: hidden;
-}
-.homepage-feed-item-image { width: calc(100% + 26px); margin: -11px -13px 10px; display: block; max-height: 180px; object-fit: cover; }
-.homepage-feed-item-title { font-family: 'Inter', sans-serif; font-size: 13.5px; font-weight: 600; color: var(--navy); }
-.homepage-feed-item-body { font-size: 12.5px; color: var(--ink-soft); margin-top: 4px; white-space: pre-wrap; }
-.homepage-feed-item-date { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); margin-top: 6px; }
 .homepage-delete-btn {
   background: none; border: none; color: var(--ink-soft); cursor: pointer; font-size: 13px;
   line-height: 1; padding: 2px 4px; border-radius: 4px; flex: none;
@@ -487,9 +489,10 @@
 .homepage-admin-row-title { font-size: 12.5px; font-weight: 600; color: var(--navy); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .homepage-admin-row-date { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--ink-soft); margin-top: 1px; }
 
-/* Featured events strip (3 soonest, above the calendar) */
-.homepage-featured-events { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-@media (max-width: 760px) { .homepage-featured-events { grid-template-columns: 1fr; } }
+/* Card grid — shared by the News feed and the featured-events strip, so
+   both are sized off the same 3-up grid instead of stretching full width. */
+.homepage-card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+@media (max-width: 760px) { .homepage-card-grid { grid-template-columns: 1fr; } }
 .homepage-featured-card {
   position: relative; min-height: 190px; border-radius: 12px; overflow: hidden;
   background: linear-gradient(135deg, var(--navy), var(--navy-2)); background-size: cover; background-position: center;
@@ -557,4 +560,35 @@
 .homepage-export-btn:hover { border-color: var(--red); color: var(--red-deep); }
 .homepage-export-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .homepage-widget-chart { height: 290px; }
+
+/* Top 10 leaderboards — 2-up grid, now living below the calendar in the main column */
+.homepage-top10-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 700px) { .homepage-top10-grid { grid-template-columns: 1fr; } }
+
+/* Review spotlight — cycling 5-star shoutouts, top-right sidebar */
+.homepage-spotlight-count { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); }
+.homepage-spotlight-card {
+  display: flex; flex-direction: column; gap: 8px;
+  background: linear-gradient(160deg, #FFFBF0, #FFF3D6);
+  border: 1px solid #F0DFA8; border-radius: 12px; padding: 14px;
+  animation: homepage-fade-in 0.4s ease;
+}
+.homepage-spotlight-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.homepage-spotlight-tag {
+  font-family: 'Inter', sans-serif; font-size: 10.5px; font-weight: 600; color: var(--navy);
+  background: #fff; border: 1px solid #F0DFA8; border-radius: 20px; padding: 3px 9px;
+}
+.homepage-spotlight-stars { font-size: 15px; letter-spacing: 2px; }
+.homepage-spotlight-quote-wrap { max-height: 130px; overflow-y: auto; }
+.homepage-spotlight-quote { font-size: 13px; color: var(--navy); font-style: italic; line-height: 1.45; }
+.homepage-spotlight-mention { font-size: 12.5px; color: var(--navy); font-weight: 600; }
+.homepage-spotlight-meta { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--ink-soft); }
+.homepage-spotlight-progress-track { height: 4px; background: #F0DFA8; border-radius: 2px; overflow: hidden; margin-top: 2px; }
+.homepage-spotlight-progress-fill {
+  display: block; height: 100%; background: var(--gold); width: 0%;
+  animation: homepage-spotlight-fill 7s linear forwards;
+}
+.homepage-spotlight-progress-fill--paused { animation-play-state: paused; }
+@keyframes homepage-spotlight-fill { from { width: 0%; } to { width: 100%; } }
+
 .ai-chat-send:disabled { opacity: 0.5; cursor: default; }
