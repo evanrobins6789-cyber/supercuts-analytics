@@ -658,23 +658,51 @@ function EventComposer({ onAdd, onImageError }) {
 
 // One card style shared by the News grid and the featured-events strip, so
 // "mirror the size of the featured events" is true by construction — same
-// component, same CSS, not just a matched width.
-function HomepageMediaCard({ image, badge, title, date, desc }) {
+// component, same CSS, not just a matched width. When there's a header
+// image, the whole card opens it full-size in the lightbox (onImageClick) —
+// the card itself is small/cropped, so this is how the poster/flyer text
+// actually gets read.
+function HomepageMediaCard({ image, badge, title, date, desc, onImageClick }) {
+  const clickable = !!(image && onImageClick);
   return (
-    <div className="homepage-featured-card" style={image ? { backgroundImage: `url(${image})` } : undefined}>
+    <div
+      className={`homepage-featured-card ${clickable ? 'homepage-featured-card--clickable' : ''}`}
+      style={image ? { backgroundImage: `url(${image})` } : undefined}
+      onClick={clickable ? () => onImageClick(image) : undefined}
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onKeyDown={clickable ? e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onImageClick(image); } } : undefined}
+    >
       <div className="homepage-featured-overlay">
         {badge && <span className="homepage-featured-badge">{badge}</span>}
         <p className="homepage-featured-title">{title}</p>
         {date && <p className="homepage-featured-date">{date}</p>}
         {desc && <p className="homepage-featured-desc">{desc}</p>}
+        {clickable && <span className="homepage-featured-zoom-hint">🔍 Tap to view image</span>}
       </div>
+    </div>
+  );
+}
+
+// A simple full-screen viewer for a card's header image — cards crop/shrink
+// the photo, so this is how a flyer or poster's text actually gets read.
+function ImageLightbox({ src, onClose }) {
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="homepage-lightbox" onClick={onClose}>
+      <button type="button" className="homepage-lightbox-close" onClick={onClose} aria-label="Close">✕</button>
+      <img className="homepage-lightbox-img" src={src} alt="" onClick={e => e.stopPropagation()} />
     </div>
   );
 }
 
 // The 3 soonest upcoming events, shown as large banner cards above the
 // calendar grid — the "featured" strip the user asked for.
-function FeaturedEvents({ events, todayISO }) {
+function FeaturedEvents({ events, todayISO, onImageClick }) {
   const upcoming = useMemo(
     () => events.filter(ev => ev.date >= todayISO).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 3),
     [events, todayISO]
@@ -691,7 +719,7 @@ function FeaturedEvents({ events, todayISO }) {
       {upcoming.map(ev => (
         <HomepageMediaCard
           key={ev.id} image={ev.headerImage} badge={daysUntil(ev.date)}
-          title={ev.title} date={fmtDateLong(ev.date)} desc={ev.description}
+          title={ev.title} date={fmtDateLong(ev.date)} desc={ev.description} onImageClick={onImageClick}
         />
       ))}
     </div>
@@ -767,19 +795,28 @@ const CORE_VALUES = [
   { n: 4, icon: '⭐', title: 'Commit to Excellence', subtitle: '', body: "How we do something speaks volumes about who we are. The attitude and effort we put in elevates the experience for our guests and co-workers. Accountability to these high standards isn't just a value — it's a way of working." },
 ];
 
-function CoreValuesHero() {
+// Sidebar widget (below Shoutouts) — cycles the 4 "Our Core Values" every
+// 20s. Used to live in the hero banner; moved down here so the hero can go
+// back to a plain, non-cycling welcome.
+function CoreValuesWidget() {
   const [index, setIndex] = useCarousel(CORE_VALUES.length, 20000);
   const v = CORE_VALUES[index];
   return (
-    <div className="homepage-hero">
-      <p className="homepage-hero-eyebrow">Welcome back 👋 — Our Core Values</p>
-      <div key={v.n} className="homepage-hero-value">
-        <p className="homepage-hero-title"><span className="homepage-hero-icon">{v.icon}</span>{v.title}{v.subtitle && <span className="homepage-hero-subtitle"> {v.subtitle}</span>}</p>
-        <p className="homepage-hero-sub">{v.body}</p>
+    <div className="homepage-widget">
+      <div className="homepage-widget-head">
+        <p className="homepage-widget-title">🧭 Core Values</p>
+        <span className="homepage-spotlight-count">{index + 1} / {CORE_VALUES.length}</span>
+      </div>
+      <div key={v.n} className="homepage-corevalue-card">
+        <p className="homepage-corevalue-title">
+          <span className="homepage-hero-icon">{v.icon}</span>{v.title}
+          {v.subtitle && <span className="homepage-hero-subtitle"> {v.subtitle}</span>}
+        </p>
+        <div className="homepage-corevalue-body-wrap"><p className="homepage-corevalue-body">{v.body}</p></div>
       </div>
       <div className="homepage-hero-dots">
         {CORE_VALUES.map((cv, i) => (
-          <button key={cv.n} type="button" className={`homepage-hero-dot ${i === index ? 'active' : ''}`} onClick={() => setIndex(i)} aria-label={`Show ${cv.title}`} />
+          <button key={cv.n} type="button" className={`homepage-hero-dot homepage-hero-dot--dark ${i === index ? 'active' : ''}`} onClick={() => setIndex(i)} aria-label={`Show ${cv.title}`} />
         ))}
       </div>
     </div>
@@ -790,7 +827,7 @@ function CoreValuesHero() {
 // the salon's core operating principles — separate from REVIEW_CATEGORIES
 // above, which uses complaint-shaped keywords to bucket NEGATIVE reviews.
 const CORE_VALUE_CATEGORIES = [
-  { key: 'quality', label: 'Quality', emoji: '💇', keywords: ['quality', 'skilled', 'talented', 'best haircut', 'great haircut', 'amazing haircut', 'perfect cut', 'professional', 'precise', 'expert', 'flawless', 'exceptional', 'great color', 'amazing color', 'love my hair', 'love my color'] },
+  { key: 'quality', label: 'Quality', emoji: '💇', keywords: ['quality', 'skilled', 'talented', 'best haircut', 'great haircut', 'amazing haircut', 'perfect cut', 'professional', 'precise', 'expert', 'flawless', 'exceptional', 'great color', 'amazing color', 'love my hair', 'love my color', 'great job', 'good job', 'amazing job', 'awesome job', 'excellent job', 'fantastic job', 'incredible job', 'wonderful job', 'well done', 'nailed it'] },
   { key: 'convenience', label: 'Convenience', emoji: '⏱️', keywords: ['convenient', 'quick', 'fast', 'easy to book', 'walk-in', 'walk in', 'no wait', 'short wait', 'in and out', 'efficient', 'flexible', 'on time', 'punctual', 'easy scheduling'] },
   { key: 'hospitality', label: 'Hospitality', emoji: '🤗', keywords: ['friendly', 'welcoming', 'kind', 'warm', 'polite', 'attentive', 'hospitality', 'greeted', 'made me feel', 'caring', 'genuine', 'personable', 'sweet', 'nice staff'] },
   { key: 'atmosphere', label: 'Atmosphere', emoji: '✨', keywords: ['atmosphere', 'clean', 'cozy', 'vibe', 'relaxing', 'comfortable', 'ambiance', 'inviting', 'great space', 'nice place', 'environment'] },
@@ -803,7 +840,7 @@ function matchCoreValueCategories(message) {
 
 // Cycles through 5-star reviews that name a stylist by name (via the same
 // detectEmployeeMention used on the Reviews tab) — a little "shoutouts" wall
-// for the front desk to leave running. 7s per review, pauses on hover.
+// for the front desk to leave running. 10s per review, pauses on hover.
 function ReviewSpotlightWidget({ report, reviews }) {
   const [paused, setPaused] = useState(false);
   const spotlightReviews = useMemo(() => {
@@ -817,7 +854,7 @@ function ReviewSpotlightWidget({ report, reviews }) {
       })
       .filter(Boolean);
   }, [reviews, report]);
-  const [index] = useCarousel(spotlightReviews.length, 7000, paused);
+  const [index] = useCarousel(spotlightReviews.length, 10000, paused);
   const current = spotlightReviews[index];
 
   return (
@@ -857,10 +894,15 @@ function HomepageTab({ report, news, events, reviews }) {
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
   const storeRows = useMemo(() => report ? report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })) : [], [report]);
+  const [lightboxImage, setLightboxImage] = useState(null);
 
   return (
     <div className="tab-content">
-      <CoreValuesHero />
+      <div className="homepage-hero">
+        <p className="homepage-hero-eyebrow">{fmtDateLong(todayISO)}</p>
+        <p className="homepage-hero-title">Welcome back 👋</p>
+        <p className="homepage-hero-sub">Here's what's new, what's coming up, and who's leading the pack this period.</p>
+      </div>
 
       <div className="homepage-grid">
         <div className="homepage-main">
@@ -869,7 +911,7 @@ function HomepageTab({ report, news, events, reviews }) {
             {sortedNews.length ? (
               <div className="homepage-card-grid">
                 {sortedNews.map(n => (
-                  <HomepageMediaCard key={n.id} image={n.headerImage} title={n.title} date={fmtDateLong(n.date)} desc={n.body} />
+                  <HomepageMediaCard key={n.id} image={n.headerImage} title={n.title} date={fmtDateLong(n.date)} desc={n.body} onImageClick={setLightboxImage} />
                 ))}
               </div>
             ) : <p className="empty-note">No news posted yet — post one from Setup → Homepage.</p>}
@@ -877,7 +919,7 @@ function HomepageTab({ report, news, events, reviews }) {
 
           <div className="homepage-section">
             <p className="section-label">📅 Upcoming Events</p>
-            <FeaturedEvents events={events} todayISO={todayISO} />
+            <FeaturedEvents events={events} todayISO={todayISO} onImageClick={setLightboxImage} />
             <EventsCalendar events={events} todayISO={todayISO} />
           </div>
 
@@ -898,8 +940,11 @@ function HomepageTab({ report, news, events, reviews }) {
 
         <div className="homepage-sidebar">
           <ReviewSpotlightWidget report={report} reviews={reviews} />
+          <CoreValuesWidget />
         </div>
       </div>
+
+      {lightboxImage && <ImageLightbox src={lightboxImage} onClose={() => setLightboxImage(null)} />}
     </div>
   );
 }
