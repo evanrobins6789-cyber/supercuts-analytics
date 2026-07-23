@@ -1,0 +1,27 @@
+# Handoff — Supercuts Analytics
+
+Last updated: 2026-07-22, end of session covering commits `84a881b`..`07e2c31` (see `git log` for full messages).
+
+## What this app is
+A Store Scoreboard / analytics dashboard for a Supercuts franchise (React SPA, Supabase-backed, deployed on Vercel). Tabs for Overview, Stores, Employees, Retail, Color Sales, DL, 60 Day Employee, Reviews, Weekly, and Setup (which now also holds Goals / Historical Import / Upload as sub-sections). Has an in-app AI assistant, "Tilly," that answers questions about the business data via a serverless Anthropic API proxy (`api/chat.js`).
+
+## Current state: believed working, awaiting user confirmation
+- **Historical data persistence** — just fixed (`07e2c31`) a likely cause of historical-import data not surviving a page refresh for a large dataset (many stores, years of data): saves could silently fail without an error if a month's payload was too large. Now auto-splits oversized months and always surfaces failures. **The user needs to re-run their Historical Import once** to persist under the new logic, then confirm data survives a refresh and Tilly can see it. This is the most important thing to verify next.
+- **CPH (Cuts Per Hour)** — added as a metric alongside CPC/RPC/TSTH, at store and employee level. Verified computing correctly; there was a one-time staleness issue for already-cached report data that's been patched (`ensureReportCph`).
+- **Tilly's data access** — went through several rounds of "she says she doesn't have X" → find the real gap → fix, then a full audit pass. She now has: DL/store roster, full current-period employee list, per-store monthly history (uncapped), per-store AND per-DL-group top-employee breakdowns by month, employee start dates (enriched with store/DL), store goals, and comprehensive review data (per-store stats, category counts, recent negative + positive review text, capped at 40/15 respectively). **Standing instruction going forward: any new data source added to the app should also be wired into `buildAIContext()` in the same change** — this is saved in persistent memory, not just here.
+
+## Known limitations (deliberate, not oversights)
+- Tilly's historical data is **month-level only** — no day/week granularity in her context (the context itself tells her this, so she should say so rather than guess).
+- Review text sent to Tilly is capped at the 40 most recent negative / 15 most recent positive reviews — aggregates/counts are complete and uncapped, only raw quotes are bounded.
+- Sales-Accrual historical imports only attribute retail to an employee if the source file's "Sold By" (or "Stylist") column has a value — if neither is populated, retail stays store-level only. This was recently improved (`2e136e1`) but only for saves going forward; **already-imported months need to be re-uploaded to backfill per-employee retail** if that matters for a given month.
+- No test suite exists, and **this session's environment has no Node.js installed** — nothing has been verified with an actual `npm run build`. Verification has been manual (re-reading diffs, brace/paren balance checks). One real syntax error did slip through this way once (`3a534f9` fixed it) — the Vercel build log is the actual first compile check every time. If Node ever becomes available, use it.
+
+## Architecture notes for a fresh session
+- `src/App.js` is one large file (~2900 lines) — most tabs are components within it. Read the relevant function directly rather than assuming structure; it's changed a lot this session.
+- `src/db.js`: generic Supabase (`weekly_report` table) + localStorage persistence layer. `loadDataByPrefix`/chunked storage is used for anything that grows over time (daily/weekly history) to avoid Supabase statement-size limits — see the comments in that file for the reasoning, since this has been a recurring source of subtle bugs (partial sync failures that looked like nothing was wrong).
+- `src/leaderRoster.js`: hardcoded DL/Area Supervisor → store-code roster. Edited directly + redeployed if leadership changes; not an upload.
+- The `supercuts-analytics/` subdirectory in the repo root is a **stale duplicate**, not the deployed app — ignore it.
+- Deploys automatically via Vercel on push to `main`.
+
+## Recurring bug pattern worth knowing
+Several bugs this session traced back to the same root cause: **a computed/derived field or newly-added data source not reaching everywhere it should** — either because a cached data blob predated the new field (fixed via patch-on-load functions like `ensureReportCph`), or because a new data source wasn't wired into `buildAIContext`, or because a save silently failed without visible error. When something "isn't working" and the code looks right at first glance, check whether it's actually a **staleness/propagation** issue rather than a logic bug.
