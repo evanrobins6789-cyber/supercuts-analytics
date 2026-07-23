@@ -2227,17 +2227,40 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
     lines.push('No current stylist report is loaded on the site right now.');
   }
 
+  // Store goals — independent of any report/period, since a goal is a
+  // standing target, not tied to a specific historical month.
+  if (goals && Object.keys(goals).length) {
+    lines.push('');
+    lines.push('STORE GOALS (Color/Retail targets — standing targets, not specific to any period):');
+    Object.entries(goals).forEach(([code, g]) => {
+      if (g.colorGoal == null && g.retailGoal == null) return;
+      const name = STORE_CODE_TO_NAME[code] || `Store ${code}`;
+      lines.push(`${name}: Color Goal ${g.colorGoal ?? 'none'}, Retail Goal ${g.retailGoal ?? 'none'}`);
+    });
+  }
+
   // Employee roster (start dates) — company-wide, not just recent hires, so
   // "when did X start" works for anyone, not only people hired in the last
   // 60 days (that's just what the 60 Day Employee tab itself narrows to).
+  // Enriched with Store/DL whenever the name matches someone in the current
+  // report, same matching the 60 Day Employee tab itself does.
   if (employeeRoster?.employees?.length) {
     lines.push('');
-    lines.push('EMPLOYEE START DATES (from the Employee Start Dates roster — "new hire" flags anyone hired in the last 60 days):');
+    lines.push('EMPLOYEE START DATES (from the Employee Start Dates roster — "new hire" flags anyone hired in the last 60 days; Store/DL shown when the name matches someone in the CURRENT report):');
     const now = Date.now();
+    const byName = new Map();
+    if (report) report.allEmployees.forEach(e => byName.set(normalizeName(e.name), e));
     employeeRoster.employees.forEach(e => {
       const daysAgo = Math.floor((now - new Date(e.startDate).getTime()) / DAY_MS);
       const tag = daysAgo >= 0 && daysAgo <= 60 ? ' (new hire)' : '';
-      lines.push(`${e.name}: started ${fmtDateLong(e.startDate)}${tag}`);
+      const match = byName.get(normalizeName(e.name));
+      let storeInfo = '';
+      if (match) {
+        const storeObj = report.stores.find(s => s.name === match.store);
+        const leaderInfo = storeObj ? getLeaderForStoreCode(storeObj.code) : null;
+        storeInfo = ` — ${match.store}${leaderInfo ? `, DL: ${leaderInfo.leaderName}` : ''}`;
+      }
+      lines.push(`${e.name}: started ${fmtDateLong(e.startDate)}${tag}${storeInfo}`);
     });
   }
 
@@ -2248,10 +2271,13 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
   const months = buildMonthlySnapshots(weeks);
   if (months.length) {
     lines.push('');
+    lines.push('NOTE: everything below this point is rolled up to the CALENDAR MONTH — no daily or weekly breakdown is included in this context. If asked about a specific week or day, say so rather than estimating from the monthly figures.');
+    lines.push('');
     lines.push('COMPANY-WIDE HISTORY BY MONTH (covers every report ever uploaded — Historical Import backfill and every weekly upload):');
     months.forEach(m => {
       const t = periodTotals(m.stores);
-      lines.push(`${m.month}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Gift Cards $${Math.round(t.giftCards)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}`);
+      const cph = t.hours > 0 ? t.haircuts / t.hours : null;
+      lines.push(`${m.month}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Gift Cards $${Math.round(t.giftCards)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}, CPH ${cph != null ? cph.toFixed(2) : 'n/a'}`);
     });
 
     // Per-store breakdown + top employees, computed once per month from the
@@ -2299,6 +2325,34 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
         if (line) storeLines.push(`  ${name} — ${line}`);
       });
       if (storeLines.length) { lines.push(`${m.month}:`); storeLines.forEach(l => lines.push(l)); }
+    });
+
+    // Precomputed so a "how did Amber's group do in November" question
+    // doesn't depend on correctly adding up several stores' lines by hand —
+    // same store-code grouping as the DL roster above.
+    lines.push('');
+    lines.push('DL / AREA SUPERVISOR ROLLUP BY MONTH (each leader\'s stores summed together):');
+    months.forEach(m => {
+      const totals = monthlyTotals.get(m.month);
+      const leaderLines = [];
+      LEADER_ROSTER_SECTIONS.forEach(sec => {
+        sec.leaders.forEach(l => {
+          const rolled = { service: 0, retail: 0, color: 0, hours: 0, haircuts: 0 };
+          let any = false;
+          l.storeCodes.forEach(code => {
+            const t = totals[code];
+            if (!t) return;
+            any = true;
+            rolled.service += t.service || 0;
+            rolled.retail += t.retail || 0;
+            rolled.color += t.color || 0;
+            rolled.hours += t.hours || 0;
+            rolled.haircuts += t.haircuts || 0;
+          });
+          if (any) leaderLines.push(`  ${l.name} — Sales $${Math.round(rolled.service)}, Color $${Math.round(rolled.color)}, Retail $${Math.round(rolled.retail)}, Hours ${Math.round(rolled.hours)}, Cuts ${Math.round(rolled.haircuts)}`);
+        });
+      });
+      if (leaderLines.length) { lines.push(`${m.month}:`); leaderLines.forEach(l => lines.push(l)); }
     });
   }
 
@@ -2350,6 +2404,17 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
         const notes = reviewNotes?.[reviewKey(r)];
         const noteStr = notes?.length ? ` [followed up: ${notes[notes.length - 1].text}]` : ' [no staff follow-up note]';
         lines.push(`${fmtDateLong(r.postedAt)} — ${name}, ${r.rating}★, ${r.userName || 'Anonymous'}: "${r.message}"${noteStr}`);
+      });
+    }
+
+    const RECENT_POSITIVE_LIMIT = 15;
+    const recentPositive = [...pos].sort((a, b) => b.postedAt.localeCompare(a.postedAt)).slice(0, RECENT_POSITIVE_LIMIT);
+    if (recentPositive.length) {
+      lines.push('');
+      lines.push(`MOST RECENT POSITIVE REVIEWS, up to ${RECENT_POSITIVE_LIMIT} (full text, for "what are people loving" type questions — older/other positive reviews are only reflected in the counts above):`);
+      recentPositive.forEach(r => {
+        const { name } = resolveStoreName(r.code, r.rawLocation);
+        lines.push(`${fmtDateLong(r.postedAt)} — ${name}, ${r.rating}★, ${r.userName || 'Anonymous'}: "${r.message}"`);
       });
     }
   }
