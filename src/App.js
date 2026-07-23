@@ -1590,6 +1590,22 @@ function ReviewCard({ review, employeeMatch, notes, onAddNote, goldComb, onToggl
   );
 }
 
+const GOLD_CELEBRATION_STARS = ['⭐', '🌟', '⭐', '🌟', '⭐'];
+function GoldCombCelebration() {
+  return (
+    <div className="gold-celebration" role="status">
+      <div className="gold-celebration-card">
+        <div className="gold-celebration-stars">
+          {GOLD_CELEBRATION_STARS.map((star, i) => (
+            <span key={i} className="gold-celebration-star" style={{ animationDelay: `${i * 0.12}s` }}>{star}</span>
+          ))}
+        </div>
+        <p className="gold-celebration-text">Great Job! 🏆</p>
+      </div>
+    </div>
+  );
+}
+
 function isNegativeReview(r) { return r.rating <= 3; }
 function isPositiveReview(r) { return r.rating >= 4; }
 function ratingClass(avg) { return avg >= 4.8 ? 'rating-good' : 'rating-bad'; }
@@ -2865,6 +2881,7 @@ export default function App() {
   const [tab, setTab] = useState('Overview');
   const [setupSection, setSetupSection] = useState('guide');
   const [toast, setToast] = useState(null);
+  const [celebrate, setCelebrate] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadingRoster, setUploadingRoster] = useState(false);
   const [uploadingReviews, setUploadingReviews] = useState(false);
@@ -3110,6 +3127,7 @@ export default function App() {
   // lives in its own db key (like review_notes) so it survives a fresh
   // reviews-file re-upload, which rebuilds reviews.reviews from scratch.
   const handleToggleGoldComb = useCallback(key => {
+    const isAdding = !goldCombs[key];
     setGoldCombs(prev => {
       const next = { ...prev };
       if (next[key]) delete next[key];
@@ -3121,7 +3139,11 @@ export default function App() {
       });
       return next;
     });
-  }, []);
+    if (isAdding) {
+      setCelebrate(true);
+      setTimeout(() => setCelebrate(false), 1700);
+    }
+  }, [goldCombs]);
 
   const handleSaveGoal = useCallback((storeCode, field, value) => {
     setGoals(prev => {
@@ -3346,6 +3368,7 @@ export default function App() {
   return (
     <div className="app">
       {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
+      {celebrate && <GoldCombCelebration />}
 
       <header className="app-header">
         <div className="header-left">

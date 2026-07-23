@@ -267,6 +267,36 @@
 .toast-success { background: var(--navy); color: #fff; }
 .toast-error { background: var(--red); color: #fff; }
 
+/* ─── Gold Comb celebration ──────────────────────────────────────────── */
+.gold-celebration {
+  position: fixed; top: 90px; left: 50%; transform: translateX(-50%); z-index: 60;
+  pointer-events: none; display: flex; justify-content: center;
+}
+.gold-celebration-card {
+  background: linear-gradient(180deg, #fff, #FFF8E4); border: 2px solid var(--gold); border-radius: 18px;
+  padding: 16px 28px; box-shadow: 0 8px 24px rgba(201,162,39,0.35); text-align: center;
+  animation: gold-celebration-pop 1.7s ease forwards;
+}
+.gold-celebration-stars { font-size: 24px; letter-spacing: 4px; margin-bottom: 4px; }
+.gold-celebration-star { display: inline-block; animation: gold-star-dance 0.7s ease-in-out infinite; }
+.gold-celebration-text {
+  font-family: 'Barlow Condensed', sans-serif; font-size: 24px; font-weight: 700;
+  color: var(--navy); letter-spacing: 0.02em; margin: 0;
+}
+@keyframes gold-celebration-pop {
+  0% { opacity: 0; transform: scale(0.7) translateY(10px); }
+  15% { opacity: 1; transform: scale(1.08) translateY(0); }
+  25% { transform: scale(1); }
+  85% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.95) translateY(-6px); }
+}
+@keyframes gold-star-dance {
+  0%, 100% { transform: translateY(0) rotate(0deg) scale(1); }
+  25% { transform: translateY(-10px) rotate(-18deg) scale(1.2); }
+  50% { transform: translateY(2px) rotate(12deg) scale(0.9); }
+  75% { transform: translateY(-6px) rotate(-10deg) scale(1.1); }
+}
+
 /* ─── Empty / loading ────────────────────────────────────────────────── */
 .empty-note { font-size: 12.5px; color: var(--ink-soft); }
 .empty-state { text-align: center; padding: 40px 20px; color: var(--ink-soft); }
