@@ -634,6 +634,11 @@ function TopTenChart({ title, emoji, rows, metricKey, formatter, color }) {
 
 const genId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
+// Auto-assigned when a group is first used — cycled by position so groups
+// stay visually distinct without anyone having to hand-pick a color.
+const NEWS_GROUP_PALETTE = ['#C23B3B', '#1F3A63', '#2E7D4F', '#C9A227', '#6B4FA0', '#2B8A9E'];
+const NEWS_GROUP_EMOJI = ['📣', '🎉', '📌', '🚀', '⭐', '🧩', '🔥', '💡'];
+
 // Reads an uploaded image, downscales it to a reasonable header-banner size,
 // and re-encodes as a JPEG data URL — a phone photo can be several MB, and
 // these get stored inline in the same Supabase jsonb payload as everything
@@ -834,12 +839,12 @@ function EventComposer({ initial, onSubmit, onCancel, onImageError }) {
 // `onClick` (e.g. "open this post on the News tab") takes priority over
 // `onImageClick` (the image lightbox, used by Events) — a card is one or the
 // other, never both, so there's no ambiguity about what a tap does.
-function HomepageMediaCard({ image, badge, title, date, desc, onImageClick, onClick }) {
+function HomepageMediaCard({ image, badge, title, date, desc, onImageClick, onClick, compact }) {
   const clickable = !!(onClick || (image && onImageClick));
   const handleClick = onClick ? onClick : (image ? () => onImageClick(image) : undefined);
   return (
     <div
-      className={`homepage-featured-card ${clickable ? 'homepage-featured-card--clickable' : ''}`}
+      className={`homepage-featured-card ${compact ? 'homepage-featured-card--compact' : ''} ${clickable ? 'homepage-featured-card--clickable' : ''}`}
       style={image ? { backgroundImage: `url(${image})` } : undefined}
       onClick={clickable ? handleClick : undefined}
       role={clickable ? 'button' : undefined}
@@ -1151,70 +1156,98 @@ function HomepageTab({ report, news, events, reviews, onOpenNews }) {
   );
 }
 
-// ─── News tab ───────────────────────────────────────────────────────────────
-// The long-format home for posts that only get a teaser card on the
-// Homepage — full body text, full-size header image, and an inline PDF
-// viewer for attachments. `openNews` (an object, so a fresh reference on
-// every click re-triggers the effect even for the same id) comes from a
-// Homepage card tap: scrolls to that post and flashes a highlight around it.
-function NewsTab({ news, openNews }) {
-  // Bucket by `group` (null bucket for ungrouped posts, rendered without a
-  // header so users who never touch the group field see the same plain feed
-  // as before), then order the buckets by their own most-recent post so a
-  // fresh ungrouped post can still surface above a stale named group.
-  const grouped = useMemo(() => {
-    const sorted = [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || ''));
-    const byGroup = new Map();
-    sorted.forEach(n => {
-      const key = n.group || null;
-      if (!byGroup.has(key)) byGroup.set(key, []);
-      byGroup.get(key).push(n);
-    });
-    return [...byGroup.entries()].sort((a, b) => {
-      const aLatest = a[1][0]?.createdAt || a[1][0]?.date || '';
-      const bLatest = b[1][0]?.createdAt || b[1][0]?.date || '';
-      return bLatest.localeCompare(aLatest);
-    });
-  }, [news]);
+// Full-post overlay opened from a News tile tap (or a Homepage card deep
+// link) — the tiles themselves are compact, so this is where the full
+// header image, body text, and PDF actually get read.
+function NewsPostModal({ post, onClose }) {
+  useEffect(() => {
+    if (!post) return;
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [post, onClose]);
+  if (!post) return null;
+  return (
+    <div className="news-modal-overlay" onClick={onClose}>
+      <div className="news-modal-panel" onClick={e => e.stopPropagation()}>
+        <button type="button" className="news-modal-close" onClick={onClose} aria-label="Close">✕</button>
+        {post.headerImage && <img className="news-post-image" src={post.headerImage} alt="" />}
+        <p className="news-post-date">{fmtDateLong(post.date)}{post.group ? ` · 🏷 ${post.group}` : ''}</p>
+        <p className="news-post-title">{post.title}</p>
+        {post.body && <p className="news-post-text">{post.body}</p>}
+        {post.pdf && (
+          <div className="news-post-pdf">
+            <iframe className="news-post-pdf-frame" src={post.pdf.dataUrl} title={post.pdf.name} />
+            <a className="news-post-pdf-link" href={post.pdf.dataUrl} download={post.pdf.name}>⬇ Download {post.pdf.name}</a>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
-  const [highlightId, setHighlightId] = useState(null);
-  const postRefs = useRef({});
+// ─── News tab ───────────────────────────────────────────────────────────────
+// A grid of small tiles (reusing HomepageMediaCard in its `compact` form)
+// grouped under big, colorful headers driven by the manager-curated
+// `newsGroups` list — tapping any tile opens the full post in NewsPostModal.
+// `openNews` (an object, so a fresh reference on every click re-triggers the
+// effect even for the same id) comes from a Homepage card tap and opens that
+// post's modal directly.
+function NewsTab({ news, newsGroups, openNews }) {
+  const [selectedPost, setSelectedPost] = useState(null);
 
   useEffect(() => {
     if (!openNews?.id) return;
-    const el = postRefs.current[openNews.id];
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    setHighlightId(openNews.id);
-    const t = setTimeout(() => setHighlightId(null), 2500);
-    return () => clearTimeout(t);
-  }, [openNews]);
+    const post = news.find(n => n.id === openNews.id);
+    if (post) setSelectedPost(post);
+  }, [openNews, news]);
+
+  // Ungrouped posts (or posts whose group was since deleted from the
+  // manager) form a header-less bucket shown first; named groups follow in
+  // the manager's curated order, each cycling a fun emoji by position.
+  const buckets = useMemo(() => {
+    const registeredNames = new Set(newsGroups.map(g => g.name));
+    const byGroup = new Map();
+    const ungrouped = [];
+    news.forEach(n => {
+      if (n.group && registeredNames.has(n.group)) {
+        if (!byGroup.has(n.group)) byGroup.set(n.group, []);
+        byGroup.get(n.group).push(n);
+      } else {
+        ungrouped.push(n);
+      }
+    });
+    const byRecency = arr => [...arr].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || ''));
+    const result = [];
+    if (ungrouped.length) result.push({ name: null, color: null, emoji: null, posts: byRecency(ungrouped) });
+    newsGroups.forEach((g, i) => {
+      const posts = byGroup.get(g.name);
+      if (posts?.length) result.push({ name: g.name, color: g.color, emoji: NEWS_GROUP_EMOJI[i % NEWS_GROUP_EMOJI.length], posts: byRecency(posts) });
+    });
+    return result;
+  }, [news, newsGroups]);
 
   return (
     <div className="tab-content">
-      <p className="section-hint">Company updates and longer-format posts — post new ones from Setup → Homepage.</p>
-      {grouped.length ? grouped.map(([group, posts]) => (
-        <div key={group || '__ungrouped__'} className="news-group">
-          {group && <p className="news-group-label">🏷 {group}</p>}
-          {posts.map(n => (
-            <div
-              key={n.id}
-              ref={el => { postRefs.current[n.id] = el; }}
-              className={`news-post ${highlightId === n.id ? 'news-post--highlighted' : ''}`}
-            >
-              {n.headerImage && <img className="news-post-image" src={n.headerImage} alt="" />}
-              <p className="news-post-date">{fmtDateLong(n.date)}</p>
-              <p className="news-post-title">{n.title}</p>
-              {n.body && <p className="news-post-text">{n.body}</p>}
-              {n.pdf && (
-                <div className="news-post-pdf">
-                  <iframe className="news-post-pdf-frame" src={n.pdf.dataUrl} title={n.pdf.name} />
-                  <a className="news-post-pdf-link" href={n.pdf.dataUrl} download={n.pdf.name}>⬇ Download {n.pdf.name}</a>
-                </div>
-              )}
-            </div>
-          ))}
+      <p className="section-hint">Company updates and longer-format posts — post new ones, and manage groups, from Setup → Homepage.</p>
+      {buckets.length ? buckets.map(b => (
+        <div key={b.name || '__ungrouped__'} className="news-group">
+          {b.name && (
+            <p className="news-group-label" style={b.color ? { '--group-color': b.color } : undefined}>
+              <span className="news-group-emoji">{b.emoji}</span>{b.name}
+            </p>
+          )}
+          <div className="news-tile-grid">
+            {b.posts.map(n => (
+              <HomepageMediaCard
+                key={n.id} compact image={n.headerImage} badge={n.pdf ? '📄 PDF' : undefined}
+                title={n.title} date={fmtDateLong(n.date)} onClick={() => setSelectedPost(n)}
+              />
+            ))}
+          </div>
         </div>
       )) : <p className="empty-note">No news posted yet — post one from Setup → Homepage.</p>}
+      <NewsPostModal post={selectedPost} onClose={() => setSelectedPost(null)} />
     </div>
   );
 }
@@ -2335,14 +2368,58 @@ function ManagersTab({ report, managers, onSaveManager, onImportManagers }) {
   );
 }
 
+// Rename/reorder/recolor/ungroup — the group itself is just an entry in
+// `newsGroups` (name + color); deleting one here only clears the `group`
+// field on its posts, it never touches the posts.
+function NewsGroupManager({ groups, news, onRename, onDelete, onReorder, onSetColor }) {
+  const [drafts, setDrafts] = useState({});
+  const countFor = name => news.filter(n => n.group === name).length;
+  const commitRename = g => {
+    const val = (drafts[g.name] ?? g.name).trim();
+    if (val && val !== g.name) onRename(g.name, val);
+    setDrafts(d => { const next = { ...d }; delete next[g.name]; return next; });
+  };
+  return (
+    <div className="homepage-section">
+      <p className="section-label">🏷 News Groups</p>
+      <p className="section-hint">Rename, recolor, reorder, or remove a group — posts stay put; removing a group just ungroups its posts. Order here controls order on the News tab. New groups typed into the News composer show up here automatically.</p>
+      {groups.length ? (
+        <div className="news-group-manager-list">
+          {groups.map((g, i) => (
+            <div className="news-group-manager-row" key={g.name}>
+              <input type="color" className="homepage-color-input" value={g.color} onChange={e => onSetColor(g.name, e.target.value)} title="Header color" />
+              <input
+                className="homepage-input news-group-manager-name"
+                value={drafts[g.name] ?? g.name}
+                onChange={e => setDrafts(d => ({ ...d, [g.name]: e.target.value }))}
+                onBlur={() => commitRename(g)}
+                onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+              />
+              <span className="news-group-manager-count">{countFor(g.name)} post{countFor(g.name) === 1 ? '' : 's'}</span>
+              <div className="news-group-manager-actions">
+                <button type="button" className="homepage-cal-nav" disabled={i === 0} onClick={() => onReorder(g.name, -1)} title="Move up">↑</button>
+                <button type="button" className="homepage-cal-nav" disabled={i === groups.length - 1} onClick={() => onReorder(g.name, 1)} title="Move down">↓</button>
+                <button type="button" className="homepage-delete-btn" onClick={() => onDelete(g.name)} title="Delete group (posts stay, just ungrouped)">✕</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : <p className="empty-note">No groups yet — type one into the News composer's "Group" field to create one.</p>}
+    </div>
+  );
+}
+
 // ─── Homepage admin (Setup > Homepage) — compose/manage News & Events ──────
 // Posting lives here, not on the Homepage tab itself, so the public-facing
 // landing page stays read-only and can't be edited by accident — same split
 // as Goals/Managers (edit in Setup, display everywhere else).
-function HomepageAdminTab({ news, events, onAddNews, onUpdateNews, onDeleteNews, onAddEvent, onUpdateEvent, onDeleteEvent, onImageError }) {
+function HomepageAdminTab({
+  news, events, newsGroups, onAddNews, onUpdateNews, onDeleteNews, onAddEvent, onUpdateEvent, onDeleteEvent,
+  onRenameNewsGroup, onDeleteNewsGroup, onReorderNewsGroup, onSetNewsGroupColor, onImageError,
+}) {
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '')), [news]);
   const sortedEvents = useMemo(() => [...events].sort((a, b) => (a.date || '').localeCompare(b.date || '')), [events]);
-  const existingGroups = useMemo(() => [...new Set(news.map(n => n.group).filter(Boolean))].sort(), [news]);
+  const existingGroups = useMemo(() => newsGroups.map(g => g.name), [newsGroups]);
 
   // Editing is "which id is loaded into the composer" — null means the
   // composer is in create mode. The composer is remounted (via `key`) on
@@ -2364,6 +2441,11 @@ function HomepageAdminTab({ news, events, onAddNews, onUpdateNews, onDeleteNews,
   return (
     <div className="tab-content">
       <p className="section-hint">Post News &amp; Updates and log Events here — both support an optional header image, and News can also attach a PDF and a group. News shows a teaser card on the Homepage that opens the full post (and PDF) on the News tab; events also appear on the Homepage calendar (in their chosen color), with the 3 soonest featured above it. Use ✎ to edit a post or event in place.</p>
+
+      <NewsGroupManager
+        groups={newsGroups} news={news} onRename={onRenameNewsGroup} onDelete={onDeleteNewsGroup}
+        onReorder={onReorderNewsGroup} onSetColor={onSetNewsGroupColor}
+      />
 
       <div className="homepage-admin-columns">
         <div className="homepage-section">
@@ -3922,6 +4004,7 @@ export default function App() {
   const [reviewNotes, setReviewNotes] = useState({});
   const [goldCombs, setGoldCombs] = useState({});
   const [news, setNews] = useState([]);
+  const [newsGroups, setNewsGroups] = useState([]); // [{name, color}], manager-curated order
   const [events, setEvents] = useState([]);
   const [history, setHistory] = useState({});
   // Sales-Accrual and Attendance historical imports are two independent
@@ -3954,10 +4037,10 @@ export default function App() {
   useEffect(() => {
     Promise.all([
       loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('store_managers'), loadData('milestone_goals'), loadData('reviews'), loadData('review_notes'), loadData('review_gold_combs'),
-      loadData('homepage_news'), loadData('homepage_events'),
+      loadData('homepage_news'), loadData('homepage_events'), loadData('homepage_news_groups'),
       loadDataByPrefix('daily_history_'), loadDataByPrefix('weekly_history_'),
       loadData('daily_history'), loadData('weekly_history'), // legacy single-row format, if anything was saved before chunking
-    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
+    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
       if (reportRes.data) setReport(ensureReportCph(reportRes.data)); else { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
@@ -3966,8 +4049,23 @@ export default function App() {
       if (reviewsRes.data) setReviews(reviewsRes.data);
       if (reviewNotesRes.data) setReviewNotes(reviewNotesRes.data);
       if (goldCombsRes.data) setGoldCombs(goldCombsRes.data);
-      if (newsRes.data) setNews(newsRes.data);
+      const loadedNews = newsRes.data || [];
+      if (newsRes.data) setNews(loadedNews);
       if (eventsRes.data) setEvents(eventsRes.data);
+
+      // Groups are managed separately from the posts that reference them
+      // (name/order/color), but a group name can be typed straight into a
+      // post before it's ever been through the manager — self-heal here so
+      // nothing typed on a post silently fails to show up as a manageable
+      // group later.
+      const loadedGroups = newsGroupsRes.data || [];
+      const knownGroupNames = new Set(loadedGroups.map(g => g.name));
+      const missingGroupNames = [...new Set(loadedNews.map(n => n.group).filter(Boolean))].filter(n => !knownGroupNames.has(n));
+      const reconciledGroups = missingGroupNames.length
+        ? [...loadedGroups, ...missingGroupNames.map((name, i) => ({ name, color: NEWS_GROUP_PALETTE[(loadedGroups.length + i) % NEWS_GROUP_PALETTE.length] }))]
+        : loadedGroups;
+      setNewsGroups(reconciledGroups);
+      if (missingGroupNames.length) saveData('homepage_news_groups', reconciledGroups);
 
       // Postgres gives NO ordering guarantee on an unordered SELECT — so
       // merging chunks in whatever order the array happens to arrive in
@@ -4242,7 +4340,23 @@ export default function App() {
     setOpenNews({ id });
   }, []);
 
+  // Auto-registers a group the first time a post uses it — a group typed
+  // into the composer's free-text field becomes manageable (rename/reorder/
+  // recolor) without a separate "create group" step.
+  const ensureNewsGroup = useCallback(name => {
+    if (!name) return;
+    setNewsGroups(prev => {
+      if (prev.some(g => g.name === name)) return prev;
+      const next = [...prev, { name, color: NEWS_GROUP_PALETTE[prev.length % NEWS_GROUP_PALETTE.length] }];
+      saveData('homepage_news_groups', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Group saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+  }, []);
+
   const handleAddNews = useCallback(fields => {
+    ensureNewsGroup(fields.group);
     const item = { id: genId(), ...fields, date: new Date().toISOString().slice(0, 10), createdAt: new Date().toISOString() };
     setNews(prev => {
       const next = [item, ...prev];
@@ -4251,13 +4365,74 @@ export default function App() {
       });
       return next;
     });
-  }, []);
+  }, [ensureNewsGroup]);
 
   const handleUpdateNews = useCallback((id, fields) => {
+    ensureNewsGroup(fields.group);
     setNews(prev => {
       const next = prev.map(n => n.id === id ? { ...n, ...fields } : n);
       saveData('homepage_news', next).then(result => {
         if (isConfigured() && !result.ok) showToast(`Update saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+  }, [ensureNewsGroup]);
+
+  const handleRenameNewsGroup = useCallback((oldName, newName) => {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === oldName) return;
+    setNewsGroups(prev => {
+      const next = prev.map(g => g.name === oldName ? { ...g, name: trimmed } : g);
+      saveData('homepage_news_groups', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Group saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+    setNews(prev => {
+      const next = prev.map(n => n.group === oldName ? { ...n, group: trimmed } : n);
+      saveData('homepage_news', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Update saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+  }, []);
+
+  const handleDeleteNewsGroup = useCallback(name => {
+    setNewsGroups(prev => {
+      const next = prev.filter(g => g.name !== name);
+      saveData('homepage_news_groups', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Group saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+    setNews(prev => {
+      const next = prev.map(n => n.group === name ? { ...n, group: null } : n);
+      saveData('homepage_news', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Update saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+  }, []);
+
+  const handleReorderNewsGroup = useCallback((name, direction) => {
+    setNewsGroups(prev => {
+      const idx = prev.findIndex(g => g.name === name);
+      const swapWith = idx + direction;
+      if (idx < 0 || swapWith < 0 || swapWith >= prev.length) return prev;
+      const next = [...prev];
+      [next[idx], next[swapWith]] = [next[swapWith], next[idx]];
+      saveData('homepage_news_groups', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Group saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+  }, []);
+
+  const handleSetNewsGroupColor = useCallback((name, color) => {
+    setNewsGroups(prev => {
+      const next = prev.map(g => g.name === name ? { ...g, color } : g);
+      saveData('homepage_news_groups', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Group saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
       });
       return next;
     });
@@ -4562,7 +4737,7 @@ export default function App() {
           <HomepageTab report={report} news={news} events={events} reviews={reviews} onOpenNews={handleOpenNews} />
         )}
         {tab === 'News' && (
-          <NewsTab news={news} openNews={openNews} />
+          <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} />
         )}
         {!needsReport && tab === 'Overview' && report && (
           <OverviewTab report={report} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} />
@@ -4614,7 +4789,14 @@ export default function App() {
             goalsProps={{ report, goals, onSaveGoal: handleSaveGoal, onImportGoals: handleImportGoals }}
             managersProps={{ report, managers, onSaveManager: handleSaveManager, onImportManagers: handleImportManagers }}
             milestoneGoalsProps={{ report, milestoneGoals, onSaveMilestoneGoal: handleSaveMilestoneGoal, onImportMilestoneGoals: handleImportMilestoneGoals }}
-            homepageAdminProps={{ news, events, onAddNews: handleAddNews, onUpdateNews: handleUpdateNews, onDeleteNews: handleDeleteNews, onAddEvent: handleAddEvent, onUpdateEvent: handleUpdateEvent, onDeleteEvent: handleDeleteEvent, onImageError: msg => showToast(msg, 'error') }}
+            homepageAdminProps={{
+              news, events, newsGroups,
+              onAddNews: handleAddNews, onUpdateNews: handleUpdateNews, onDeleteNews: handleDeleteNews,
+              onAddEvent: handleAddEvent, onUpdateEvent: handleUpdateEvent, onDeleteEvent: handleDeleteEvent,
+              onRenameNewsGroup: handleRenameNewsGroup, onDeleteNewsGroup: handleDeleteNewsGroup,
+              onReorderNewsGroup: handleReorderNewsGroup, onSetNewsGroupColor: handleSetNewsGroupColor,
+              onImageError: msg => showToast(msg, 'error'),
+            }}
             historyProps={{ history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory }}
             uploadProps={{
               report, uploading, onFile: handleFile, onClear: handleClearAll,

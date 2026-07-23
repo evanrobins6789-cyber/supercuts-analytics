@@ -568,6 +568,18 @@
   color: #fff; background: rgba(20,42,74,0.55); border-radius: 12px; padding: 2px 8px; margin-top: 6px;
 }
 
+/* Compact variant — News tab tiles, a quarter the footprint of a normal
+   featured card. Description and the zoom hint are dropped entirely rather
+   than shrunk, so a tile stays a clean thumbnail; the full post is one tap
+   away in NewsPostModal regardless. */
+.homepage-featured-card--compact { min-height: 120px; border-radius: 10px; cursor: pointer; }
+.homepage-featured-card--compact .homepage-featured-overlay { padding: 9px; gap: 1px; }
+.homepage-featured-card--compact .homepage-featured-title { font-size: 13px; -webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.homepage-featured-card--compact .homepage-featured-date { font-size: 9.5px; }
+.homepage-featured-card--compact .homepage-featured-badge { font-size: 9px; padding: 2px 7px; margin-bottom: 3px; }
+.homepage-featured-card--compact .homepage-featured-desc,
+.homepage-featured-card--compact .homepage-featured-zoom-hint { display: none; }
+
 /* Full-screen image viewer — opens a card's header image at full size */
 .homepage-lightbox {
   position: fixed; inset: 0; background: rgba(10,16,26,0.9); z-index: 2000;
@@ -581,33 +593,65 @@
 }
 .homepage-lightbox-close:hover { background: rgba(255,255,255,0.25); }
 
-/* News tab — long-format posts, deep-linked from a Homepage card tap */
+/* News tab — a grid of small tiles per group, full post opens in a modal */
 .news-group { display: flex; flex-direction: column; }
+.news-group:first-child .news-group-label { margin-top: 4px; }
 .news-group-label {
-  font-family: 'Barlow Condensed', sans-serif; font-size: 15px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.03em; color: var(--red-deep); margin: 4px 2px 10px;
+  --group-color: var(--red-deep);
+  display: flex; align-items: center; gap: 12px;
+  font-family: 'Barlow Condensed', sans-serif; font-size: 34px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.02em; color: var(--group-color); margin: 30px 2px 14px;
 }
-.news-post {
-  /* Capped to the Homepage main column's width (1400px tab max minus the
-     340px sidebar and 20px gap) so a post reads at the same width here as
-     its teaser card's column does on the front page, not edge-to-edge. */
-  max-width: 1040px;
-  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-  padding: 18px; box-shadow: var(--shadow); margin-bottom: 16px; transition: box-shadow 0.3s ease;
+.news-group-emoji { font-size: 30px; line-height: 1; }
+.news-group-label::after {
+  content: ''; flex: 1; height: 5px; border-radius: 6px; align-self: center;
+  background: linear-gradient(90deg, var(--group-color), transparent);
 }
-.news-post--highlighted { box-shadow: 0 0 0 3px var(--red), var(--shadow); }
+/* 4-up on desktop is roughly a quarter the footprint of the old full-width
+   single-column post block this replaced. */
+.news-tile-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 8px; }
+@media (max-width: 900px) { .news-tile-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 640px) { .news-tile-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 420px) { .news-tile-grid { grid-template-columns: 1fr; } }
+
+/* Full-post overlay, opened from a tile tap or a Homepage card deep link */
+.news-modal-overlay {
+  position: fixed; inset: 0; background: rgba(10,16,26,0.78); z-index: 2000;
+  display: flex; align-items: center; justify-content: center; padding: 28px; cursor: zoom-out;
+  animation: homepage-fade-in 0.15s ease;
+}
+.news-modal-panel {
+  position: relative; background: var(--card); border-radius: 14px; max-width: 720px; width: 100%;
+  max-height: 86vh; overflow-y: auto; padding: 26px; cursor: default; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.news-modal-close {
+  position: absolute; top: 12px; right: 12px; background: rgba(20,42,74,0.08); border: none; color: var(--navy);
+  width: 34px; height: 34px; border-radius: 50%; font-size: 15px; cursor: pointer; z-index: 1;
+}
+.news-modal-close:hover { background: rgba(194,59,59,0.15); color: var(--red-deep); }
+
 .news-post-image { display: block; width: 100%; max-height: 320px; object-fit: cover; border-radius: 10px; margin-bottom: 12px; }
 .news-post-date { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); }
 .news-post-title { font-family: 'Barlow Condensed', sans-serif; font-size: 24px; font-weight: 700; color: var(--navy); line-height: 1.15; margin-top: 2px; }
 .news-post-text { font-size: 13.5px; color: var(--navy); line-height: 1.55; margin-top: 10px; white-space: pre-wrap; }
 .news-post-pdf { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
-.news-post-pdf-frame { width: 100%; height: 520px; border: 1px solid var(--line); border-radius: 10px; }
-@media (max-width: 640px) { .news-post-pdf-frame { height: 360px; } }
+.news-post-pdf-frame { width: 100%; height: 420px; border: 1px solid var(--line); border-radius: 10px; }
+@media (max-width: 640px) { .news-post-pdf-frame { height: 300px; } }
 .news-post-pdf-link {
   align-self: flex-start; font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600;
   color: var(--navy); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; text-decoration: none;
 }
 .news-post-pdf-link:hover { border-color: var(--red); color: var(--red-deep); }
+
+/* Group manager (Setup > Homepage) */
+.news-group-manager-list { display: flex; flex-direction: column; gap: 8px; }
+.news-group-manager-row {
+  display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 8px;
+  padding: 7px 9px; background: var(--paper);
+}
+.news-group-manager-name { flex: 1; min-width: 0; }
+.news-group-manager-count { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--ink-soft); flex: none; white-space: nowrap; }
+.news-group-manager-actions { display: flex; align-items: center; gap: 2px; flex: none; }
 
 /* Month calendar */
 .homepage-calendar { display: flex; flex-direction: column; gap: 8px; }
@@ -618,6 +662,8 @@
   cursor: pointer; font-size: 15px; line-height: 1; display: flex; align-items: center; justify-content: center;
 }
 .homepage-cal-nav:hover { border-color: var(--red); color: var(--red-deep); }
+.homepage-cal-nav:disabled { opacity: 0.35; cursor: not-allowed; }
+.homepage-cal-nav:disabled:hover { border-color: var(--line); color: var(--navy); }
 .homepage-calendar-weekdays {
   display: grid; grid-template-columns: repeat(7, 1fr); text-align: center;
   font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--ink-soft); text-transform: uppercase;
