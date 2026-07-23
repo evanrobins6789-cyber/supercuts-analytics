@@ -301,6 +301,36 @@ export async function parseManagerFile(file) {
   return { entries, fileName: file.name };
 }
 
+// ─── Milestone goals (Salon | Goal | Milestone) ────────────────────────────
+// Goal = the number a store HAS to hit; Milestone = a stretch target above
+// it. Updated monthly. Headers are stable (unlike the DL/Salon/Goal file
+// above, whose goal column header changes every month), so read by header
+// text instead of position.
+export async function parseMilestoneGoalFile(file) {
+  const grid = await readWorkbookGrid(file);
+  if (grid.length < 2) throw new Error('This file does not have any milestone goal rows in it.');
+
+  const header = grid[0];
+  const storeCol = findCol(header, 'Salon');
+  const goalCol = findCol(header, 'Goal');
+  const milestoneCol = findCol(header, 'Milestone');
+  if (storeCol === -1 || goalCol === -1 || milestoneCol === -1) {
+    throw new Error('Could not find the expected columns ("Salon", "Goal", "Milestone") in this file.');
+  }
+
+  const entries = [];
+  for (let r = 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (!rowHasData(row)) continue;
+    const storeName = cellText(row[storeCol]);
+    if (!storeName) continue;
+    entries.push({ storeName, goal: numOf(row[goalCol]), milestone: numOf(row[milestoneCol]) });
+  }
+  if (!entries.length) throw new Error('No milestone goal rows found in this file.');
+
+  return { entries, fileName: file.name };
+}
+
 // ─── Reviews export (CSV) ───────────────────────────────────────────────────
 // A Google-reviews style export. The "location" column is a verbose listing
 // name that doesn't match our store naming — "location short name" is the

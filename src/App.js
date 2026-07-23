@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDataByPrefix } from './db';
 import {
-  parseStylistReport, parseEmployeeStartDates, parseGoalFile, parseManagerFile, parseReviews, normalizeName,
+  parseStylistReport, parseEmployeeStartDates, parseGoalFile, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
   parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory,
   buildWeeklyRecord, mergeWeeklyIntoHistory,
 } from './parser';
@@ -92,6 +92,28 @@ function withManagerFlag(employees, managers, code) {
   if (!managerName) return employees;
   const target = normalizeName(managerName);
   return employees.map(e => ({ ...e, isManager: normalizeName(e.name) === target }));
+}
+
+// Sideways progress bar toward a Milestone (stretch) goal, with a tick mark
+// showing where the Goal (the number they HAVE to hit) sits along the same
+// bar, and the exact % off to the right — % is against Milestone specifically
+// (not Goal), and is allowed to read over 100% rather than clamping the label
+// once a store blows past its stretch target.
+function MilestoneThermometer({ actual, goal, milestone }) {
+  if (milestone == null || milestone <= 0) return <span className="empty-note">—</span>;
+  const pct = actual != null ? (actual / milestone) * 100 : null;
+  const fillPct = pct != null ? Math.max(0, Math.min(100, pct)) : 0;
+  const goalPct = goal != null ? Math.max(0, Math.min(100, (goal / milestone) * 100)) : null;
+  const status = pct == null ? 'none' : goal != null && actual < goal ? 'behind' : pct < 100 ? 'onpace' : 'hit';
+  return (
+    <div className="thermo-wrap">
+      <div className={`thermo-bar thermo-bar--${status}`}>
+        <div className="thermo-fill" style={{ width: `${fillPct}%` }} />
+        {goalPct != null && <div className="thermo-goal-tick" style={{ left: `${goalPct}%` }} title={`Goal: ${fmt$(goal)}`} />}
+      </div>
+      <span className="thermo-pct">{pct != null ? `${Math.round(pct)}%` : '—'}</span>
+    </div>
+  );
 }
 
 // Re-aggregate a set of already-rolled-up rows (stores, or store totals) one
@@ -647,6 +669,17 @@ function getPrevMonthRange() {
   return { start: toISO(first), end: toISO(last) };
 }
 
+// Milestone goals are monthly, so progress toward one always compares
+// against month-to-date actuals — regardless of whatever date range the DL
+// tab itself is currently filtered to — the same "always this one specific
+// period" approach already used for Prev Month Color above.
+function getCurrentMonthRange() {
+  const now = new Date();
+  const first = new Date(now.getFullYear(), now.getMonth(), 1);
+  const toISO = d => d.toISOString().slice(0, 10);
+  return { start: toISO(first), end: toISO(now) };
+}
+
 // ─── Single-focus store tabs (Retail, Color Sales) — grouped by DL ─────────
 function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers }) {
   const [sortBy, setSortBy] = useState(metricA.key);
@@ -932,11 +965,23 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
 }
 
 // ─── DL tab ─────────────────────────────────────────────────────────────────
-function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers }) {
+function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers, milestoneGoals }) {
   const [expanded, setExpanded] = useState({});
   const [expandedStore, setExpandedStore] = useState({});
   const [showManagers, setShowManagers] = useState(false);
   const isHistorical = !!(dateRange.start && dateRange.end);
+
+  // Milestone goals are monthly, so "actual" for the thermometer is always
+  // month-to-date sales — independent of whatever the DL tab's own date
+  // range filter is set to (same reasoning as Retail/Color's Prev Month
+  // Color stat).
+  const monthToDateSalesByCode = useMemo(() => {
+    const { start, end } = getCurrentMonthRange();
+    const totals = getRangeTotals(history, weeklyHistory, start, end);
+    const map = {};
+    Object.entries(totals).forEach(([code, t]) => { map[code] = historyTotalsToReportShape(t).sales; });
+    return map;
+  }, [history, weeklyHistory]);
   const rows = useMemo(() => {
     if (isHistorical) {
       const totals = getRangeTotals(history, weeklyHistory, dateRange.start, dateRange.end);
@@ -991,6 +1036,9 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
           <div className="dl-list">
             {roleGroups.map(g => {
               const t = rollupRows(g.stores);
+              const groupGoal = g.stores.reduce((s, st) => s + (milestoneGoals?.[st.code]?.goal ?? 0), 0);
+              const groupMilestone = g.stores.reduce((s, st) => s + (milestoneGoals?.[st.code]?.milestone ?? 0), 0);
+              const groupActual = g.stores.reduce((s, st) => s + (monthToDateSalesByCode[st.code] ?? 0), 0);
               return (
                 <div key={g.leaderName} className="dl-card">
                   <div className="dl-card-head" style={{ cursor: 'default' }}>
@@ -1008,6 +1056,9 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                       <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(t.rpc)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(t.haircuts)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(t.cph)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{groupGoal > 0 ? fmt$(groupGoal) : '—'}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Milestone</span><span className="dl-stat-value">{groupMilestone > 0 ? fmt$(groupMilestone) : '—'}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupActual} goal={groupGoal} milestone={groupMilestone} /></div>
                     </div>
                   </div>
                   <div className="ledger-scroll dl-store-table">
@@ -1017,6 +1068,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                           <th className="ledger-name-col">Store</th><th className="ledger-name-col">Manager</th>
                           <th>Sales</th><th>TSTH</th><th>Total Hours</th><th>Color Sales</th>
                           <th>CPC</th><th>Retail</th><th>RPC</th><th>Cuts</th><th>CPH</th>
+                          <th>Goal</th><th>Milestone</th><th>Progress</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1033,6 +1085,9 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                             <td>{fmtNum(s.rpc)}</td>
                             <td>{fmtInt(s.haircuts)}</td>
                             <td>{fmtNum(s.cph)}</td>
+                            <td>{milestoneGoals?.[s.code]?.goal != null ? fmt$(milestoneGoals[s.code].goal) : '—'}</td>
+                            <td>{milestoneGoals?.[s.code]?.milestone != null ? fmt$(milestoneGoals[s.code].milestone) : '—'}</td>
+                            <td><MilestoneThermometer actual={monthToDateSalesByCode[s.code]} goal={milestoneGoals?.[s.code]?.goal} milestone={milestoneGoals?.[s.code]?.milestone} /></td>
                           </tr>
                         ))}
                       </tbody>
@@ -1049,6 +1104,9 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                           <td>{fmtNum(t.rpc)}</td>
                           <td>{fmtInt(t.haircuts)}</td>
                           <td>{fmtNum(t.cph)}</td>
+                          <td>{groupGoal > 0 ? fmt$(groupGoal) : '—'}</td>
+                          <td>{groupMilestone > 0 ? fmt$(groupMilestone) : '—'}</td>
+                          <td><MilestoneThermometer actual={groupActual} goal={groupGoal} milestone={groupMilestone} /></td>
                         </tr>
                       </tfoot>
                     </table>
@@ -1067,6 +1125,9 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
             {roleGroups.map(g => {
               const t = rollupRows(g.stores);
               const isOpen = !!expanded[g.leaderName];
+              const groupGoal = g.stores.reduce((s, st) => s + (milestoneGoals?.[st.code]?.goal ?? 0), 0);
+              const groupMilestone = g.stores.reduce((s, st) => s + (milestoneGoals?.[st.code]?.milestone ?? 0), 0);
+              const groupActual = g.stores.reduce((s, st) => s + (monthToDateSalesByCode[st.code] ?? 0), 0);
               return (
                 <div key={g.leaderName} className="dl-card">
                   <button className="dl-card-head" onClick={() => toggle(g.leaderName)}>
@@ -1085,6 +1146,9 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                       <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(t.rpc)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(t.haircuts)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(t.cph)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{groupGoal > 0 ? fmt$(groupGoal) : '—'}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Milestone</span><span className="dl-stat-value">{groupMilestone > 0 ? fmt$(groupMilestone) : '—'}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupActual} goal={groupGoal} milestone={groupMilestone} /></div>
                     </div>
                   </button>
                   {isOpen && (
@@ -1099,6 +1163,9 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                             <th>RPC</th>
                             <th>Cuts</th>
                             <th>CPH</th>
+                            <th>Goal</th>
+                            <th>Milestone</th>
+                            <th>Progress</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1120,10 +1187,13 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                                   <td>{fmtNum(s.rpc)}</td>
                                   <td>{fmtInt(s.haircuts)}</td>
                                   <td>{fmtNum(s.cph)}</td>
+                                  <td>{milestoneGoals?.[s.code]?.goal != null ? fmt$(milestoneGoals[s.code].goal) : '—'}</td>
+                                  <td>{milestoneGoals?.[s.code]?.milestone != null ? fmt$(milestoneGoals[s.code].milestone) : '—'}</td>
+                                  <td><MilestoneThermometer actual={monthToDateSalesByCode[s.code]} goal={milestoneGoals?.[s.code]?.goal} milestone={milestoneGoals?.[s.code]?.milestone} /></td>
                                 </tr>
                                 {isStoreOpen && hasEmployeeData && (
                                   <tr className="store-expand-row">
-                                    <td colSpan={10}>
+                                    <td colSpan={13}>
                                       <EmployeeTable
                                         rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                                         showStoreCol={false}
@@ -1473,6 +1543,94 @@ function ManagersTab({ report, managers, onSaveManager, onImportManagers }) {
                     value={getVal(s.code)}
                     onChange={e => handleChange(s.code, e.target.value)}
                     onBlur={() => handleBlur(s.code)}
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {!stores.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
+    </div>
+  );
+}
+
+// ─── Milestone Goals tab (Goal | Milestone per store, powers the DL tab thermometer) ─
+function MilestoneGoalsTab({ report, milestoneGoals, onSaveMilestoneGoal, onImportMilestoneGoals }) {
+  const [query, setQuery] = useState('');
+  const [drafts, setDrafts] = useState({}); // { code: { goal, milestone } } — in-progress edits
+  const [importing, setImporting] = useState(false);
+
+  if (!report) {
+    return <div className="empty-state"><p className="empty-title">No report yet</p><p>Upload a stylist report first, so there's a store list to set milestone goals for.</p></div>;
+  }
+
+  const stores = report.stores
+    .map(s => ({ name: s.name, code: s.code }))
+    .filter(s => !query.trim() || s.name.toLowerCase().includes(query.trim().toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const getVal = (code, field) => {
+    if (drafts[code]?.[field] !== undefined) return drafts[code][field];
+    return milestoneGoals?.[code]?.[field] ?? '';
+  };
+  const handleChange = (code, field, value) => setDrafts(prev => ({ ...prev, [code]: { ...prev[code], [field]: value } }));
+  const handleBlur = (code, field) => {
+    const raw = drafts[code]?.[field];
+    if (raw === undefined) return;
+    const num = raw === '' ? null : Number(raw);
+    onSaveMilestoneGoal(code, field, isNaN(num) ? null : num);
+  };
+  const handleImportFile = async file => {
+    setImporting(true);
+    await onImportMilestoneGoals(file);
+    setImporting(false);
+  };
+
+  return (
+    <div className="tab-content">
+      <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
+      <p className="section-hint">Goal is the number a store HAS to hit this month; Milestone is a stretch target above it. These power the "Progress" thermometer on the DL tab, compared against each store's month-to-date sales. Updated monthly.</p>
+
+      {onImportMilestoneGoals && (
+        <div className="goal-import-row">
+          <label className="goal-import-btn">
+            <input
+              type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+              onChange={e => { if (e.target.files[0]) handleImportFile(e.target.files[0]); e.target.value = ''; }}
+            />
+            {importing ? <span className="spinner small" /> : '📥'} Import Milestone Goals from file (Salon | Goal | Milestone columns)
+          </label>
+        </div>
+      )}
+
+      <div className="ledger-scroll">
+        <table className="ledger-table">
+          <thead>
+            <tr>
+              <th className="ledger-name-col">Store</th>
+              <th>Goal</th>
+              <th>Milestone</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stores.map(s => (
+              <tr key={s.code}>
+                <td className="ledger-name-col">{s.name}</td>
+                <td>
+                  <input
+                    type="number" className="goal-input" placeholder="$0"
+                    value={getVal(s.code, 'goal')}
+                    onChange={e => handleChange(s.code, 'goal', e.target.value)}
+                    onBlur={() => handleBlur(s.code, 'goal')}
+                  />
+                </td>
+                <td>
+                  <input
+                    type="number" className="goal-input" placeholder="$0"
+                    value={getVal(s.code, 'milestone')}
+                    onChange={e => handleChange(s.code, 'milestone', e.target.value)}
+                    onBlur={() => handleBlur(s.code, 'milestone')}
                   />
                 </td>
               </tr>
@@ -2421,7 +2579,7 @@ function topEmployeeLine(employees, n = 5) {
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
-function buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers) {
+function buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals) {
   const lines = [];
 
   // Static reference info, independent of any report/date — who manages
@@ -2443,6 +2601,23 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
     lines.push('STORE MANAGERS (who manages each individual store day-to-day, as distinct from the DL/Area Supervisor above):');
     Object.entries(managers).forEach(([code, name]) => {
       if (name) lines.push(`${STORE_CODE_TO_NAME[code] || `Store ${code}`}: ${name}`);
+    });
+    lines.push('');
+  }
+
+  // Milestone goals — Goal is the number a store HAS to hit this month,
+  // Milestone is a stretch target above it; both compared against
+  // month-to-date sales (not the current report period, which may only be
+  // a single week) since these are updated/reset monthly.
+  if (milestoneGoals && Object.keys(milestoneGoals).length) {
+    const { start, end } = getCurrentMonthRange();
+    const mtdTotals = getRangeTotals(history, weeklyHistory, start, end);
+    lines.push(`MILESTONE GOALS, month-to-date (${start} through ${end} — Store: month-to-date Sales vs Goal (have to hit) vs Milestone (stretch)):`);
+    Object.entries(milestoneGoals).forEach(([code, g]) => {
+      if (g.goal == null && g.milestone == null) return;
+      const actual = historyTotalsToReportShape(mtdTotals[code] || {}).sales || 0;
+      const pctStr = g.milestone ? ` (${Math.round((actual / g.milestone) * 100)}% of milestone)` : '';
+      lines.push(`${STORE_CODE_TO_NAME[code] || `Store ${code}`}: MTD Sales $${Math.round(actual)}, Goal ${g.goal != null ? `$${Math.round(g.goal)}` : 'n/a'}, Milestone ${g.milestone != null ? `$${Math.round(g.milestone)}` : 'n/a'}${pctStr}`);
     });
     lines.push('');
   }
@@ -2720,7 +2895,7 @@ function RobinNestIcon({ size = 28 }) {
   );
 }
 
-function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers }) {
+function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -2733,7 +2908,7 @@ function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employee
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers);
+      const context = buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals);
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2780,11 +2955,12 @@ const SETUP_SECTIONS = [
   { key: 'guide', label: 'Guide' },
   { key: 'goals', label: 'Goals' },
   { key: 'managers', label: 'Managers' },
+  { key: 'milestoneGoals', label: 'Milestone Goals' },
   { key: 'history', label: 'Historical Import' },
   { key: 'upload', label: 'Upload' },
 ];
 
-function SetupTab({ configured, section, onSection, goalsProps, managersProps, historyProps, uploadProps }) {
+function SetupTab({ configured, section, onSection, goalsProps, managersProps, milestoneGoalsProps, historyProps, uploadProps }) {
   const steps = [
     { n: 1, title: 'Export this week\u2019s stylist report', body: 'Run the report with every store and every employee under it, covering the week you want to see.' },
     { n: 2, title: 'Upload it', body: 'Go to the Upload section below and drop it into the "Stylist Report" slot. The date range fills in automatically.' },
@@ -2811,6 +2987,7 @@ function SetupTab({ configured, section, onSection, goalsProps, managersProps, h
 
       {section === 'goals' && <GoalsTab {...goalsProps} />}
       {section === 'managers' && <ManagersTab {...managersProps} />}
+      {section === 'milestoneGoals' && <MilestoneGoalsTab {...milestoneGoalsProps} />}
       {section === 'history' && <HistoricalImportTab {...historyProps} />}
       {section === 'upload' && <UploadTab {...uploadProps} />}
 
@@ -2858,6 +3035,7 @@ export default function App() {
   const [employeeRoster, setEmployeeRoster] = useState(null);
   const [goals, setGoals] = useState({});
   const [managers, setManagers] = useState({});
+  const [milestoneGoals, setMilestoneGoals] = useState({});
   const [reviews, setReviews] = useState(null);
   const [reviewNotes, setReviewNotes] = useState({});
   const [goldCombs, setGoldCombs] = useState({});
@@ -2890,14 +3068,15 @@ export default function App() {
 
   useEffect(() => {
     Promise.all([
-      loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('store_managers'), loadData('reviews'), loadData('review_notes'), loadData('review_gold_combs'),
+      loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('store_managers'), loadData('milestone_goals'), loadData('reviews'), loadData('review_notes'), loadData('review_gold_combs'),
       loadDataByPrefix('daily_history_'), loadDataByPrefix('weekly_history_'),
       loadData('daily_history'), loadData('weekly_history'), // legacy single-row format, if anything was saved before chunking
-    ]).then(([reportRes, rosterRes, goalsRes, managersRes, reviewsRes, reviewNotesRes, goldCombsRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
+    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
       if (reportRes.data) setReport(ensureReportCph(reportRes.data)); else { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
       if (managersRes.data) setManagers(managersRes.data);
+      if (milestoneGoalsRes.data) setMilestoneGoals(milestoneGoalsRes.data);
       if (reviewsRes.data) setReviews(reviewsRes.data);
       if (reviewNotesRes.data) setReviewNotes(reviewNotesRes.data);
       if (goldCombsRes.data) setGoldCombs(goldCombsRes.data);
@@ -2963,8 +3142,8 @@ export default function App() {
       setWeeklyHistory(mergedWeekly);
 
       setLoading(false);
-      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local' || managersRes.source === 'local' || reviewsRes.source === 'local' || dailyChunksRes.source === 'local' || weeklyChunksRes.source === 'local')) {
-        const err = reportRes.error || rosterRes.error || goalsRes.error || managersRes.error || reviewsRes.error || dailyChunksRes.error || weeklyChunksRes.error;
+      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local' || managersRes.source === 'local' || milestoneGoalsRes.source === 'local' || reviewsRes.source === 'local' || dailyChunksRes.source === 'local' || weeklyChunksRes.source === 'local')) {
+        const err = reportRes.error || rosterRes.error || goalsRes.error || managersRes.error || milestoneGoalsRes.error || reviewsRes.error || dailyChunksRes.error || weeklyChunksRes.error;
         showToast(`Couldn't reach Supabase (${err || 'unknown error'}) — showing this device's local data only`, 'error');
       }
 
@@ -3170,6 +3349,18 @@ export default function App() {
     });
   }, []);
 
+  const handleSaveMilestoneGoal = useCallback((storeCode, field, value) => {
+    setMilestoneGoals(prev => {
+      const next = { ...prev, [storeCode]: { ...prev[storeCode], [field]: value } };
+      saveData('milestone_goals', next).then(result => {
+        if (isConfigured() && !result.ok) {
+          showToast(`Milestone goal saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+        }
+      });
+      return next;
+    });
+  }, []);
+
   const handleImportGoals = useCallback(async (field, file) => {
     try {
       const parsed = await parseGoalFile(file);
@@ -3220,6 +3411,31 @@ export default function App() {
       showToast(err.message, 'error');
     }
   }, [managers]);
+
+  const handleImportMilestoneGoals = useCallback(async file => {
+    try {
+      const parsed = await parseMilestoneGoalFile(file);
+      const next = { ...milestoneGoals };
+      let matched = 0;
+      const unmatched = [];
+      parsed.entries.forEach(e => {
+        const code = getCodeForStoreName(e.storeName);
+        if (code) { next[code] = { goal: e.goal, milestone: e.milestone }; matched++; }
+        else unmatched.push(e.storeName);
+      });
+      setMilestoneGoals(next);
+      const result = await saveData('milestone_goals', next);
+      if (isConfigured() && !result.ok) {
+        showToast(`Imported ${matched} milestone goals, but couldn't sync to Supabase (${result.error})`, 'error');
+      } else if (unmatched.length) {
+        showToast(`Imported ${matched} milestone goals from ${file.name} — ${unmatched.length} store name${unmatched.length > 1 ? 's' : ''} not recognized: ${unmatched.slice(0, 3).join(', ')}${unmatched.length > 3 ? '…' : ''}`, 'error');
+      } else {
+        showToast(`Imported ${matched} milestone goals from ${file.name}`);
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }, [milestoneGoals]);
 
   // A month's chunk for a large franchise (many stores, each with a full
   // per-employee sales/color/retail/haircuts breakdown) can be big enough
@@ -3416,7 +3632,7 @@ export default function App() {
           />
         )}
         {!needsReport && tab === 'DL' && report && (
-          <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} />
+          <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} milestoneGoals={milestoneGoals} />
         )}
         {tab === '60 Day Employee' && (
           <NewHireTab report={report} employeeRoster={employeeRoster} query={queries['60 Day Employee']} onQuery={v => setQuery('60 Day Employee', v)} />
@@ -3436,6 +3652,7 @@ export default function App() {
             configured={isConfigured()} section={setupSection} onSection={setSetupSection}
             goalsProps={{ report, goals, onSaveGoal: handleSaveGoal, onImportGoals: handleImportGoals }}
             managersProps={{ report, managers, onSaveManager: handleSaveManager, onImportManagers: handleImportManagers }}
+            milestoneGoalsProps={{ report, milestoneGoals, onSaveMilestoneGoal: handleSaveMilestoneGoal, onImportMilestoneGoals: handleImportMilestoneGoals }}
             historyProps={{ history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory }}
             uploadProps={{
               report, uploading, onFile: handleFile, onClear: handleClearAll,
@@ -3445,7 +3662,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget report={report} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} />
+      <AIChatWidget report={report} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} milestoneGoals={milestoneGoals} />
     </div>
   );
 }
