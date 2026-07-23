@@ -989,29 +989,73 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
         <div key={role}>
           <p className="section-label" style={{ marginBottom: 4 }}>{role}</p>
           <div className="dl-list">
-            {roleGroups.map(g => (
-              <div key={g.leaderName} className="dl-card">
-                <div className="dl-card-head" style={{ cursor: 'default' }}>
-                  <div className="dl-card-name-wrap">
-                    <span className="dl-card-name">{g.leaderName}</span>
-                    <span className="dl-card-count">{g.stores.length} store{g.stores.length !== 1 ? 's' : ''}</span>
+            {roleGroups.map(g => {
+              const t = rollupRows(g.stores);
+              return (
+                <div key={g.leaderName} className="dl-card">
+                  <div className="dl-card-head" style={{ cursor: 'default' }}>
+                    <div className="dl-card-name-wrap">
+                      <span className="dl-card-name">{g.leaderName}</span>
+                      <span className="dl-card-count">{g.stores.length} store{g.stores.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    <div className="dl-card-stats">
+                      <div className="dl-stat"><span className="dl-stat-label">Sales</span><span className="dl-stat-value">{fmt$(t.sales)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">TSTH</span><span className={`dl-stat-value ${tsthClass(t.tsth)}`}>{fmtRate(t.tsth)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Hours</span><span className="dl-stat-value">{fmtNum(t.totalHours, 0)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Color</span><span className="dl-stat-value">{fmt$(t.colorSales)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">CPC</span><span className="dl-stat-value">{fmtNum(t.cpc)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Retail</span><span className="dl-stat-value">{fmt$(t.retail)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(t.rpc)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(t.haircuts)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(t.cph)}</span></div>
+                    </div>
+                  </div>
+                  <div className="ledger-scroll dl-store-table">
+                    <table className="ledger-table">
+                      <thead>
+                        <tr>
+                          <th className="ledger-name-col">Store</th><th className="ledger-name-col">Manager</th>
+                          <th>Sales</th><th>TSTH</th><th>Total Hours</th><th>Color Sales</th>
+                          <th>CPC</th><th>Retail</th><th>RPC</th><th>Cuts</th><th>CPH</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortByMetric(g.stores, 'sales', 'desc').map(s => (
+                          <tr key={s.code}>
+                            <td className="ledger-name-col">{s.name}</td>
+                            <td className="ledger-name-col">{managers?.[s.code] || <span className="empty-note">not set</span>}</td>
+                            <td>{fmt$(s.sales)}</td>
+                            <td className={`ledger-rate ${tsthClass(s.tsth)}`}>{fmtRate(s.tsth)}</td>
+                            <td>{fmtNum(s.totalHours, 0)}</td>
+                            <td>{fmt$(s.colorSales)}</td>
+                            <td>{fmtNum(s.cpc)}</td>
+                            <td>{fmt$(s.retail)}</td>
+                            <td>{fmtNum(s.rpc)}</td>
+                            <td>{fmtInt(s.haircuts)}</td>
+                            <td>{fmtNum(s.cph)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="ledger-avg-row">
+                          <td className="ledger-name-col">{g.leaderName} total / weighted avg</td>
+                          <td className="ledger-name-col"></td>
+                          <td>{fmt$(t.sales)}</td>
+                          <td className={`ledger-rate ${tsthClass(t.tsth)}`}>{fmtRate(t.tsth)}</td>
+                          <td>{fmtNum(t.totalHours, 0)}</td>
+                          <td>{fmt$(t.colorSales)}</td>
+                          <td>{fmtNum(t.cpc)}</td>
+                          <td>{fmt$(t.retail)}</td>
+                          <td>{fmtNum(t.rpc)}</td>
+                          <td>{fmtInt(t.haircuts)}</td>
+                          <td>{fmtNum(t.cph)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
                   </div>
                 </div>
-                <div className="ledger-scroll dl-store-table">
-                  <table className="ledger-table">
-                    <thead><tr><th className="ledger-name-col">Store</th><th className="ledger-name-col">Manager</th></tr></thead>
-                    <tbody>
-                      {[...g.stores].sort((a, b) => a.name.localeCompare(b.name)).map(s => (
-                        <tr key={s.code}>
-                          <td className="ledger-name-col">{s.name}</td>
-                          <td className="ledger-name-col">{managers?.[s.code] || <span className="empty-note">not set</span>}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       ))}
