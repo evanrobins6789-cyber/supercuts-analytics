@@ -632,6 +632,8 @@ function TopTenChart({ title, emoji, rows, metricKey, formatter, color }) {
   );
 }
 
+const genId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
 // Reads an uploaded image, downscales it to a reasonable header-banner size,
 // and re-encodes as a JPEG data URL — a phone photo can be several MB, and
 // these get stored inline in the same Supabase jsonb payload as everything
@@ -740,46 +742,85 @@ function PdfUploadField({ value, onChange, onError }) {
   );
 }
 
-function NewsComposer({ onAdd, onImageError }) {
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [image, setImage] = useState(null);
-  const [pdf, setPdf] = useState(null);
+// `initial` (a news item, or null for a fresh post) drives both create and
+// edit — the parent remounts this component with a fresh `key` whenever the
+// edit target changes, so plain useState initializers are enough to load
+// the right values without an extra sync effect.
+function NewsComposer({ initial, onSubmit, onCancel, onImageError, existingGroups }) {
+  const [title, setTitle] = useState(initial?.title || '');
+  const [body, setBody] = useState(initial?.body || '');
+  const [image, setImage] = useState(initial?.headerImage || null);
+  const [pdf, setPdf] = useState(initial?.pdf || null);
+  const [group, setGroup] = useState(initial?.group || '');
   const submit = e => {
     e.preventDefault();
     if (!title.trim()) return;
-    onAdd(title.trim(), body.trim(), image, pdf);
-    setTitle(''); setBody(''); setImage(null); setPdf(null);
+    onSubmit({ title: title.trim(), body: body.trim(), headerImage: image, pdf, group: group.trim() || null });
+    if (!initial) { setTitle(''); setBody(''); setImage(null); setPdf(null); setGroup(''); }
   };
   return (
     <form className="homepage-composer" onSubmit={submit}>
       <input className="homepage-input" placeholder="Headline…" value={title} onChange={e => setTitle(e.target.value)} />
       <textarea className="homepage-textarea" placeholder="Details — as long as you like, shows in full on the News tab…" value={body} onChange={e => setBody(e.target.value)} rows={4} />
+      <input className="homepage-input" list="news-group-options" placeholder="Group (optional) — e.g. Team Updates" value={group} onChange={e => setGroup(e.target.value)} />
+      <datalist id="news-group-options">
+        {(existingGroups || []).map(g => <option key={g} value={g} />)}
+      </datalist>
       <ImageUploadField value={image} onChange={setImage} onError={onImageError} label="Header image (optional)" />
       <PdfUploadField value={pdf} onChange={setPdf} onError={onImageError} />
-      <button type="submit" className="btn-primary homepage-post-btn" disabled={!title.trim()}>Post update</button>
+      <div className="homepage-composer-actions">
+        <button type="submit" className="btn-primary homepage-post-btn" disabled={!title.trim()}>{initial ? 'Save changes' : 'Post update'}</button>
+        {initial && <button type="button" className="homepage-cancel-btn" onClick={onCancel}>Cancel</button>}
+      </div>
     </form>
   );
 }
 
-function EventComposer({ onAdd, onImageError }) {
-  const [title, setTitle] = useState('');
-  const [date, setDate] = useState('');
-  const [description, setDescription] = useState('');
-  const [image, setImage] = useState(null);
+const DEFAULT_EVENT_COLOR = '#1F3A63'; // matches the calendar pill's old hardcoded var(--navy-2)
+
+// Same create/edit-via-remount pattern as NewsComposer. `endDate` is
+// optional — a single-day event just leaves it blank, and the calendar/
+// featured-strip code treats a missing endDate as "same as start".
+function EventComposer({ initial, onSubmit, onCancel, onImageError }) {
+  const [title, setTitle] = useState(initial?.title || '');
+  const [startDate, setStartDate] = useState(initial?.date || '');
+  const [endDate, setEndDate] = useState(initial?.endDate || '');
+  const [description, setDescription] = useState(initial?.description || '');
+  const [image, setImage] = useState(initial?.headerImage || null);
+  const [color, setColor] = useState(initial?.color || DEFAULT_EVENT_COLOR);
   const submit = e => {
     e.preventDefault();
-    if (!title.trim() || !date) return;
-    onAdd(title.trim(), date, description.trim(), image);
-    setTitle(''); setDate(''); setDescription(''); setImage(null);
+    if (!title.trim() || !startDate) return;
+    onSubmit({
+      title: title.trim(), date: startDate,
+      endDate: endDate && endDate > startDate ? endDate : null,
+      description: description.trim(), headerImage: image, color,
+    });
+    if (!initial) { setTitle(''); setStartDate(''); setEndDate(''); setDescription(''); setImage(null); setColor(DEFAULT_EVENT_COLOR); }
   };
   return (
     <form className="homepage-composer" onSubmit={submit}>
       <input className="homepage-input" placeholder="Event name…" value={title} onChange={e => setTitle(e.target.value)} />
-      <input type="date" className="date-range-input" value={date} onChange={e => setDate(e.target.value)} />
+      <div className="homepage-daterange-row">
+        <label className="homepage-daterange-field">
+          <span>Start</span>
+          <input type="date" className="date-range-input" value={startDate} onChange={e => setStartDate(e.target.value)} />
+        </label>
+        <label className="homepage-daterange-field">
+          <span>End (optional)</span>
+          <input type="date" className="date-range-input" value={endDate} min={startDate || undefined} onChange={e => setEndDate(e.target.value)} />
+        </label>
+        <label className="homepage-color-field">
+          <span>Color</span>
+          <input type="color" className="homepage-color-input" value={color} onChange={e => setColor(e.target.value)} />
+        </label>
+      </div>
       <textarea className="homepage-textarea" placeholder="Details (optional)…" value={description} onChange={e => setDescription(e.target.value)} rows={2} />
       <ImageUploadField value={image} onChange={setImage} onError={onImageError} label="Header image (optional)" />
-      <button type="submit" className="btn-primary homepage-post-btn" disabled={!title.trim() || !date}>Add event</button>
+      <div className="homepage-composer-actions">
+        <button type="submit" className="btn-primary homepage-post-btn" disabled={!title.trim() || !startDate}>{initial ? 'Save changes' : 'Add event'}</button>
+        {initial && <button type="button" className="homepage-cancel-btn" onClick={onCancel}>Cancel</button>}
+      </div>
     </form>
   );
 }
@@ -836,23 +877,27 @@ function ImageLightbox({ src, onClose }) {
 // The 3 soonest upcoming events, shown as large banner cards above the
 // calendar grid — the "featured" strip the user asked for.
 function FeaturedEvents({ events, todayISO, onImageClick }) {
+  // A multi-day event stays "upcoming" until its LAST day has passed, not
+  // just its start — otherwise a 3-day event would drop off this strip on
+  // day 2 even though it's still happening.
   const upcoming = useMemo(
-    () => events.filter(ev => ev.date >= todayISO).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 3),
+    () => events.filter(ev => (ev.endDate || ev.date) >= todayISO).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 3),
     [events, todayISO]
   );
-  const daysUntil = iso => {
-    const diff = Math.round((new Date(`${iso}T00:00:00`) - new Date(`${todayISO}T00:00:00`)) / 86400000);
-    if (diff === 0) return 'Today 🎉';
+  const daysUntil = ev => {
+    if (ev.date <= todayISO && (ev.endDate || ev.date) >= todayISO) return 'Happening now 🎉';
+    const diff = Math.round((new Date(`${ev.date}T00:00:00`) - new Date(`${todayISO}T00:00:00`)) / 86400000);
     if (diff === 1) return 'Tomorrow';
     return `In ${diff} days`;
   };
+  const dateLabel = ev => (ev.endDate ? `${fmtDateLong(ev.date)} – ${fmtDateLong(ev.endDate)}` : fmtDateLong(ev.date));
   if (!upcoming.length) return <p className="empty-note">No upcoming events on the calendar.</p>;
   return (
     <div className="homepage-card-grid">
       {upcoming.map(ev => (
         <HomepageMediaCard
-          key={ev.id} image={ev.headerImage} badge={daysUntil(ev.date)}
-          title={ev.title} date={fmtDateLong(ev.date)} desc={ev.description} onImageClick={onImageClick}
+          key={ev.id} image={ev.headerImage} badge={daysUntil(ev)}
+          title={ev.title} date={dateLabel(ev)} desc={ev.description} onImageClick={onImageClick}
         />
       ))}
     </div>
@@ -867,13 +912,21 @@ function EventsCalendar({ events, todayISO }) {
   const [cal, setCal] = useState(() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; });
   const monthLabel = fmtMonthLong(`${cal.y}-${String(cal.m + 1).padStart(2, '0')}`);
 
+  // Each event occupies every day from `date` through `endDate` (inclusive)
+  // — walk the displayed month's days and check range overlap via plain ISO
+  // string comparison, rather than just matching the start day, so a
+  // multi-day event shows a pill on every day it spans.
   const eventsByDay = useMemo(() => {
     const map = {};
     const monthKey = `${cal.y}-${String(cal.m + 1).padStart(2, '0')}`;
+    const daysInMonth = new Date(cal.y, cal.m + 1, 0).getDate();
     events.forEach(ev => {
-      if (!ev.date || !ev.date.startsWith(monthKey)) return;
-      const day = Number(ev.date.slice(8, 10));
-      (map[day] = map[day] || []).push(ev);
+      if (!ev.date) return;
+      const end = ev.endDate && ev.endDate > ev.date ? ev.endDate : ev.date;
+      for (let d = 1; d <= daysInMonth; d++) {
+        const iso = `${monthKey}-${String(d).padStart(2, '0')}`;
+        if (iso >= ev.date && iso <= end) (map[d] = map[d] || []).push(ev);
+      }
     });
     return map;
   }, [events, cal]);
@@ -909,7 +962,7 @@ function EventsCalendar({ events, todayISO }) {
           return (
             <div key={i} className={`homepage-cal-cell ${iso === todayISO ? 'homepage-cal-cell--today' : ''}`}>
               <span className="homepage-cal-daynum">{day}</span>
-              {dayEvents.slice(0, 2).map(ev => <span key={ev.id} className="homepage-cal-pill" title={ev.title}>{ev.title}</span>)}
+              {dayEvents.slice(0, 2).map(ev => <span key={ev.id} className="homepage-cal-pill" style={ev.color ? { background: ev.color } : undefined} title={ev.title}>{ev.title}</span>)}
               {dayEvents.length > 2 && <span className="homepage-cal-more">+{dayEvents.length - 2} more</span>}
             </div>
           );
@@ -1105,10 +1158,25 @@ function HomepageTab({ report, news, events, reviews, onOpenNews }) {
 // every click re-triggers the effect even for the same id) comes from a
 // Homepage card tap: scrolls to that post and flashes a highlight around it.
 function NewsTab({ news, openNews }) {
-  const sortedNews = useMemo(
-    () => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')),
-    [news]
-  );
+  // Bucket by `group` (null bucket for ungrouped posts, rendered without a
+  // header so users who never touch the group field see the same plain feed
+  // as before), then order the buckets by their own most-recent post so a
+  // fresh ungrouped post can still surface above a stale named group.
+  const grouped = useMemo(() => {
+    const sorted = [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || ''));
+    const byGroup = new Map();
+    sorted.forEach(n => {
+      const key = n.group || null;
+      if (!byGroup.has(key)) byGroup.set(key, []);
+      byGroup.get(key).push(n);
+    });
+    return [...byGroup.entries()].sort((a, b) => {
+      const aLatest = a[1][0]?.createdAt || a[1][0]?.date || '';
+      const bLatest = b[1][0]?.createdAt || b[1][0]?.date || '';
+      return bLatest.localeCompare(aLatest);
+    });
+  }, [news]);
+
   const [highlightId, setHighlightId] = useState(null);
   const postRefs = useRef({});
 
@@ -1124,22 +1192,27 @@ function NewsTab({ news, openNews }) {
   return (
     <div className="tab-content">
       <p className="section-hint">Company updates and longer-format posts — post new ones from Setup → Homepage.</p>
-      {sortedNews.length ? sortedNews.map(n => (
-        <div
-          key={n.id}
-          ref={el => { postRefs.current[n.id] = el; }}
-          className={`news-post ${highlightId === n.id ? 'news-post--highlighted' : ''}`}
-        >
-          {n.headerImage && <img className="news-post-image" src={n.headerImage} alt="" />}
-          <p className="news-post-date">{fmtDateLong(n.date)}</p>
-          <p className="news-post-title">{n.title}</p>
-          {n.body && <p className="news-post-text">{n.body}</p>}
-          {n.pdf && (
-            <div className="news-post-pdf">
-              <iframe className="news-post-pdf-frame" src={n.pdf.dataUrl} title={n.pdf.name} />
-              <a className="news-post-pdf-link" href={n.pdf.dataUrl} download={n.pdf.name}>⬇ Download {n.pdf.name}</a>
+      {grouped.length ? grouped.map(([group, posts]) => (
+        <div key={group || '__ungrouped__'} className="news-group">
+          {group && <p className="news-group-label">🏷 {group}</p>}
+          {posts.map(n => (
+            <div
+              key={n.id}
+              ref={el => { postRefs.current[n.id] = el; }}
+              className={`news-post ${highlightId === n.id ? 'news-post--highlighted' : ''}`}
+            >
+              {n.headerImage && <img className="news-post-image" src={n.headerImage} alt="" />}
+              <p className="news-post-date">{fmtDateLong(n.date)}</p>
+              <p className="news-post-title">{n.title}</p>
+              {n.body && <p className="news-post-text">{n.body}</p>}
+              {n.pdf && (
+                <div className="news-post-pdf">
+                  <iframe className="news-post-pdf-frame" src={n.pdf.dataUrl} title={n.pdf.name} />
+                  <a className="news-post-pdf-link" href={n.pdf.dataUrl} download={n.pdf.name}>⬇ Download {n.pdf.name}</a>
+                </div>
+              )}
             </div>
-          )}
+          ))}
         </div>
       )) : <p className="empty-note">No news posted yet — post one from Setup → Homepage.</p>}
     </div>
@@ -2266,26 +2339,49 @@ function ManagersTab({ report, managers, onSaveManager, onImportManagers }) {
 // Posting lives here, not on the Homepage tab itself, so the public-facing
 // landing page stays read-only and can't be edited by accident — same split
 // as Goals/Managers (edit in Setup, display everywhere else).
-function HomepageAdminTab({ news, events, onAddNews, onDeleteNews, onAddEvent, onDeleteEvent, onImageError }) {
+function HomepageAdminTab({ news, events, onAddNews, onUpdateNews, onDeleteNews, onAddEvent, onUpdateEvent, onDeleteEvent, onImageError }) {
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '')), [news]);
   const sortedEvents = useMemo(() => [...events].sort((a, b) => (a.date || '').localeCompare(b.date || '')), [events]);
+  const existingGroups = useMemo(() => [...new Set(news.map(n => n.group).filter(Boolean))].sort(), [news]);
+
+  // Editing is "which id is loaded into the composer" — null means the
+  // composer is in create mode. The composer is remounted (via `key`) on
+  // every target change so its internal useState fields reset for free.
+  const [editingNewsId, setEditingNewsId] = useState(null);
+  const [editingEventId, setEditingEventId] = useState(null);
+  const editingNews = news.find(n => n.id === editingNewsId) || null;
+  const editingEvent = events.find(ev => ev.id === editingEventId) || null;
+
+  const submitNews = fields => {
+    if (editingNewsId) { onUpdateNews(editingNewsId, fields); setEditingNewsId(null); }
+    else onAddNews(fields);
+  };
+  const submitEvent = fields => {
+    if (editingEventId) { onUpdateEvent(editingEventId, fields); setEditingEventId(null); }
+    else onAddEvent(fields);
+  };
 
   return (
     <div className="tab-content">
-      <p className="section-hint">Post News &amp; Updates and log Events here — both support an optional header image, and News can also attach a PDF. News shows a teaser card on the Homepage that opens the full post (and PDF) on the News tab; events also appear on the Homepage calendar, with the 3 soonest featured above it.</p>
+      <p className="section-hint">Post News &amp; Updates and log Events here — both support an optional header image, and News can also attach a PDF and a group. News shows a teaser card on the Homepage that opens the full post (and PDF) on the News tab; events also appear on the Homepage calendar (in their chosen color), with the 3 soonest featured above it. Use ✎ to edit a post or event in place.</p>
 
       <div className="homepage-admin-columns">
         <div className="homepage-section">
           <p className="section-label">📣 News &amp; Updates</p>
-          <NewsComposer onAdd={onAddNews} onImageError={onImageError} />
+          <NewsComposer
+            key={editingNewsId || 'new-news'}
+            initial={editingNews} onSubmit={submitNews} onCancel={() => setEditingNewsId(null)}
+            onImageError={onImageError} existingGroups={existingGroups}
+          />
           <div className="homepage-admin-list">
             {sortedNews.map(n => (
               <div className="homepage-admin-row" key={n.id}>
                 {n.headerImage && <img className="homepage-admin-thumb" src={n.headerImage} alt="" />}
                 <div className="homepage-admin-row-body">
                   <p className="homepage-admin-row-title">{n.title}</p>
-                  <p className="homepage-admin-row-date">{fmtDateLong(n.date)}{n.pdf ? ' · 📄 PDF attached' : ''}</p>
+                  <p className="homepage-admin-row-date">{fmtDateLong(n.date)}{n.group ? ` · 🏷 ${n.group}` : ''}{n.pdf ? ' · 📄 PDF attached' : ''}</p>
                 </div>
+                <button className="homepage-edit-btn" onClick={() => setEditingNewsId(n.id)} title="Edit">✎</button>
                 <button className="homepage-delete-btn" onClick={() => onDeleteNews(n.id)} title="Delete">✕</button>
               </div>
             ))}
@@ -2295,15 +2391,21 @@ function HomepageAdminTab({ news, events, onAddNews, onDeleteNews, onAddEvent, o
 
         <div className="homepage-section">
           <p className="section-label">📅 Events</p>
-          <EventComposer onAdd={onAddEvent} onImageError={onImageError} />
+          <EventComposer
+            key={editingEventId || 'new-event'}
+            initial={editingEvent} onSubmit={submitEvent} onCancel={() => setEditingEventId(null)}
+            onImageError={onImageError}
+          />
           <div className="homepage-admin-list">
             {sortedEvents.map(ev => (
               <div className="homepage-admin-row" key={ev.id}>
                 {ev.headerImage && <img className="homepage-admin-thumb" src={ev.headerImage} alt="" />}
+                <span className="homepage-admin-color-dot" style={{ background: ev.color || DEFAULT_EVENT_COLOR }} title="Calendar color" />
                 <div className="homepage-admin-row-body">
                   <p className="homepage-admin-row-title">{ev.title}</p>
-                  <p className="homepage-admin-row-date">{fmtDateLong(ev.date)}</p>
+                  <p className="homepage-admin-row-date">{fmtDateLong(ev.date)}{ev.endDate ? ` – ${fmtDateLong(ev.endDate)}` : ''}</p>
                 </div>
+                <button className="homepage-edit-btn" onClick={() => setEditingEventId(ev.id)} title="Edit">✎</button>
                 <button className="homepage-delete-btn" onClick={() => onDeleteEvent(ev.id)} title="Delete">✕</button>
               </div>
             ))}
@@ -3368,16 +3470,17 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
   // Homepage news & events — user-posted, independent of any report/date, so
   // "what's new" or "what's coming up" resolves without needing a period loaded.
   if (news && news.length) {
-    lines.push('NEWS & UPDATES posted on the Homepage (most recent first):');
+    lines.push('NEWS & UPDATES posted on the Homepage/News tab (most recent first):');
     [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '')).forEach(n => {
-      lines.push(`${n.date}: ${n.title}${n.body ? ` — ${n.body}` : ''}${n.pdf ? ' [has a PDF attachment]' : ''}`);
+      lines.push(`${n.date}: ${n.title}${n.group ? ` [group: ${n.group}]` : ''}${n.body ? ` — ${n.body}` : ''}${n.pdf ? ' [has a PDF attachment]' : ''}`);
     });
     lines.push('');
   }
   if (events && events.length) {
     lines.push('UPCOMING/RECENT EVENTS on the Homepage calendar (sorted by date):');
     [...events].sort((a, b) => (a.date || '').localeCompare(b.date || '')).forEach(ev => {
-      lines.push(`${ev.date}: ${ev.title}${ev.description ? ` — ${ev.description}` : ''}`);
+      const dateLabel = ev.endDate ? `${ev.date} to ${ev.endDate}` : ev.date;
+      lines.push(`${dateLabel}: ${ev.title}${ev.description ? ` — ${ev.description}` : ''}`);
     });
     lines.push('');
   }
@@ -4139,10 +4242,20 @@ export default function App() {
     setOpenNews({ id });
   }, []);
 
-  const handleAddNews = useCallback((title, body, headerImage, pdf) => {
-    const item = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, title, body, headerImage: headerImage || null, pdf: pdf || null, date: new Date().toISOString().slice(0, 10), createdAt: new Date().toISOString() };
+  const handleAddNews = useCallback(fields => {
+    const item = { id: genId(), ...fields, date: new Date().toISOString().slice(0, 10), createdAt: new Date().toISOString() };
     setNews(prev => {
       const next = [item, ...prev];
+      saveData('homepage_news', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Update saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+  }, []);
+
+  const handleUpdateNews = useCallback((id, fields) => {
+    setNews(prev => {
+      const next = prev.map(n => n.id === id ? { ...n, ...fields } : n);
       saveData('homepage_news', next).then(result => {
         if (isConfigured() && !result.ok) showToast(`Update saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
       });
@@ -4160,10 +4273,20 @@ export default function App() {
     });
   }, []);
 
-  const handleAddEvent = useCallback((title, date, description, headerImage) => {
-    const item = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, title, date, description, headerImage: headerImage || null, createdAt: new Date().toISOString() };
+  const handleAddEvent = useCallback(fields => {
+    const item = { id: genId(), ...fields, createdAt: new Date().toISOString() };
     setEvents(prev => {
       const next = [...prev, item];
+      saveData('homepage_events', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Event saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+  }, []);
+
+  const handleUpdateEvent = useCallback((id, fields) => {
+    setEvents(prev => {
+      const next = prev.map(ev => ev.id === id ? { ...ev, ...fields } : ev);
       saveData('homepage_events', next).then(result => {
         if (isConfigured() && !result.ok) showToast(`Event saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
       });
@@ -4491,7 +4614,7 @@ export default function App() {
             goalsProps={{ report, goals, onSaveGoal: handleSaveGoal, onImportGoals: handleImportGoals }}
             managersProps={{ report, managers, onSaveManager: handleSaveManager, onImportManagers: handleImportManagers }}
             milestoneGoalsProps={{ report, milestoneGoals, onSaveMilestoneGoal: handleSaveMilestoneGoal, onImportMilestoneGoals: handleImportMilestoneGoals }}
-            homepageAdminProps={{ news, events, onAddNews: handleAddNews, onDeleteNews: handleDeleteNews, onAddEvent: handleAddEvent, onDeleteEvent: handleDeleteEvent, onImageError: msg => showToast(msg, 'error') }}
+            homepageAdminProps={{ news, events, onAddNews: handleAddNews, onUpdateNews: handleUpdateNews, onDeleteNews: handleDeleteNews, onAddEvent: handleAddEvent, onUpdateEvent: handleUpdateEvent, onDeleteEvent: handleDeleteEvent, onImageError: msg => showToast(msg, 'error') }}
             historyProps={{ history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory }}
             uploadProps={{
               report, uploading, onFile: handleFile, onClear: handleClearAll,

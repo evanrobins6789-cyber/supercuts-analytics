@@ -1,11 +1,20 @@
 # Handoff — Supercuts Analytics
 
-Last updated: 2026-07-23, immediately after adding a long-format **News** tab on top of last session's Homepage build-out. Not yet pushed — see "What shipped this session" below.
+Last updated: 2026-07-23, immediately after adding edit-in-place, event date ranges/colors, and News groups on top of the same day's News tab build. See "What shipped this session — edit, event ranges/colors, News groups" below (most recent).
 
 ## What this app is
 A Store Scoreboard / analytics dashboard for a Supercuts franchise (React SPA, Supabase-backed, deployed on Vercel). Tabs: **Homepage** (default landing tab), **News**, Overview, Stores, Employees, Retail, Color Sales, DL, 60 Day Employee, Reviews, Weekly, and Setup (which also holds Goals / Managers / Milestone Goals / **Homepage** (News & Events admin) / Historical Import / Upload as sub-sections). Has an in-app AI assistant, "Tilly," that answers questions about the business data via a serverless Anthropic API proxy (`api/chat.js`).
 
-## What shipped this session — the News tab
+## What shipped this session — edit, event ranges/colors, News groups
+Follow-up round on the same day as the News tab build below — same session, four asks:
+- **News posts and Events can now be edited in place**, not just deleted and re-added. `NewsComposer`/`EventComposer` both take an `initial` item (or null for a fresh post) plus `onSubmit`/`onCancel`; `HomepageAdminTab` tracks `editingNewsId`/`editingEventId` and remounts the composer via `key={editingId || 'new'}` when the target changes — that remount is what resets the form fields, no manual sync effect needed. Admin rows got a ✎ button next to the existing ✕.
+- **Events support a date range and a calendar color.** `EventComposer` gained a Start/End date pair (`endDate` optional — a bare single day just leaves it blank) and an `<input type="color">` (`DEFAULT_EVENT_COLOR = '#1F3A63'`, matching the old hardcoded pill color). `EventsCalendar`'s `eventsByDay` now walks every day of the displayed month and checks range overlap via ISO-string comparison, so a multi-day event shows a pill on every day it spans, each pill tinted with `ev.color`. `FeaturedEvents` treats an event as "upcoming" until its *last* day passes (not just its start) and shows "Happening now 🎉" for an event in progress.
+- **News tab post width fixed** — `.news-post` was stretching to the full 1400px `.tab-content` max-width; capped it at 1040px (that max-width minus the Homepage sidebar's 340px + 20px gap) so a post reads at the same width as the Homepage main column, not edge-to-edge.
+- **News posts can belong to a free-text group**, entered via a `<datalist>`-backed input in `NewsComposer` (autocompletes from `existingGroups`, computed in `HomepageAdminTab` from distinct non-null groups already in use). `NewsTab` buckets posts by group and orders the buckets by each one's most-recent post (freshest first); the ungrouped bucket renders with no header at all, so the page looks unchanged for anyone who never uses groups. Admin list rows show a `🏷 group` tag when set.
+- Tilly's context now includes each event's end date (`"date to endDate"`) and a news post's group tag.
+- **Not done / deliberately skipped:** no group management UI (rename/delete/reorder a group — it's just whatever string is on a post; an unused group name simply stops appearing); no per-group filter/nav on the News tab, groups are just section headers in the single feed; event color has no automatic contrast/legibility check against the white pill text, so a very light chosen color could be hard to read.
+
+## What shipped earlier this session — the News tab
 Added a dedicated long-format **News** tab, on top of the News & Updates feature already on the Homepage from last session:
 - **News posts can now attach a PDF** — `NewsComposer` (Setup → Homepage) gained a `PdfUploadField` next to the existing header-image field. `readPdfAsDataURL` (`App.js`) validates type/extension and caps size at `NEWS_PDF_MAX_MB` (8MB) before base64-encoding inline into the same `homepage_news` jsonb row images already live in — no re-encoding is possible for a PDF the way images get downscaled, so the cap is the only guard against payload bloat.
 - **Homepage News cards now navigate instead of opening a lightbox.** `HomepageMediaCard` gained an `onClick` prop that takes priority over the old `onImageClick` (still used by Events, unchanged) — tapping a News card calls `onOpenNews(id)`, which sets `tab='News'` and `openNews={id}` in `App`. Cards with a PDF attachment show a "📄 PDF" badge as a hint before clicking.
@@ -46,4 +55,4 @@ Not Homepage, but touched this session while fixing a Homepage-adjacent complain
 - Deploys automatically via Vercel on push to `main`. Two Vercel projects exist for this repo (`supercuts-analytics` and `supercuts-analytics-llxh`) — the status-check poll above reports both; both need to be green.
 
 ## What's next
-No specific direction from the user beyond what's shipped. Natural follow-ups if asked: a password gate for the Homepage admin section, letting News posts be edited in place (currently delete + re-add only), or more Top 10 widgets (Net Sales, Cuts) if four isn't enough.
+No specific direction from the user beyond what's shipped. Natural follow-ups if asked: a password gate for the Homepage admin section, a real group-management UI (rename/merge/reorder), or more Top 10 widgets (Net Sales, Cuts) if four isn't enough.
