@@ -9,9 +9,54 @@ import {
 } from './parser';
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
+import { BITMOJI_POOLS } from './bitmoji';
 import './App.css';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip);
+
+// ─── Bitmoji peeks — a mascot that pops in near a corner of whatever it's
+// mounted on, holds for a beat, then ducks back out. Purely decorative
+// (aria-hidden), picks a random image from `pool` each time it appears so
+// repeat visits don't always show the same character.
+const BITMOJI_PEEK_CORNERS = {
+  'bottom-right': { style: { right: -8, bottom: -10 }, hiddenT: 'translateY(65%) rotate(6deg)', shownT: 'translateY(20%) rotate(0deg)' },
+  'bottom-left': { style: { left: -8, bottom: -10 }, hiddenT: 'translateY(65%) rotate(-6deg)', shownT: 'translateY(20%) rotate(0deg)' },
+  'top-right': { style: { right: -8, top: -10 }, hiddenT: 'translateY(-65%) rotate(6deg)', shownT: 'translateY(-16%) rotate(0deg)' },
+  'top-left': { style: { left: -8, top: -10 }, hiddenT: 'translateY(-65%) rotate(-6deg)', shownT: 'translateY(-16%) rotate(0deg)' },
+};
+
+function BitmojiPeek({ pool, corner = 'bottom-right', size = 72, minDelay = 9000, maxDelay = 22000, visibleFor = 3200 }) {
+  const [img, setImg] = useState(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    let showTimer, hideTimer, cancelled = false;
+    const scheduleNext = () => {
+      const delay = minDelay + Math.random() * (maxDelay - minDelay);
+      showTimer = setTimeout(() => {
+        if (cancelled) return;
+        setImg(pool[Math.floor(Math.random() * pool.length)]);
+        setVisible(true);
+        hideTimer = setTimeout(() => {
+          if (cancelled) return;
+          setVisible(false);
+          scheduleNext();
+        }, visibleFor);
+      }, delay);
+    };
+    scheduleNext();
+    return () => { cancelled = true; clearTimeout(showTimer); clearTimeout(hideTimer); };
+  }, [pool, minDelay, maxDelay, visibleFor]);
+
+  if (!img) return null;
+  const c = BITMOJI_PEEK_CORNERS[corner] || BITMOJI_PEEK_CORNERS['bottom-right'];
+  return (
+    <img
+      src={img} alt="" aria-hidden="true" className="bitmoji-peek"
+      style={{ ...c.style, width: size, height: size, opacity: visible ? 1 : 0, transform: visible ? c.shownT : c.hiddenT }}
+    />
+  );
+}
 
 const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 const fmtInt = n => Number(n || 0).toLocaleString('en-US');
@@ -819,6 +864,7 @@ function CoreValuesWidget() {
           <button key={cv.n} type="button" className={`homepage-hero-dot homepage-hero-dot--dark ${i === index ? 'active' : ''}`} onClick={() => setIndex(i)} aria-label={`Show ${cv.title}`} />
         ))}
       </div>
+      <BitmojiPeek pool={BITMOJI_POOLS.curious} corner="bottom-right" minDelay={9000} maxDelay={20000} />
     </div>
   );
 }
@@ -886,6 +932,7 @@ function ReviewSpotlightWidget({ report, reviews }) {
           )}
         </div>
       )}
+      <BitmojiPeek pool={BITMOJI_POOLS.positive} corner="top-right" minDelay={5000} maxDelay={12000} />
     </div>
   );
 }
@@ -902,6 +949,7 @@ function HomepageTab({ report, news, events, reviews }) {
         <p className="homepage-hero-eyebrow">{fmtDateLong(todayISO)}</p>
         <p className="homepage-hero-title">Welcome back 👋</p>
         <p className="homepage-hero-sub">Here's what's new, what's coming up, and who's leading the pack this period.</p>
+        <BitmojiPeek pool={BITMOJI_POOLS.curious} corner="bottom-right" minDelay={5000} maxDelay={14000} />
       </div>
 
       <div className="homepage-grid">
@@ -915,12 +963,14 @@ function HomepageTab({ report, news, events, reviews }) {
                 ))}
               </div>
             ) : <p className="empty-note">No news posted yet — post one from Setup → Homepage.</p>}
+            <BitmojiPeek pool={BITMOJI_POOLS.curious} corner="top-right" minDelay={8000} maxDelay={20000} />
           </div>
 
           <div className="homepage-section">
             <p className="section-label">📅 Upcoming Events</p>
             <FeaturedEvents events={events} todayISO={todayISO} onImageClick={setLightboxImage} />
             <EventsCalendar events={events} todayISO={todayISO} />
+            <BitmojiPeek pool={BITMOJI_POOLS.positive} corner="bottom-left" minDelay={9000} maxDelay={22000} />
           </div>
 
           <div className="homepage-section">
@@ -935,6 +985,7 @@ function HomepageTab({ report, news, events, reviews }) {
                 ))}
               </div>
             ) : <p className="empty-note">Upload a stylist report to see the Top 10 leaderboards.</p>}
+            <BitmojiPeek pool={BITMOJI_POOLS.positive} corner="bottom-right" minDelay={6000} maxDelay={16000} />
           </div>
         </div>
 
@@ -962,6 +1013,7 @@ function OverviewTab({ report, selected, onSelect, query, onQuery }) {
 
   return (
     <div className="tab-content">
+      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores…" />
       <p className="section-hint">Tap any metric to see the top 10 and bottom 10 stores for it.</p>
       <div className="summary-grid">
@@ -1021,6 +1073,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
 
   return (
     <div className="tab-content">
+      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores or employees…" />
 
@@ -1161,6 +1214,7 @@ function EmployeesTab({ report, query, onQuery, managers }) {
 
   return (
     <div className="tab-content">
+      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       <SearchBox value={query} onChange={onQuery} placeholder="Search employees or stores…" />
       <div className="ledger-head-row">
         <p className="section-label">{filtered.length} of {report.employeeCount} employees</p>
@@ -1271,6 +1325,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
 
   return (
     <div className="tab-content">
+      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
       <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
 
@@ -1535,6 +1590,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
 
   return (
     <div className="tab-content">
+      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
       <SearchBox value={query} onChange={onQuery} placeholder="Search DLs or stores…" />
 
@@ -1821,6 +1877,7 @@ function NewHireTab({ report, employeeRoster, query, onQuery }) {
 
   return (
     <div className="tab-content">
+      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       <SearchBox value={query} onChange={onQuery} placeholder="Search employees, stores, or DL…" />
       <div className="ledger-head-row">
         <p className="section-label">{filtered.length} employee{filtered.length !== 1 ? 's' : ''} hired in the last 60 days</p>
@@ -2563,6 +2620,7 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
 
   return (
     <div className="tab-content">
+      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       <div className="summary-grid">
         <div className="summary-tile"><p className="summary-tile-label">Total Reviews</p><p className="summary-tile-value">{totalCount}</p></div>
         <div className="summary-tile"><p className="summary-tile-label">Overall Average</p><p className={`summary-tile-value ${ratingClass(overallAvg)}`}>{overallAvg.toFixed(2)}★</p></div>
@@ -3074,6 +3132,7 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
 
   return (
     <div className="tab-content">
+      <BitmojiPeek pool={BITMOJI_POOLS.all} corner="bottom-right" minDelay={20000} maxDelay={45000} />
       <p className="section-hint">
         Year-over-year comparison — {currentYear} on the left, {previousYear} on the right, aligned by {granularity === 'week' ? 'week of the year' : 'calendar month'}.
       </p>

@@ -75,7 +75,16 @@
 .tab-btn.active { color: var(--navy); border-bottom-color: var(--red); }
 
 .app-main { padding: 18px 20px 40px; }
-.tab-content { display: flex; flex-direction: column; gap: 22px; max-width: 1400px; margin: 0 auto; }
+.tab-content { display: flex; flex-direction: column; gap: 22px; max-width: 1400px; margin: 0 auto; position: relative; }
+
+/* Bitmoji peeks — see BitmojiPeek in App.js. Anchor is whatever ancestor
+   has position:relative (tab-content / homepage-hero / homepage-section /
+   homepage-widget all opt in below). */
+.bitmoji-peek {
+  position: absolute; pointer-events: none; z-index: 5; object-fit: contain;
+  transition: opacity 0.5s ease, transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+  filter: drop-shadow(0 6px 10px rgba(20,42,74,0.22));
+}
 
 /* ─── Summary tiles ──────────────────────────────────────────────────── */
 .section-hint { font-size: 12.5px; color: var(--ink-soft); margin: 0; }
@@ -416,7 +425,7 @@
 
 .homepage-hero {
   background: linear-gradient(120deg, var(--navy), var(--navy-2));
-  border-radius: 16px; padding: 24px 26px; color: #fff;
+  border-radius: 16px; padding: 24px 26px; color: #fff; position: relative;
 }
 .homepage-hero-eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #B9C6D6; text-transform: uppercase; letter-spacing: 0.05em; }
 .homepage-hero-title { font-family: 'Barlow Condensed', sans-serif; font-size: 32px; font-weight: 700; margin-top: 6px; }
@@ -447,7 +456,7 @@
 
 .homepage-section {
   background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-  padding: 18px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px;
+  padding: 18px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px; position: relative;
 }
 
 .homepage-composer { display: flex; flex-direction: column; gap: 8px; }
@@ -575,7 +584,7 @@
 
 .homepage-widget {
   background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-  padding: 16px; box-shadow: var(--shadow);
+  padding: 16px; box-shadow: var(--shadow); position: relative;
 }
 .homepage-widget-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
 .homepage-widget-title { font-family: 'Barlow Condensed', sans-serif; font-size: 15.5px; font-weight: 600; text-transform: uppercase; color: var(--navy); letter-spacing: 0.01em; }
