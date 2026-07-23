@@ -2186,7 +2186,7 @@ function topEmployeeLine(employees) {
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
-function buildAIContext(report, history, weeklyHistory, goals, reviews) {
+function buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes) {
   const lines = [];
 
   // Static reference info, independent of any report/date — who manages
@@ -2204,21 +2204,40 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews) {
   if (report) {
     const t = report.companyTotals;
     lines.push(`CURRENT REPORT PERIOD: ${report.dateRangeLabel || 'unknown'}`);
-    lines.push(`Company totals — Sales: $${Math.round(t.sales)}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}`);
+    lines.push(`Company totals — Sales: $${Math.round(t.sales)}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}, Cuts: ${Math.round(t.haircuts || 0)}, CPH: ${t.cph != null ? t.cph.toFixed(2) : 'n/a'}`);
     lines.push('');
-    lines.push('Per-store totals for the CURRENT period (Store: Sales, TSTH, Hours, Color, Retail, CPC, RPC, goals if set):');
+    lines.push('Per-store totals for the CURRENT period (Store: Sales, TSTH, Hours, Color, Retail, CPC, RPC, Cuts, CPH, goals if set):');
     report.stores.forEach(s => {
       const st = s.totals;
       const goal = goals?.[s.code];
       const goalStr = goal ? ` | Color Goal: ${goal.colorGoal ?? 'none'}, Retail Goal: ${goal.retailGoal ?? 'none'}` : '';
-      lines.push(`${s.name}: Sales $${Math.round(st.sales)}, TSTH $${st.tsth != null ? st.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(st.totalHours)}, Color $${Math.round(st.colorSales)}, Retail $${Math.round(st.retail)}, CPC ${st.cpc != null ? st.cpc.toFixed(2) : 'n/a'}, RPC ${st.rpc != null ? st.rpc.toFixed(2) : 'n/a'}${goalStr}`);
+      lines.push(`${s.name}: Sales $${Math.round(st.sales)}, TSTH $${st.tsth != null ? st.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(st.totalHours)}, Color $${Math.round(st.colorSales)}, Retail $${Math.round(st.retail)}, CPC ${st.cpc != null ? st.cpc.toFixed(2) : 'n/a'}, RPC ${st.rpc != null ? st.rpc.toFixed(2) : 'n/a'}, Cuts ${Math.round(st.haircuts || 0)}, CPH ${st.cph != null ? st.cph.toFixed(2) : 'n/a'}${goalStr}`);
     });
     if (report.allEmployees?.length) {
       const line = topEmployeeLine(report.allEmployees);
-      if (line) { lines.push(''); lines.push(`TOP EMPLOYEES THIS PERIOD (top 5 each) — ${line}`); }
+      if (line) { lines.push(''); lines.push(`TOP EMPLOYEES THIS PERIOD (top 5 each, quick reference) — ${line}`); }
+      lines.push('');
+      lines.push('EVERY EMPLOYEE THIS PERIOD (Name @ Store: Sales, Color, Retail, Cuts, Hours, CPH):');
+      report.allEmployees.forEach(e => {
+        lines.push(`${e.name} @ ${e.store}: Sales $${Math.round(e.sales)}, Color $${Math.round(e.colorSales)}, Retail $${Math.round(e.retail)}, Cuts ${Math.round(e.haircuts || 0)}, Hours ${Math.round(e.totalHours)}, CPH ${e.cph != null ? e.cph.toFixed(2) : 'n/a'}`);
+      });
     }
   } else {
     lines.push('No current stylist report is loaded on the site right now.');
+  }
+
+  // Employee roster (start dates) — company-wide, not just recent hires, so
+  // "when did X start" works for anyone, not only people hired in the last
+  // 60 days (that's just what the 60 Day Employee tab itself narrows to).
+  if (employeeRoster?.employees?.length) {
+    lines.push('');
+    lines.push('EMPLOYEE START DATES (from the Employee Start Dates roster — "new hire" flags anyone hired in the last 60 days):');
+    const now = Date.now();
+    employeeRoster.employees.forEach(e => {
+      const daysAgo = Math.floor((now - new Date(e.startDate).getTime()) / DAY_MS);
+      const tag = daysAgo >= 0 && daysAgo <= 60 ? ' (new hire)' : '';
+      lines.push(`${e.name}: started ${fmtDateLong(e.startDate)}${tag}`);
+    });
   }
 
   // Full permanent history — every Sales-Accrual/Attendance historical import
@@ -2231,27 +2250,25 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews) {
     lines.push('COMPANY-WIDE HISTORY BY MONTH (covers every report ever uploaded — Historical Import backfill and every weekly upload):');
     months.forEach(m => {
       const t = periodTotals(m.stores);
-      lines.push(`${m.month}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Gift Cards $${Math.round(t.giftCards)}, Hours ${Math.round(t.hours)}`);
+      lines.push(`${m.month}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Gift Cards $${Math.round(t.giftCards)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}`);
     });
 
     // Per-store breakdown + top employees, computed once per month from the
-    // same getRangeTotals() the date-range tabs use — without this, "how did
-    // Store X do in retail last month" has no store-level answer at all,
-    // only the isolated company-wide total above.
-    const RECENT_MONTHS_WITH_STORE_DETAIL = 6;
+    // same getRangeTotals() the date-range tabs use — every month, not just
+    // a recent window, so "how did Store X do in retail" works for any
+    // month that's ever been uploaded, not only the last few.
     lines.push('');
-    lines.push(`PER-STORE HISTORY BY MONTH, most recent ${Math.min(RECENT_MONTHS_WITH_STORE_DETAIL, months.length)} months only (older months only have the company-wide total above — say so rather than guessing a store's number for an older month):`);
-    const recentMonths = months.slice(-RECENT_MONTHS_WITH_STORE_DETAIL);
+    lines.push('PER-STORE HISTORY BY MONTH (every store, every month on file):');
     const monthlyTotals = new Map();
     months.forEach(m => {
       const { start, end } = monthRange(m.month);
       monthlyTotals.set(m.month, getRangeTotals(history, weeklyHistory, start, end));
     });
-    recentMonths.forEach(m => {
+    months.forEach(m => {
       lines.push(`${m.month}:`);
       Object.entries(monthlyTotals.get(m.month)).forEach(([code, t]) => {
         const name = STORE_CODE_TO_NAME[code] || `Store ${code}`;
-        lines.push(`  ${name}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Hours ${Math.round(t.hours)}`);
+        lines.push(`  ${name}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}`);
       });
     });
 
@@ -2269,10 +2286,53 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews) {
   if (reviews?.reviews?.length) {
     const all = reviews.reviews;
     const avg = all.reduce((s, r) => s + r.rating, 0) / all.length;
-    const neg = all.filter(r => r.rating <= 3).length;
-    const pos = all.filter(r => r.rating >= 4).length;
+    const neg = all.filter(isNegativeReview);
+    const pos = all.filter(isPositiveReview);
     lines.push('');
-    lines.push(`REVIEWS: ${all.length} total, average rating ${avg.toFixed(2)}★, ${pos} positive (4-5★), ${neg} negative (1-3★).`);
+    lines.push(`REVIEWS: ${all.length} total, average rating ${avg.toFixed(2)}★, ${pos.length} positive (4-5★), ${neg.length} negative (1-3★).`);
+
+    lines.push('');
+    lines.push('NEGATIVE REVIEW CATEGORIES (keyword-matched, company-wide):');
+    REVIEW_CATEGORIES.forEach(c => {
+      const count = neg.filter(r => reviewMatchesCategory(r.message, c.key)).length;
+      lines.push(`${c.label}: ${count}`);
+    });
+
+    const byStore = new Map();
+    all.forEach(r => {
+      if (!byStore.has(r.code)) {
+        const { name } = resolveStoreName(r.code, r.rawLocation);
+        byStore.set(r.code, { name, reviews: [] });
+      }
+      byStore.get(r.code).reviews.push(r);
+    });
+    lines.push('');
+    lines.push('REVIEWS BY STORE (Store: total, avg rating, negative, positive, without a staff follow-up note):');
+    Array.from(byStore.values()).forEach(s => {
+      const storeAvg = s.reviews.reduce((a, r) => a + r.rating, 0) / s.reviews.length;
+      const storeNeg = s.reviews.filter(isNegativeReview).length;
+      const storePos = s.reviews.filter(isPositiveReview).length;
+      const noNotes = s.reviews.filter(r => !(reviewNotes?.[reviewKey(r)]?.length)).length;
+      lines.push(`${s.name}: ${s.reviews.length} total, ${storeAvg.toFixed(2)}★ avg, ${storeNeg} negative, ${storePos} positive, ${noNotes} without a note`);
+    });
+
+    // Full text is the one place worth capping — hundreds/thousands of
+    // reviews accumulated over years would otherwise dominate the whole
+    // context. Aggregates above are complete; this is just qualitative
+    // color from the most recent negative reviews, so "what are people
+    // complaining about" has real quotes to draw on.
+    const RECENT_NEGATIVE_LIMIT = 40;
+    const recentNegative = [...neg].sort((a, b) => b.postedAt.localeCompare(a.postedAt)).slice(0, RECENT_NEGATIVE_LIMIT);
+    if (recentNegative.length) {
+      lines.push('');
+      lines.push(`MOST RECENT NEGATIVE REVIEWS, up to ${RECENT_NEGATIVE_LIMIT} (full text — older/other negative reviews are only reflected in the counts above, not quoted here):`);
+      recentNegative.forEach(r => {
+        const { name } = resolveStoreName(r.code, r.rawLocation);
+        const notes = reviewNotes?.[reviewKey(r)];
+        const noteStr = notes?.length ? ` [followed up: ${notes[notes.length - 1].text}]` : ' [no staff follow-up note]';
+        lines.push(`${fmtDateLong(r.postedAt)} — ${name}, ${r.rating}★, ${r.userName || 'Anonymous'}: "${r.message}"${noteStr}`);
+      });
+    }
   }
 
   return lines.join('\n');
@@ -2318,7 +2378,7 @@ function RobinNestIcon({ size = 28 }) {
   );
 }
 
-function AIChatWidget({ report, history, weeklyHistory, goals, reviews }) {
+function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -2331,7 +2391,7 @@ function AIChatWidget({ report, history, weeklyHistory, goals, reviews }) {
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, history, weeklyHistory, goals, reviews);
+      const context = buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes);
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2835,7 +2895,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget report={report} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} />
+      <AIChatWidget report={report} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} />
     </div>
   );
 }
