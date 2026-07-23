@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip } from 'chart.js';
+import { Bar } from 'react-chartjs-2';
 import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDataByPrefix } from './db';
 import {
   parseStylistReport, parseEmployeeStartDates, parseGoalFile, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
@@ -8,6 +10,8 @@ import {
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
 import './App.css';
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip);
 
 const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 const fmtInt = n => Number(n || 0).toLocaleString('en-US');
@@ -419,6 +423,225 @@ function UploadTab({ report, uploading, onFile, onClear, employeeRoster, uploadi
         onFile={onReviewsFile}
       />
       {reviews && <button className="btn-ghost btn-danger" onClick={onClearReviews}>Clear reviews</button>}
+    </div>
+  );
+}
+
+// ─── Homepage — Top 10 widgets ─────────────────────────────────────────────
+// Paints a plain white rect behind the chart on every frame — a chart.js
+// canvas is transparent by default, so without this the exported PNG has no
+// background and looks broken when dropped into a dark Slack/email client.
+const homepagePngBg = {
+  id: 'homepagePngBg',
+  beforeDraw(chart) {
+    const { ctx } = chart;
+    ctx.save();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, chart.width, chart.height);
+    ctx.restore();
+  },
+};
+
+const TOP_TEN_METRICS = [
+  { key: 'retail', label: 'Retail', emoji: '🛍️', color: '#2E7D4F' },
+  { key: 'colorSales', label: 'Color Sales', emoji: '🎨', color: '#9B2E2E' },
+  { key: 'cph', label: 'CPH', emoji: '✂️', color: '#1F3A63' },
+  { key: 'tsth', label: 'TSTH', emoji: '⭐', color: '#C9A227' },
+];
+
+// One store-per-bar leaderboard chart. Single series (one metric) so no
+// legend box is needed — the title already says what's plotted; the top 3
+// bars get a medal emoji baked into their label for a little personality.
+function TopTenChart({ title, emoji, rows, metricKey, formatter, color }) {
+  const chartRef = useRef(null);
+  const ranked = useMemo(() => sortByMetric(rows, metricKey, 'desc').filter(r => r[metricKey] != null).slice(0, 10), [rows, metricKey]);
+  const medal = i => (i === 0 ? '🥇 ' : i === 1 ? '🥈 ' : i === 2 ? '🥉 ' : '');
+
+  const data = useMemo(() => ({
+    labels: ranked.map((r, i) => `${medal(i)}${r.name}`),
+    datasets: [{ data: ranked.map(r => r[metricKey] || 0), backgroundColor: color, borderRadius: 4, barThickness: 18, maxBarThickness: 20 }],
+  }), [ranked, metricKey, color]);
+
+  // Draws the value at the tip of each bar (bar → value at the tip) in ink
+  // color, never the series color — the layout.padding.right below reserves
+  // room for it so it's never clipped even when a bar reaches the max.
+  const valueLabelPlugin = useMemo(() => ({
+    id: `value-label-${metricKey}`,
+    afterDatasetsDraw(chart) {
+      const meta = chart.getDatasetMeta(0);
+      const { ctx } = chart;
+      ctx.save();
+      ctx.font = "600 11px 'IBM Plex Mono', monospace";
+      ctx.fillStyle = '#142A4A';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      meta.data.forEach((bar, i) => {
+        const val = ranked[i]?.[metricKey];
+        if (val == null) return;
+        ctx.fillText(formatter(val), bar.x + 6, bar.y);
+      });
+      ctx.restore();
+    },
+  }), [ranked, metricKey, formatter]);
+
+  const options = useMemo(() => ({
+    indexAxis: 'y',
+    responsive: true,
+    maintainAspectRatio: false,
+    layout: { padding: { right: 52 } },
+    animation: { duration: 650, easing: 'easeOutQuart' },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#142A4A', titleColor: '#fff', bodyColor: '#fff',
+        titleFont: { family: 'Inter', size: 12, weight: '600' }, bodyFont: { family: 'IBM Plex Mono', size: 12 },
+        padding: 10, cornerRadius: 8, displayColors: false,
+        callbacks: {
+          title: items => ranked[items[0].dataIndex]?.name || '',
+          label: item => formatter(item.raw),
+        },
+      },
+    },
+    scales: {
+      x: {
+        beginAtZero: true,
+        grid: { color: '#E1E7ED' }, border: { display: false },
+        ticks: { font: { family: 'IBM Plex Mono', size: 10 }, color: '#5A6B80', callback: v => formatter(v) },
+      },
+      y: {
+        grid: { display: false }, border: { display: false },
+        ticks: { font: { family: 'Inter', size: 11.5 }, color: '#142A4A' },
+      },
+    },
+  }), [ranked, formatter]);
+
+  const handleExport = () => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const url = chart.toBase64Image('image/png', 1);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `top10-${title.replace(/\s+/g, '-').toLowerCase()}.png`;
+    a.click();
+  };
+
+  return (
+    <div className="homepage-widget">
+      <div className="homepage-widget-head">
+        <p className="homepage-widget-title">{emoji} Top 10 — {title}</p>
+        <button className="homepage-export-btn" onClick={handleExport} disabled={!ranked.length}>⬇ PNG</button>
+      </div>
+      {ranked.length ? (
+        <div className="homepage-widget-chart">
+          <Bar ref={chartRef} data={data} options={options} plugins={[homepagePngBg, valueLabelPlugin]} />
+        </div>
+      ) : <p className="empty-note">No data yet.</p>}
+    </div>
+  );
+}
+
+function NewsComposer({ onAdd }) {
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const submit = e => {
+    e.preventDefault();
+    if (!title.trim()) return;
+    onAdd(title.trim(), body.trim());
+    setTitle(''); setBody('');
+  };
+  return (
+    <form className="homepage-composer" onSubmit={submit}>
+      <input className="homepage-input" placeholder="Headline…" value={title} onChange={e => setTitle(e.target.value)} />
+      <textarea className="homepage-textarea" placeholder="Details (optional)…" value={body} onChange={e => setBody(e.target.value)} rows={2} />
+      <button type="submit" className="btn-primary homepage-post-btn" disabled={!title.trim()}>Post update</button>
+    </form>
+  );
+}
+
+function EventComposer({ onAdd }) {
+  const [title, setTitle] = useState('');
+  const [date, setDate] = useState('');
+  const [description, setDescription] = useState('');
+  const submit = e => {
+    e.preventDefault();
+    if (!title.trim() || !date) return;
+    onAdd(title.trim(), date, description.trim());
+    setTitle(''); setDate(''); setDescription('');
+  };
+  return (
+    <form className="homepage-composer" onSubmit={submit}>
+      <input className="homepage-input" placeholder="Event name…" value={title} onChange={e => setTitle(e.target.value)} />
+      <input type="date" className="date-range-input" value={date} onChange={e => setDate(e.target.value)} />
+      <textarea className="homepage-textarea" placeholder="Details (optional)…" value={description} onChange={e => setDescription(e.target.value)} rows={2} />
+      <button type="submit" className="btn-primary homepage-post-btn" disabled={!title.trim() || !date}>Add event</button>
+    </form>
+  );
+}
+
+function HomepageTab({ report, news, events, onAddNews, onDeleteNews, onAddEvent, onDeleteEvent }) {
+  const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
+  const sortedEvents = useMemo(() => [...events].sort((a, b) => (a.date || '').localeCompare(b.date || '')), [events]);
+  const storeRows = useMemo(() => report ? report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })) : [], [report]);
+
+  return (
+    <div className="tab-content">
+      <div className="homepage-hero">
+        <p className="homepage-hero-eyebrow">{fmtDateLong(todayISO)}</p>
+        <p className="homepage-hero-title">Welcome back 👋</p>
+        <p className="homepage-hero-sub">Here's what's new, what's coming up, and who's leading the pack this period.</p>
+      </div>
+
+      <div className="homepage-grid">
+        <div className="homepage-main">
+          <div className="homepage-section">
+            <p className="section-label">📣 News &amp; Updates</p>
+            <NewsComposer onAdd={onAddNews} />
+            <div className="homepage-feed">
+              {sortedNews.map(n => (
+                <div className="homepage-feed-item" key={n.id}>
+                  <div className="homepage-feed-item-head">
+                    <p className="homepage-feed-item-title">{n.title}</p>
+                    <button className="homepage-delete-btn" onClick={() => onDeleteNews(n.id)} title="Delete">✕</button>
+                  </div>
+                  {n.body && <p className="homepage-feed-item-body">{n.body}</p>}
+                  <p className="homepage-feed-item-date">{fmtDateLong(n.date)}</p>
+                </div>
+              ))}
+              {!sortedNews.length && <p className="empty-note">No news posted yet — add the first update above.</p>}
+            </div>
+          </div>
+
+          <div className="homepage-section">
+            <p className="section-label">📅 Upcoming Events</p>
+            <EventComposer onAdd={onAddEvent} />
+            <div className="homepage-feed">
+              {sortedEvents.map(ev => (
+                <div className={`homepage-feed-item ${ev.date < todayISO ? 'homepage-feed-item--past' : ''}`} key={ev.id}>
+                  <div className="homepage-feed-item-head">
+                    <p className="homepage-feed-item-title">{ev.title}{ev.date < todayISO && <span className="homepage-past-tag">Past</span>}</p>
+                    <button className="homepage-delete-btn" onClick={() => onDeleteEvent(ev.id)} title="Delete">✕</button>
+                  </div>
+                  {ev.description && <p className="homepage-feed-item-body">{ev.description}</p>}
+                  <p className="homepage-feed-item-date">{fmtDateLong(ev.date)}</p>
+                </div>
+              ))}
+              {!sortedEvents.length && <p className="empty-note">No events on the calendar yet — add one above.</p>}
+            </div>
+          </div>
+        </div>
+
+        <div className="homepage-sidebar">
+          {report ? TOP_TEN_METRICS.map(m => (
+            <TopTenChart
+              key={m.key} title={m.label} emoji={m.emoji} rows={storeRows} metricKey={m.key}
+              formatter={STORE_METRICS.find(sm => sm.key === m.key).fmt} color={m.color}
+            />
+          )) : (
+            <div className="homepage-widget"><p className="empty-note">Upload a stylist report to see the Top 10 leaderboards.</p></div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2568,7 +2791,7 @@ function topEmployeeLine(employees, n = 5) {
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
-function buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals) {
+function buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events) {
   const lines = [];
 
   // Static reference info, independent of any report/date — who manages
@@ -2590,6 +2813,23 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
     lines.push('STORE MANAGERS (who manages each individual store day-to-day, as distinct from the DL/Area Supervisor above):');
     Object.entries(managers).forEach(([code, name]) => {
       if (name) lines.push(`${STORE_CODE_TO_NAME[code] || `Store ${code}`}: ${name}`);
+    });
+    lines.push('');
+  }
+
+  // Homepage news & events — user-posted, independent of any report/date, so
+  // "what's new" or "what's coming up" resolves without needing a period loaded.
+  if (news && news.length) {
+    lines.push('NEWS & UPDATES posted on the Homepage (most recent first):');
+    [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '')).forEach(n => {
+      lines.push(`${n.date}: ${n.title}${n.body ? ` — ${n.body}` : ''}`);
+    });
+    lines.push('');
+  }
+  if (events && events.length) {
+    lines.push('UPCOMING/RECENT EVENTS on the Homepage calendar (sorted by date):');
+    [...events].sort((a, b) => (a.date || '').localeCompare(b.date || '')).forEach(ev => {
+      lines.push(`${ev.date}: ${ev.title}${ev.description ? ` — ${ev.description}` : ''}`);
     });
     lines.push('');
   }
@@ -2884,7 +3124,7 @@ function RobinNestIcon({ size = 28 }) {
   );
 }
 
-function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals }) {
+function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -2897,7 +3137,7 @@ function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employee
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals);
+      const context = buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events);
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3017,7 +3257,7 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;`}<
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Weekly', 'Setup'];
+const TABS = ['Homepage', 'Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Weekly', 'Setup'];
 
 export default function App() {
   const [report, setReport] = useState(null);
@@ -3028,6 +3268,8 @@ export default function App() {
   const [reviews, setReviews] = useState(null);
   const [reviewNotes, setReviewNotes] = useState({});
   const [goldCombs, setGoldCombs] = useState({});
+  const [news, setNews] = useState([]);
+  const [events, setEvents] = useState([]);
   const [history, setHistory] = useState({});
   // Sales-Accrual and Attendance historical imports are two independent
   // upload slots that can be fired off close together — both handlers would
@@ -3045,7 +3287,7 @@ export default function App() {
   const setDateRange = (start, end) => setDateRangeState({ start, end });
   const [label, setLabel] = useState('');
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState('Overview');
+  const [tab, setTab] = useState('Homepage');
   const [setupSection, setSetupSection] = useState('guide');
   const [toast, setToast] = useState(null);
   const [celebrate, setCelebrate] = useState(false);
@@ -3058,9 +3300,10 @@ export default function App() {
   useEffect(() => {
     Promise.all([
       loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('store_managers'), loadData('milestone_goals'), loadData('reviews'), loadData('review_notes'), loadData('review_gold_combs'),
+      loadData('homepage_news'), loadData('homepage_events'),
       loadDataByPrefix('daily_history_'), loadDataByPrefix('weekly_history_'),
       loadData('daily_history'), loadData('weekly_history'), // legacy single-row format, if anything was saved before chunking
-    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
+    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
       if (reportRes.data) setReport(ensureReportCph(reportRes.data)); else { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
@@ -3069,6 +3312,8 @@ export default function App() {
       if (reviewsRes.data) setReviews(reviewsRes.data);
       if (reviewNotesRes.data) setReviewNotes(reviewNotesRes.data);
       if (goldCombsRes.data) setGoldCombs(goldCombsRes.data);
+      if (newsRes.data) setNews(newsRes.data);
+      if (eventsRes.data) setEvents(eventsRes.data);
 
       // Postgres gives NO ordering guarantee on an unordered SELECT — so
       // merging chunks in whatever order the array happens to arrive in
@@ -3131,8 +3376,8 @@ export default function App() {
       setWeeklyHistory(mergedWeekly);
 
       setLoading(false);
-      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local' || managersRes.source === 'local' || milestoneGoalsRes.source === 'local' || reviewsRes.source === 'local' || dailyChunksRes.source === 'local' || weeklyChunksRes.source === 'local')) {
-        const err = reportRes.error || rosterRes.error || goalsRes.error || managersRes.error || milestoneGoalsRes.error || reviewsRes.error || dailyChunksRes.error || weeklyChunksRes.error;
+      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local' || managersRes.source === 'local' || milestoneGoalsRes.source === 'local' || reviewsRes.source === 'local' || newsRes.source === 'local' || eventsRes.source === 'local' || dailyChunksRes.source === 'local' || weeklyChunksRes.source === 'local')) {
+        const err = reportRes.error || rosterRes.error || goalsRes.error || managersRes.error || milestoneGoalsRes.error || reviewsRes.error || newsRes.error || eventsRes.error || dailyChunksRes.error || weeklyChunksRes.error;
         showToast(`Couldn't reach Supabase (${err || 'unknown error'}) — showing this device's local data only`, 'error');
       }
 
@@ -3333,6 +3578,48 @@ export default function App() {
         if (isConfigured() && !result.ok) {
           showToast(`Manager saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
         }
+      });
+      return next;
+    });
+  }, []);
+
+  const handleAddNews = useCallback((title, body) => {
+    const item = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, title, body, date: new Date().toISOString().slice(0, 10), createdAt: new Date().toISOString() };
+    setNews(prev => {
+      const next = [item, ...prev];
+      saveData('homepage_news', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Update saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+  }, []);
+
+  const handleDeleteNews = useCallback(id => {
+    setNews(prev => {
+      const next = prev.filter(n => n.id !== id);
+      saveData('homepage_news', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Delete saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+  }, []);
+
+  const handleAddEvent = useCallback((title, date, description) => {
+    const item = { id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, title, date, description, createdAt: new Date().toISOString() };
+    setEvents(prev => {
+      const next = [...prev, item];
+      saveData('homepage_events', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Event saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+  }, []);
+
+  const handleDeleteEvent = useCallback(id => {
+    setEvents(prev => {
+      const next = prev.filter(ev => ev.id !== id);
+      saveData('homepage_events', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Delete saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
       });
       return next;
     });
@@ -3568,7 +3855,7 @@ export default function App() {
 
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
-  const needsReport = !report && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Reviews' && tab !== 'Weekly';
+  const needsReport = !report && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage';
 
   return (
     <div className="app">
@@ -3592,6 +3879,9 @@ export default function App() {
       </nav>
       <main className="app-main">
         {needsReport && <div className="empty-state"><p className="empty-title">No report yet</p><p>Go to the Setup tab's Upload section to add this week's report.</p></div>}
+        {tab === 'Homepage' && (
+          <HomepageTab report={report} news={news} events={events} onAddNews={handleAddNews} onDeleteNews={handleDeleteNews} onAddEvent={handleAddEvent} onDeleteEvent={handleDeleteEvent} />
+        )}
         {!needsReport && tab === 'Overview' && report && (
           <OverviewTab report={report} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} />
         )}
@@ -3651,7 +3941,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget report={report} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} milestoneGoals={milestoneGoals} />
+      <AIChatWidget report={report} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} milestoneGoals={milestoneGoals} news={news} events={events} />
     </div>
   );
 }

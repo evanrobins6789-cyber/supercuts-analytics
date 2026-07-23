@@ -410,4 +410,72 @@
 .ai-chat-input:focus { outline: none; border-color: var(--red); }
 .ai-chat-send { background: var(--red); color: #fff; border: none; border-radius: 8px; padding: 8px 14px; font-size: 12.5px; font-weight: 600; cursor: pointer; }
 .ai-chat-send:hover { background: var(--red-deep); }
+
+/* ─── Homepage ───────────────────────────────────────────────────────── */
+.homepage-hero {
+  background: linear-gradient(120deg, var(--navy), var(--navy-2));
+  border-radius: 16px; padding: 24px 26px; color: #fff;
+}
+.homepage-hero-eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #B9C6D6; text-transform: uppercase; letter-spacing: 0.05em; }
+.homepage-hero-title { font-family: 'Barlow Condensed', sans-serif; font-size: 32px; font-weight: 700; margin-top: 4px; }
+.homepage-hero-sub { font-size: 13px; color: #B9C6D6; margin-top: 6px; max-width: 520px; }
+
+.homepage-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }
+@media (max-width: 900px) { .homepage-grid { grid-template-columns: 1fr; } }
+
+.homepage-main { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.homepage-sidebar { display: flex; flex-direction: column; gap: 16px; }
+
+.homepage-section {
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  padding: 18px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px;
+}
+
+.homepage-composer { display: flex; flex-direction: column; gap: 8px; }
+.homepage-input {
+  padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px;
+  font-family: 'Inter', sans-serif; font-size: 13px; color: var(--navy);
+}
+.homepage-input:focus, .homepage-textarea:focus { outline: none; border-color: var(--red); }
+.homepage-textarea {
+  padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; resize: vertical;
+  font-family: 'Inter', sans-serif; font-size: 13px; color: var(--navy);
+}
+.homepage-post-btn { align-self: flex-start; }
+.homepage-post-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.homepage-feed { display: flex; flex-direction: column; gap: 10px; }
+.homepage-feed-item {
+  border: 1px solid var(--line); border-radius: 10px; padding: 11px 13px;
+  background: var(--paper);
+}
+.homepage-feed-item--past { opacity: 0.55; }
+.homepage-feed-item-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.homepage-feed-item-title { font-family: 'Inter', sans-serif; font-size: 13.5px; font-weight: 600; color: var(--navy); }
+.homepage-past-tag {
+  font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--ink-soft); background: var(--line); border-radius: 6px; padding: 1px 6px; margin-left: 8px; vertical-align: middle;
+}
+.homepage-feed-item-body { font-size: 12.5px; color: var(--ink-soft); margin-top: 4px; white-space: pre-wrap; }
+.homepage-feed-item-date { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); margin-top: 6px; }
+.homepage-delete-btn {
+  background: none; border: none; color: var(--ink-soft); cursor: pointer; font-size: 13px;
+  line-height: 1; padding: 2px 4px; border-radius: 4px; flex: none;
+}
+.homepage-delete-btn:hover { color: var(--red); background: rgba(194,59,59,0.1); }
+
+.homepage-widget {
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  padding: 16px; box-shadow: var(--shadow);
+}
+.homepage-widget-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.homepage-widget-title { font-family: 'Barlow Condensed', sans-serif; font-size: 15.5px; font-weight: 600; text-transform: uppercase; color: var(--navy); letter-spacing: 0.01em; }
+.homepage-export-btn {
+  background: transparent; border: 1px solid var(--line); color: var(--navy);
+  font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 600; padding: 5px 10px;
+  border-radius: 20px; cursor: pointer; flex: none;
+}
+.homepage-export-btn:hover { border-color: var(--red); color: var(--red-deep); }
+.homepage-export-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.homepage-widget-chart { height: 290px; }
 .ai-chat-send:disabled { opacity: 0.5; cursor: default; }
