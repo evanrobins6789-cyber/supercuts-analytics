@@ -396,16 +396,28 @@ export async function parseSalesAccrualFile(file) {
     const itemName = cellText(row[col.item]);
     const qty = col.qty !== -1 ? (numOf(row[col.qty]) || 1) : 1;
     const stylist = col.stylist !== -1 ? cellText(row[col.stylist]) : '';
+    // Retail/product rows are typically attributed via "Sold By" rather than
+    // "Stylist" in this export — fall back to Stylist if Sold By is blank.
+    const soldBy = col.soldBy !== -1 ? cellText(row[col.soldBy]) : '';
 
     const key = `${code}|${isoDate}`;
     if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, employees: {} });
     const rec = daily.get(key);
-    const addToEmployee = (name, isColor, isHaircut) => {
-      if (!name) return; // retail/product rows have no stylist attributed — those stay store-level only
-      if (!rec.employees[name]) rec.employees[name] = { sales: 0, colorSales: 0, haircuts: 0 };
-      rec.employees[name].sales += amount;
-      if (isColor) rec.employees[name].colorSales += amount;
-      if (isHaircut) rec.employees[name].haircuts += qty;
+    const employeeFor = name => {
+      if (!name) return null;
+      if (!rec.employees[name]) rec.employees[name] = { sales: 0, colorSales: 0, haircuts: 0, retail: 0 };
+      return rec.employees[name];
+    };
+    const addService = (name, isColor, isHaircut) => {
+      const emp = employeeFor(name);
+      if (!emp) return;
+      emp.sales += amount;
+      if (isColor) emp.colorSales += amount;
+      if (isHaircut) emp.haircuts += qty;
+    };
+    const addRetail = name => {
+      const emp = employeeFor(name);
+      if (emp) emp.retail += amount;
     };
 
     if (hasExactTypes) {
@@ -414,6 +426,7 @@ export async function parseSalesAccrualFile(file) {
       if (/^gift\s*card/i.test(itemType)) { rec.giftCards += amount; continue; }
       if (itemType === 'Product') {
         rec.retail += amount;
+        addRetail(soldBy || stylist);
       } else {
         rec.service += amount;
         const category = col.itemCategory !== -1 ? cellText(row[col.itemCategory]) : '';
@@ -421,21 +434,21 @@ export async function parseSalesAccrualFile(file) {
         const isHaircut = category === 'Haircut Services';
         if (isColor) rec.color += amount;
         if (isHaircut) rec.haircuts += qty;
-        addToEmployee(stylist, isColor, isHaircut);
+        addService(stylist, isColor, isHaircut);
       }
     } else {
       // Older export without Item Type/Category — fall back to name-based heuristics.
-      const soldBy = cellText(row[col.soldBy]);
       if (/^gift\s*card/i.test(itemName)) { rec.giftCards += amount; continue; }
       if (isRetailItem(itemName, stylist, soldBy)) {
         rec.retail += amount;
+        addRetail(soldBy || stylist);
       } else {
         rec.service += amount;
         const isColor = isColorItem(itemName);
         const isHaircut = isHaircutItem(itemName);
         if (isColor) rec.color += amount;
         if (isHaircut) rec.haircuts += qty;
-        addToEmployee(stylist, isColor, isHaircut);
+        addService(stylist, isColor, isHaircut);
       }
     }
   }
@@ -450,7 +463,7 @@ export async function parseSalesAccrualFile(file) {
     haircuts: Math.round(r.haircuts * 100) / 100,
     employees: Object.entries(r.employees).map(([name, v]) => ({
       name, sales: Math.round(v.sales * 100) / 100, colorSales: Math.round(v.colorSales * 100) / 100,
-      haircuts: Math.round(v.haircuts * 100) / 100,
+      haircuts: Math.round(v.haircuts * 100) / 100, retail: Math.round(v.retail * 100) / 100,
     })),
   }));
   return { records, fileName: file.name };
@@ -522,7 +535,7 @@ export function mergeSalesIntoHistory(history, salesRecords) {
     const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, employees: {} };
     next[key] = {
       ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards, haircuts: r.haircuts,
-      employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales', 'haircuts']),
+      employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales', 'haircuts', 'retail']),
     };
   });
   return next;
