@@ -75,7 +75,7 @@
 .tab-btn.active { color: var(--navy); border-bottom-color: var(--red); }
 
 .app-main { padding: 18px 20px 40px; }
-.tab-content { display: flex; flex-direction: column; gap: 22px; max-width: 900px; margin: 0 auto; }
+.tab-content { display: flex; flex-direction: column; gap: 22px; max-width: 1400px; margin: 0 auto; }
 
 /* ─── Summary tiles ──────────────────────────────────────────────────── */
 .section-hint { font-size: 12.5px; color: var(--ink-soft); margin: 0; }
