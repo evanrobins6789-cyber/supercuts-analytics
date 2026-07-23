@@ -2880,8 +2880,9 @@ export default function App() {
       Object.entries(working).forEach(([key, rec]) => { if (rec.date.slice(0, 7) === month) chunk[key] = rec; });
       try {
         const json = JSON.stringify(chunk);
+        const useSplit = json.length > HISTORY_CHUNK_SIZE_LIMIT;
         let results;
-        if (json.length <= HISTORY_CHUNK_SIZE_LIMIT) {
+        if (!useSplit) {
           results = [await saveData(`daily_history_${month}`, chunk)];
         } else {
           const byStore = new Map();
@@ -2896,6 +2897,18 @@ export default function App() {
         }
         const failed = results.filter(r => !r.ok);
         if (failed.length) { ok = false; lastError = failed[0].error; failedMonths.push(month); }
+        else {
+          // `chunk` always holds the FULL current month's data, so whichever
+          // format we just wrote is complete on its own — clean up the OTHER
+          // format's leftover row(s) for this month so a stale copy can't
+          // outlive it and get merged back in on the next load (Object.assign
+          // order isn't guaranteed, so a stale single-chunk row full of old/
+          // employee-less data could silently clobber fresh per-store chunks
+          // on refresh — this is what caused freshly-imported employee names
+          // to vanish after a reload).
+          if (useSplit) await clearData(`daily_history_${month}`);
+          else await clearDataByPrefix(`daily_history_${month}__`);
+        }
       } catch (err) {
         ok = false; lastError = err.message; failedMonths.push(month);
       }
