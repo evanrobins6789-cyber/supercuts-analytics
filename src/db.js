@@ -55,11 +55,19 @@ export async function saveData(key, payload) {
   return { ok: !error, error };
 }
 
+// Returns { ok, error } — callers that clean up a superseded format after a
+// save must know if the delete actually happened, since a swallowed failure
+// here leaves a stale row sitting in Supabase that a future unordered SELECT
+// can merge back on top of fresh data (the exact "data vanishes on refresh"
+// shape this has caused before).
 export async function clearData(key) {
+  let error = null;
   if (supabase) {
-    await supabase.from('weekly_report').delete().eq('report_id', key);
+    const res = await supabase.from('weekly_report').delete().eq('report_id', key);
+    if (res.error) { error = res.error.message; console.error('Supabase clear error', res.error); }
   }
   localStorage.removeItem(LOCAL_PREFIX + key);
+  return { ok: !error, error };
 }
 
 // ─── Prefix-based storage (for large, ever-growing datasets) ───────────────
@@ -114,9 +122,12 @@ export async function loadDataByPrefix(prefix) {
   return { data: readLocalByPrefix(prefix), source: 'local', error: null };
 }
 
+// Returns { ok, error } — see clearData's comment on why the caller needs this.
 export async function clearDataByPrefix(prefix) {
+  let error = null;
   if (supabase) {
-    await supabase.from('weekly_report').delete().like('report_id', `${prefix}%`);
+    const res = await supabase.from('weekly_report').delete().like('report_id', `${prefix}%`);
+    if (res.error) { error = res.error.message; console.error('Supabase clear-by-prefix error', res.error); }
   }
   const toRemove = [];
   for (let i = 0; i < localStorage.length; i++) {
@@ -124,4 +135,5 @@ export async function clearDataByPrefix(prefix) {
     if (k && k.startsWith(LOCAL_PREFIX + prefix)) toRemove.push(k);
   }
   toRemove.forEach(k => localStorage.removeItem(k));
+  return { ok: !error, error };
 }

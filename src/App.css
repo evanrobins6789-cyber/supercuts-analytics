@@ -326,6 +326,19 @@
 
 .rating-good { color: var(--green) !important; }
 .rating-bad { color: var(--red) !important; }
+.tsth-good { color: var(--green) !important; }
+.tsth-bad { color: var(--red-deep) !important; }
+
+.manager-tag { font-size: 10px; font-weight: 700; color: var(--red); letter-spacing: 0.03em; }
+
+.gold-comb-btn {
+  font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 600;
+  border: 1px solid var(--line); background: var(--card); color: var(--ink-soft);
+  border-radius: 14px; padding: 4px 10px; cursor: pointer; white-space: nowrap;
+}
+.gold-comb-btn:hover { border-color: var(--gold); color: var(--navy); }
+.gold-comb-btn--active { background: var(--gold); border-color: var(--gold); color: #fff; }
+.review-card--gold { border-left-color: var(--gold); box-shadow: 0 0 0 1px var(--gold) inset; }
 .app-loading { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
 .spinner { border: 2px solid var(--line); border-top-color: var(--red); border-radius: 50%; animation: spin 0.7s linear infinite; }
 .spinner.small { width: 14px; height: 14px; }

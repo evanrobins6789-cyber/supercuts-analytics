@@ -79,6 +79,21 @@ function sortByMetric(rows, key, order = 'desc') {
 // Green when at/above goal, red when under — used everywhere a "vs Goal" cell renders.
 function vsGoalClass(diff) { return diff == null ? '' : diff < 0 ? 'ledger-margin-neg' : 'ledger-margin-pos'; }
 
+// TSTH of 54+ is green, under 54 is red — used everywhere a TSTH value renders.
+const TSTH_TARGET = 54;
+function tsthClass(value) { return value == null ? '' : value >= TSTH_TARGET ? 'tsth-good' : 'tsth-bad'; }
+
+// Manager tagging — `managers` is a { storeCode: managerName } map the user
+// maintains in Setup. Matched by normalized name against that store's
+// employee rows so the MANAGER tag follows whoever's currently assigned,
+// even if the manager's own sales/hours row is present or not that week.
+function withManagerFlag(employees, managers, code) {
+  const managerName = managers?.[code];
+  if (!managerName) return employees;
+  const target = normalizeName(managerName);
+  return employees.map(e => ({ ...e, isManager: normalizeName(e.name) === target }));
+}
+
 // Re-aggregate a set of already-rolled-up rows (stores, or store totals) one
 // level higher (e.g. up to a District Leader). Sums the additive fields and
 // recomputes the ratio fields from those sums — never averages ratios directly.
@@ -423,7 +438,7 @@ function OverviewTab({ report, selected, onSelect, query, onQuery }) {
 }
 
 // ─── Stores tab ─────────────────────────────────────────────────────────────
-function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange }) {
+function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers }) {
   const [sortBy, setSortBy] = useState('tsth');
   const [expanded, setExpanded] = useState({});
   const isHistorical = !!(dateRange.start && dateRange.end);
@@ -484,7 +499,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
                 </div>
                 <div className="dl-card-stats">
                   <div className="dl-stat"><span className="dl-stat-label">Sales</span><span className="dl-stat-value">{fmt$(s.sales)}</span></div>
-                  <div className="dl-stat"><span className="dl-stat-label">TSTH</span><span className="dl-stat-value">{fmtRate(s.tsth)}</span></div>
+                  <div className="dl-stat"><span className="dl-stat-label">TSTH</span><span className={`dl-stat-value ${tsthClass(s.tsth)}`}>{fmtRate(s.tsth)}</span></div>
                   <div className="dl-stat"><span className="dl-stat-label">Hours</span><span className="dl-stat-value">{fmtNum(s.totalHours, 0)}</span></div>
                   <div className="dl-stat"><span className="dl-stat-label">Color</span><span className="dl-stat-value">{fmt$(s.colorSales)}</span></div>
                   {s.cpc != null && <div className="dl-stat"><span className="dl-stat-label">CPC</span><span className="dl-stat-value">{fmtNum(s.cpc)}</span></div>}
@@ -497,7 +512,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
               {isOpen && hasEmployeeData && (
                 <div className="dl-store-table">
                   <EmployeeTable
-                    rows={sortByMetric(s.employees, 'sales', 'desc')}
+                    rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                     showStoreCol={false}
                     footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph }}
                     footerLabel="Store total / weighted avg"
@@ -517,7 +532,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
             <tr className="ledger-avg-row">
               <td className="ledger-name-col">Company (weighted)</td>
               <td>{fmt$(t.sales)}</td>
-              <td className="ledger-rate">{fmtRate(t.tsth)}</td>
+              <td className={`ledger-rate ${tsthClass(t.tsth)}`}>{fmtRate(t.tsth)}</td>
               <td>{fmtNum(t.totalHours, 0)}</td>
               <td>{fmt$(t.colorSales)}</td>
               <td>{fmtNum(t.cpc)}</td>
@@ -551,10 +566,10 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
               className={onFocus ? `ledger-row-clickable ${focused === e.name ? 'ledger-row-focused' : ''}` : ''}
               onClick={onFocus ? () => onFocus(focused === e.name ? null : e.name) : undefined}
             >
-              <td className="ledger-name-col">{e.name}</td>
+              <td className="ledger-name-col">{e.name}{e.isManager && <span className="manager-tag"> MANAGER</span>}</td>
               {showStoreCol && <td className="ledger-store-col">{e.store}</td>}
               {EMPLOYEE_METRICS.map(m => (
-                <td key={m.key} className={m.key === 'tsth' ? 'ledger-rate' : ''}>{m.fmt(e[m.key])}</td>
+                <td key={m.key} className={m.key === 'tsth' ? `ledger-rate ${tsthClass(e[m.key])}` : ''}>{m.fmt(e[m.key])}</td>
               ))}
             </tr>
           ))}
@@ -565,7 +580,7 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
               <td className="ledger-name-col">{footerLabel}</td>
               {showStoreCol && <td className="ledger-store-col"></td>}
               {EMPLOYEE_METRICS.map(m => (
-                <td key={m.key} className={m.key === 'tsth' ? 'ledger-rate' : ''}>{m.fmt(footer[m.key])}</td>
+                <td key={m.key} className={m.key === 'tsth' ? `ledger-rate ${tsthClass(footer[m.key])}` : ''}>{m.fmt(footer[m.key])}</td>
               ))}
             </tr>
           </tfoot>
@@ -576,14 +591,23 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
   );
 }
 
-function EmployeesTab({ report, query, onQuery }) {
+function EmployeesTab({ report, query, onQuery, managers }) {
   const [sortBy, setSortBy] = useState('sales');
   const [focused, setFocused] = useState(null);
+  // Store code isn't on the flat allEmployees rows (only the store NAME is),
+  // so resolve it via the same name->code lookup goals/reviews already use.
+  const allEmployeesWithManagerFlag = useMemo(() => {
+    return report.allEmployees.map(e => {
+      const code = getCodeForStoreName(e.store);
+      const managerName = code ? managers?.[code] : null;
+      return { ...e, isManager: !!managerName && normalizeName(managerName) === normalizeName(e.name) };
+    });
+  }, [report.allEmployees, managers]);
   const filtered = useMemo(() => {
-    if (!query.trim()) return report.allEmployees;
+    if (!query.trim()) return allEmployeesWithManagerFlag;
     const q = query.trim().toLowerCase();
-    return report.allEmployees.filter(e => e.name.toLowerCase().includes(q) || e.store.toLowerCase().includes(q));
-  }, [report.allEmployees, query]);
+    return allEmployeesWithManagerFlag.filter(e => e.name.toLowerCase().includes(q) || e.store.toLowerCase().includes(q));
+  }, [allEmployeesWithManagerFlag, query]);
   const sorted = useMemo(() => sortByMetric(filtered, sortBy, 'desc'), [filtered, sortBy]);
   const activeMetric = EMPLOYEE_METRICS.find(m => m.key === sortBy);
 
@@ -624,7 +648,7 @@ function getPrevMonthRange() {
 }
 
 // ─── Single-focus store tabs (Retail, Color Sales) — grouped by DL ─────────
-function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor }) {
+function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers }) {
   const [sortBy, setSortBy] = useState(metricA.key);
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
   const [expanded, setExpanded] = useState({});
@@ -782,7 +806,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                                 <tr className="store-expand-row">
                                   <td colSpan={colCount}>
                                     <EmployeeTable
-                                      rows={sortByMetric(s.employees, 'sales', 'desc')}
+                                      rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                                       showStoreCol={false}
                                       footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph }}
                                       footerLabel="Store total / weighted avg"
@@ -855,7 +879,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                       <tr className="store-expand-row">
                         <td colSpan={colCount}>
                           <EmployeeTable
-                            rows={sortByMetric(s.employees, 'sales', 'desc')}
+                            rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                             showStoreCol={false}
                             footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph }}
                             footerLabel="Store total / weighted avg"
@@ -908,9 +932,10 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
 }
 
 // ─── DL tab ─────────────────────────────────────────────────────────────────
-function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange }) {
+function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers }) {
   const [expanded, setExpanded] = useState({});
   const [expandedStore, setExpandedStore] = useState({});
+  const [showManagers, setShowManagers] = useState(false);
   const isHistorical = !!(dateRange.start && dateRange.end);
   const rows = useMemo(() => {
     if (isHistorical) {
@@ -952,9 +977,46 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
     <div className="tab-content">
       <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
       <SearchBox value={query} onChange={onQuery} placeholder="Search DLs or stores…" />
+
+      <div className="view-toggle">
+        <button className={`view-toggle-btn ${!showManagers ? 'active' : ''}`} onClick={() => setShowManagers(false)}>Full Stats</button>
+        <button className={`view-toggle-btn ${showManagers ? 'active' : ''}`} onClick={() => setShowManagers(true)}>👔 Managers</button>
+      </div>
+
       {!filteredGroups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No matches for "{query}".</p>}
 
-      {grouped.map(([role, roleGroups]) => (
+      {showManagers && grouped.map(([role, roleGroups]) => (
+        <div key={role}>
+          <p className="section-label" style={{ marginBottom: 4 }}>{role}</p>
+          <div className="dl-list">
+            {roleGroups.map(g => (
+              <div key={g.leaderName} className="dl-card">
+                <div className="dl-card-head" style={{ cursor: 'default' }}>
+                  <div className="dl-card-name-wrap">
+                    <span className="dl-card-name">{g.leaderName}</span>
+                    <span className="dl-card-count">{g.stores.length} store{g.stores.length !== 1 ? 's' : ''}</span>
+                  </div>
+                </div>
+                <div className="ledger-scroll dl-store-table">
+                  <table className="ledger-table">
+                    <thead><tr><th className="ledger-name-col">Store</th><th className="ledger-name-col">Manager</th></tr></thead>
+                    <tbody>
+                      {[...g.stores].sort((a, b) => a.name.localeCompare(b.name)).map(s => (
+                        <tr key={s.code}>
+                          <td className="ledger-name-col">{s.name}</td>
+                          <td className="ledger-name-col">{managers?.[s.code] || <span className="empty-note">not set</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      {!showManagers && grouped.map(([role, roleGroups]) => (
         <div key={role}>
           <p className="section-label" style={{ marginBottom: 4 }}>{role}</p>
           <div className="dl-list">
@@ -971,7 +1033,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                     </div>
                     <div className="dl-card-stats">
                       <div className="dl-stat"><span className="dl-stat-label">Sales</span><span className="dl-stat-value">{fmt$(t.sales)}</span></div>
-                      <div className="dl-stat"><span className="dl-stat-label">TSTH</span><span className="dl-stat-value">{fmtRate(t.tsth)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">TSTH</span><span className={`dl-stat-value ${tsthClass(t.tsth)}`}>{fmtRate(t.tsth)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Hours</span><span className="dl-stat-value">{fmtNum(t.totalHours, 0)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Color</span><span className="dl-stat-value">{fmt$(t.colorSales)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">CPC</span><span className="dl-stat-value">{fmtNum(t.cpc)}</span></div>
@@ -1006,7 +1068,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                                     {hasEmployeeData && <span className={`mini-chevron ${isStoreOpen ? 'mini-chevron--open' : ''}`}>▸</span>} {s.name}
                                   </td>
                                   <td>{fmt$(s.sales)}</td>
-                                  <td className="ledger-rate">{fmtRate(s.tsth)}</td>
+                                  <td className={`ledger-rate ${tsthClass(s.tsth)}`}>{fmtRate(s.tsth)}</td>
                                   <td>{fmtNum(s.totalHours, 0)}</td>
                                   <td>{fmt$(s.colorSales)}</td>
                                   <td>{fmtNum(s.cpc)}</td>
@@ -1019,7 +1081,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                                   <tr className="store-expand-row">
                                     <td colSpan={10}>
                                       <EmployeeTable
-                                        rows={sortByMetric(s.employees, 'sales', 'desc')}
+                                        rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                                         showStoreCol={false}
                                         footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph }}
                                         footerLabel="Store total / weighted avg"
@@ -1161,7 +1223,7 @@ function NewHireTab({ report, employeeRoster, query, onQuery }) {
                 <td>{r.retail != null ? fmt$(r.retail) : '—'}</td>
                 <td>{r.cpc != null ? fmtNum(r.cpc) : '—'}</td>
                 <td>{r.rpc != null ? fmtNum(r.rpc) : '—'}</td>
-                <td className="ledger-rate">{r.tsth != null ? fmtRate(r.tsth) : '—'}</td>
+                <td className={`ledger-rate ${tsthClass(r.tsth)}`}>{r.tsth != null ? fmtRate(r.tsth) : '—'}</td>
                 <td>{r.totalHours != null ? fmtNum(r.totalHours, 1) : '—'}</td>
               </tr>
             ))}
@@ -1304,6 +1366,63 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals }) {
   );
 }
 
+// ─── Managers tab (store → manager assignment, powers the MANAGER tag) ─────
+function ManagersTab({ report, managers, onSaveManager }) {
+  const [query, setQuery] = useState('');
+  const [drafts, setDrafts] = useState({}); // { code: name } — in-progress edits
+
+  if (!report) {
+    return <div className="empty-state"><p className="empty-title">No report yet</p><p>Upload a stylist report first, so there's a store list to assign managers to.</p></div>;
+  }
+
+  const stores = report.stores
+    .map(s => ({ name: s.name, code: s.code }))
+    .filter(s => !query.trim() || s.name.toLowerCase().includes(query.trim().toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const getVal = code => (drafts[code] !== undefined ? drafts[code] : (managers?.[code] || ''));
+  const handleChange = (code, value) => setDrafts(prev => ({ ...prev, [code]: value }));
+  const handleBlur = code => {
+    const raw = drafts[code];
+    if (raw === undefined) return;
+    onSaveManager(code, raw.trim() || null);
+  };
+
+  return (
+    <div className="tab-content">
+      <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
+      <p className="section-hint">Assign who manages each store — type their name exactly as it appears in the stylist report so it gets a MANAGER tag wherever employees are listed (Stores, Employees, DL, Retail, Color Sales). The DL tab's "Managers" view rolls this up by DL, and this always saves even if the name doesn't match yet.</p>
+
+      <div className="ledger-scroll">
+        <table className="ledger-table">
+          <thead>
+            <tr>
+              <th className="ledger-name-col">Store</th>
+              <th className="ledger-name-col">Manager</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stores.map(s => (
+              <tr key={s.code}>
+                <td className="ledger-name-col">{s.name}</td>
+                <td className="ledger-name-col">
+                  <input
+                    type="text" className="goal-input" placeholder="Manager name"
+                    value={getVal(s.code)}
+                    onChange={e => handleChange(s.code, e.target.value)}
+                    onBlur={() => handleBlur(s.code)}
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {!stores.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
+    </div>
+  );
+}
+
 // ─── Reviews tab ────────────────────────────────────────────────────────────
 const REVIEW_CATEGORIES = [
   { key: 'atmosphere', label: 'Atmosphere', keywords: ['atmosphere', 'dirty', 'messy', 'smell', 'unclean', 'environment', 'decor', 'uncomfortable', 'cluttered', 'disorganized', 'filthy', 'run down', 'outdated'] },
@@ -1384,14 +1503,23 @@ function ReviewNotes({ notes, onAdd }) {
   );
 }
 
-function ReviewCard({ review, employeeMatch, notes, onAddNote }) {
+function ReviewCard({ review, employeeMatch, notes, onAddNote, goldComb, onToggleGoldComb }) {
   const tone = review.rating <= 2 ? 'neg' : review.rating >= 4 ? 'pos' : 'neu';
   return (
-    <div className={`review-card review-card--${tone}`}>
+    <div className={`review-card review-card--${tone}${goldComb ? ' review-card--gold' : ''}`}>
       <div className="review-card-head">
         <StarRating value={review.rating} />
         <span className="review-user">{review.userName || 'Anonymous'}</span>
         <span className="review-date">{review.postedAt ? fmtDateLong(review.postedAt) : ''}</span>
+        {onToggleGoldComb && (
+          <button
+            className={`gold-comb-btn${goldComb ? ' gold-comb-btn--active' : ''}`}
+            onClick={onToggleGoldComb}
+            title={goldComb ? 'Remove Gold Comb acknowledgment' : 'Award this review a Gold Comb'}
+          >
+            🏆 {goldComb ? 'Gold Comb' : 'Give Gold Comb'}
+          </button>
+        )}
       </div>
       {review.message && <p className="review-message">{review.message}</p>}
       {employeeMatch && <p className="review-employee-tag">👤 Mentions: {employeeMatch}</p>}
@@ -1411,7 +1539,7 @@ const REVIEW_SORT_OPTIONS = [
   { key: 'noNotes', label: 'No Notes' },
 ];
 
-function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewNote }) {
+function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewNote, goldCombs, onToggleGoldComb }) {
   const [viewMode, setViewMode] = useState('flat'); // 'flat' | 'dl'
   const [category, setCategory] = useState(null);
   const [sentiment, setSentiment] = useState(null); // null | 'pos' | 'neg'
@@ -1537,6 +1665,7 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
           <ReviewCard
             key={i} review={r} employeeMatch={detectEmployeeMention(r.message, employeesForStore)}
             notes={reviewNotes?.[reviewKey(r)]} onAddNote={onAddReviewNote}
+            goldComb={!!goldCombs?.[reviewKey(r)]} onToggleGoldComb={onToggleGoldComb ? () => onToggleGoldComb(reviewKey(r)) : undefined}
           />
         ))}
         {!reviewList.length && <p className="empty-note" style={{ padding: '12px' }}>No reviews to show here.</p>}
@@ -2214,7 +2343,7 @@ function topEmployeeLine(employees, n = 5) {
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
-function buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes) {
+function buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers) {
   const lines = [];
 
   // Static reference info, independent of any report/date — who manages
@@ -2228,6 +2357,17 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
     });
   });
   lines.push('');
+
+  // Store managers — user-maintained (Setup > Managers), independent of any
+  // report/date, so "who's the manager at X" resolves without needing the
+  // current period loaded.
+  if (managers && Object.keys(managers).length) {
+    lines.push('STORE MANAGERS (who manages each individual store day-to-day, as distinct from the DL/Area Supervisor above):');
+    Object.entries(managers).forEach(([code, name]) => {
+      if (name) lines.push(`${STORE_CODE_TO_NAME[code] || `Store ${code}`}: ${name}`);
+    });
+    lines.push('');
+  }
 
   if (report) {
     const t = report.companyTotals;
@@ -2444,6 +2584,19 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
         lines.push(`${fmtDateLong(r.postedAt)} — ${name}, ${r.rating}★, ${r.userName || 'Anonymous'}: "${r.message}"`);
       });
     }
+
+    const combedKeys = new Set(Object.keys(goldCombs || {}));
+    if (combedKeys.size) {
+      const combed = all.filter(r => combedKeys.has(reviewKey(r)));
+      lines.push('');
+      lines.push(`GOLD COMB REVIEWS — staff have specifically acknowledged these ${combed.length} review(s) as awesome/worth celebrating:`);
+      combed.forEach(r => {
+        const { name } = resolveStoreName(r.code, r.rawLocation);
+        const employeesForStore = report?.stores.find(st => st.code === r.code)?.employees || null;
+        const mention = detectEmployeeMention(r.message, employeesForStore);
+        lines.push(`${fmtDateLong(r.postedAt)} — ${name}, ${r.rating}★, ${r.userName || 'Anonymous'}${mention ? ` (mentions ${mention})` : ''}: "${r.message}"`);
+      });
+    }
   }
 
   return lines.join('\n');
@@ -2489,7 +2642,7 @@ function RobinNestIcon({ size = 28 }) {
   );
 }
 
-function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes }) {
+function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -2502,7 +2655,7 @@ function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employee
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes);
+      const context = buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers);
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2548,11 +2701,12 @@ function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employee
 const SETUP_SECTIONS = [
   { key: 'guide', label: 'Guide' },
   { key: 'goals', label: 'Goals' },
+  { key: 'managers', label: 'Managers' },
   { key: 'history', label: 'Historical Import' },
   { key: 'upload', label: 'Upload' },
 ];
 
-function SetupTab({ configured, section, onSection, goalsProps, historyProps, uploadProps }) {
+function SetupTab({ configured, section, onSection, goalsProps, managersProps, historyProps, uploadProps }) {
   const steps = [
     { n: 1, title: 'Export this week\u2019s stylist report', body: 'Run the report with every store and every employee under it, covering the week you want to see.' },
     { n: 2, title: 'Upload it', body: 'Go to the Upload section below and drop it into the "Stylist Report" slot. The date range fills in automatically.' },
@@ -2578,6 +2732,7 @@ function SetupTab({ configured, section, onSection, goalsProps, historyProps, up
       </div>
 
       {section === 'goals' && <GoalsTab {...goalsProps} />}
+      {section === 'managers' && <ManagersTab {...managersProps} />}
       {section === 'history' && <HistoricalImportTab {...historyProps} />}
       {section === 'upload' && <UploadTab {...uploadProps} />}
 
@@ -2624,8 +2779,10 @@ export default function App() {
   const [report, setReport] = useState(null);
   const [employeeRoster, setEmployeeRoster] = useState(null);
   const [goals, setGoals] = useState({});
+  const [managers, setManagers] = useState({});
   const [reviews, setReviews] = useState(null);
   const [reviewNotes, setReviewNotes] = useState({});
+  const [goldCombs, setGoldCombs] = useState({});
   const [history, setHistory] = useState({});
   // Sales-Accrual and Attendance historical imports are two independent
   // upload slots that can be fired off close together — both handlers would
@@ -2654,20 +2811,62 @@ export default function App() {
 
   useEffect(() => {
     Promise.all([
-      loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('reviews'), loadData('review_notes'),
+      loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('store_managers'), loadData('reviews'), loadData('review_notes'), loadData('review_gold_combs'),
       loadDataByPrefix('daily_history_'), loadDataByPrefix('weekly_history_'),
       loadData('daily_history'), loadData('weekly_history'), // legacy single-row format, if anything was saved before chunking
-    ]).then(([reportRes, rosterRes, goalsRes, reviewsRes, reviewNotesRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
+    ]).then(([reportRes, rosterRes, goalsRes, managersRes, reviewsRes, reviewNotesRes, goldCombsRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
       if (reportRes.data) setReport(ensureReportCph(reportRes.data)); else { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
+      if (managersRes.data) setManagers(managersRes.data);
       if (reviewsRes.data) setReviews(reviewsRes.data);
       if (reviewNotesRes.data) setReviewNotes(reviewNotesRes.data);
+      if (goldCombsRes.data) setGoldCombs(goldCombsRes.data);
 
+      // Postgres gives NO ordering guarantee on an unordered SELECT — so
+      // merging chunks in whatever order the array happens to arrive in
+      // meant that if a month ever had BOTH an old single-chunk row and new
+      // per-store split rows at once (possible if a superseded-format
+      // cleanup delete silently failed — clearData/clearDataByPrefix used to
+      // swallow that error entirely), which one won on a given page load was
+      // a coin flip. That's the "data disappears on refresh" bug reported
+      // after the previous round of fixes. Data for a past month only ever
+      // grows (more stores/employees get added, never removed), so instead
+      // of trusting array order, always apply single-chunk rows FIRST as a
+      // base and per-store split rows SECOND — the split format is only
+      // ever written when a month outgrows the single-chunk threshold, so it
+      // is always the newer/more-complete one whenever both exist.
+      const daySplitPriority = key => (key.includes('__') ? 1 : 0);
       const mergedDaily = {};
-      (dailyChunksRes.data || []).forEach(chunk => Object.assign(mergedDaily, chunk.payload));
+      const dailyChunks = [...(dailyChunksRes.data || [])].sort((a, b) => daySplitPriority(a.key) - daySplitPriority(b.key));
+      // The pre-chunking single-blob format (if it still exists in Supabase
+      // from before this chunked scheme existed) is the OLDEST possible
+      // source — it must never be allowed to override current chunk data,
+      // so it's applied first as a base, not last (last was backwards: a
+      // stale legacy blob would have clobbered every fresh chunk on every
+      // load).
       if (legacyDailyRes.data) Object.assign(mergedDaily, legacyDailyRes.data);
+      dailyChunks.forEach(chunk => Object.assign(mergedDaily, chunk.payload));
       setHistory(mergedDaily);
+
+      // Detect leftover contamination (both formats present for the same
+      // month at once) and heal it now that the merge already resolved it
+      // deterministically in memory — clears the superseded single-chunk
+      // row so future loads don't even need the priority sort as a safety
+      // net, and so the console diagnostics below go clean.
+      {
+        const monthsWithSplit = new Set(dailyChunks.filter(c => c.key.includes('__')).map(c => c.key.replace('daily_history_', '').split('__')[0]));
+        const staleSingleKeys = dailyChunks.filter(c => !c.key.includes('__') && monthsWithSplit.has(c.key.replace('daily_history_', ''))).map(c => c.key);
+        if (staleSingleKeys.length) {
+          console.warn(`[history load] found ${staleSingleKeys.length} stale single-chunk row(s) alongside per-store split data (a prior cleanup delete must have failed) — clearing now: ${staleSingleKeys.join(', ')}`);
+          Promise.all(staleSingleKeys.map(k => clearData(k))).then(results => {
+            const failed = results.filter(r => !r.ok);
+            if (failed.length) console.error('[history load] stale-row cleanup failed, will retry on next load:', failed.map(r => r.error));
+            else console.log('[history load] stale-row cleanup succeeded.');
+          });
+        }
+      }
+
       // Diagnostic only (console, not user-facing) — this data has silently
       // gone missing on refresh more than once; logging exactly what came
       // back on load makes the next repro concrete instead of another round
@@ -2675,18 +2874,18 @@ export default function App() {
       {
         const dailyRecords = Object.values(mergedDaily);
         const withEmployees = dailyRecords.filter(r => r.employees && Object.keys(r.employees).length).length;
-        console.log(`[history load] ${(dailyChunksRes.data || []).length} chunk(s) from Supabase: ${(dailyChunksRes.data || []).map(c => c.key).join(', ') || 'none'}`);
+        console.log(`[history load] ${dailyChunks.length} chunk(s) from Supabase: ${dailyChunks.map(c => c.key).join(', ') || 'none'}`);
         console.log(`[history load] ${dailyRecords.length} store-day record(s) merged, ${withEmployees} with employee-level detail, ${(dailyChunksRes.localOnlyKeys || []).length} local-only chunk(s) pending Supabase sync${(dailyChunksRes.localOnlyKeys || []).length ? `: ${dailyChunksRes.localOnlyKeys.join(', ')}` : ''}.`);
       }
 
       const mergedWeekly = {};
-      (weeklyChunksRes.data || []).forEach(chunk => Object.assign(mergedWeekly, chunk.payload));
       if (legacyWeeklyRes.data) Object.assign(mergedWeekly, legacyWeeklyRes.data);
+      (weeklyChunksRes.data || []).forEach(chunk => Object.assign(mergedWeekly, chunk.payload));
       setWeeklyHistory(mergedWeekly);
 
       setLoading(false);
-      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local' || reviewsRes.source === 'local' || dailyChunksRes.source === 'local' || weeklyChunksRes.source === 'local')) {
-        const err = reportRes.error || rosterRes.error || goalsRes.error || reviewsRes.error || dailyChunksRes.error || weeklyChunksRes.error;
+      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local' || managersRes.source === 'local' || reviewsRes.source === 'local' || dailyChunksRes.source === 'local' || weeklyChunksRes.source === 'local')) {
+        const err = reportRes.error || rosterRes.error || goalsRes.error || managersRes.error || reviewsRes.error || dailyChunksRes.error || weeklyChunksRes.error;
         showToast(`Couldn't reach Supabase (${err || 'unknown error'}) — showing this device's local data only`, 'error');
       }
 
@@ -2845,12 +3044,42 @@ export default function App() {
     });
   }, []);
 
+  // Gold Comb: staff-facing acknowledgment that a review was a great one —
+  // lives in its own db key (like review_notes) so it survives a fresh
+  // reviews-file re-upload, which rebuilds reviews.reviews from scratch.
+  const handleToggleGoldComb = useCallback(key => {
+    setGoldCombs(prev => {
+      const next = { ...prev };
+      if (next[key]) delete next[key];
+      else next[key] = { at: new Date().toISOString() };
+      saveData('review_gold_combs', next).then(result => {
+        if (isConfigured() && !result.ok) {
+          showToast(`Gold Comb saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+        }
+      });
+      return next;
+    });
+  }, []);
+
   const handleSaveGoal = useCallback((storeCode, field, value) => {
     setGoals(prev => {
       const next = { ...prev, [storeCode]: { ...prev[storeCode], [field]: value } };
       saveData('store_goals', next).then(result => {
         if (isConfigured() && !result.ok) {
           showToast(`Goal saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+        }
+      });
+      return next;
+    });
+  }, []);
+
+  const handleSaveManager = useCallback((storeCode, name) => {
+    setManagers(prev => {
+      const next = { ...prev };
+      if (name) next[storeCode] = name; else delete next[storeCode];
+      saveData('store_managers', next).then(result => {
+        if (isConfigured() && !result.ok) {
+          showToast(`Manager saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
         }
       });
       return next;
@@ -2930,9 +3159,13 @@ export default function App() {
           // order isn't guaranteed, so a stale single-chunk row full of old/
           // employee-less data could silently clobber fresh per-store chunks
           // on refresh — this is what caused freshly-imported employee names
-          // to vanish after a reload).
-          if (useSplit) await clearData(`daily_history_${month}`);
-          else await clearDataByPrefix(`daily_history_${month}__`);
+          // to vanish after a reload). If THIS delete itself silently fails,
+          // the load-side merge is now format-priority-based (not row-order-
+          // based) so a stray leftover can't win the coin flip anymore — but
+          // still surface the failure so it gets cleaned up instead of
+          // lingering forever.
+          const cleanup = useSplit ? await clearData(`daily_history_${month}`) : await clearDataByPrefix(`daily_history_${month}__`);
+          if (!cleanup.ok) console.error(`[history save] ${month}: saved OK but failed to clean up the superseded format (${cleanup.error}) — a stale row may linger in Supabase.`);
         }
       } catch (err) {
         ok = false; lastError = err.message; failedMonths.push(month);
@@ -3048,10 +3281,10 @@ export default function App() {
           <OverviewTab report={report} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} />
         )}
         {!needsReport && tab === 'Stores' && report && (
-          <StoresTab report={report} query={queries.Stores} onQuery={v => setQuery('Stores', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} />
+          <StoresTab report={report} query={queries.Stores} onQuery={v => setQuery('Stores', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} />
         )}
         {!needsReport && tab === 'Employees' && report && (
-          <EmployeesTab report={report} query={queries.Employees} onQuery={v => setQuery('Employees', v)} />
+          <EmployeesTab report={report} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={managers} />
         )}
         {!needsReport && tab === 'Retail' && report && (
           <StoreMetricTab
@@ -3059,6 +3292,7 @@ export default function App() {
             title="Retail" metricA={{ key: 'retail', label: 'Retail', fmt: fmt$ }} metricB={{ key: 'rpc', label: 'RPC', fmt: fmtNum }}
             goalType="retailGoal" goals={goals}
             history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
+            managers={managers}
           />
         )}
         {!needsReport && tab === 'Color Sales' && report && (
@@ -3068,10 +3302,11 @@ export default function App() {
             goalType="colorGoal" goals={goals}
             history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
             showPrevMonthColor
+            managers={managers}
           />
         )}
         {!needsReport && tab === 'DL' && report && (
-          <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} />
+          <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} />
         )}
         {tab === '60 Day Employee' && (
           <NewHireTab report={report} employeeRoster={employeeRoster} query={queries['60 Day Employee']} onQuery={v => setQuery('60 Day Employee', v)} />
@@ -3080,6 +3315,7 @@ export default function App() {
           <ReviewsTab
             report={report} reviews={reviews} query={queries.Reviews} onQuery={v => setQuery('Reviews', v)}
             reviewNotes={reviewNotes} onAddReviewNote={handleAddReviewNote}
+            goldCombs={goldCombs} onToggleGoldComb={handleToggleGoldComb}
           />
         )}
         {tab === 'Weekly' && (
@@ -3089,6 +3325,7 @@ export default function App() {
           <SetupTab
             configured={isConfigured()} section={setupSection} onSection={setSetupSection}
             goalsProps={{ report, goals, onSaveGoal: handleSaveGoal, onImportGoals: handleImportGoals }}
+            managersProps={{ report, managers, onSaveManager: handleSaveManager }}
             historyProps={{ history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory }}
             uploadProps={{
               report, uploading, onFile: handleFile, onClear: handleClearAll,
@@ -3098,7 +3335,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget report={report} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} />
+      <AIChatWidget report={report} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} />
     </div>
   );
 }
