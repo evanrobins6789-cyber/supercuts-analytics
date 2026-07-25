@@ -3924,7 +3924,112 @@ const SETUP_SECTIONS = [
   { key: 'homepage', label: 'Homepage' },
   { key: 'history', label: 'Historical Import' },
   { key: 'upload', label: 'Upload' },
+  { key: 'emailReports', label: 'Email Reports' },
 ];
+
+// Auto-upload a report straight from Gmail — a Google Apps Script (run on a
+// timer inside the user's own Google account, no new hosting) forwards a
+// labeled email's attachment to api/email-report.js, which parses and saves
+// it exactly like a manual Upload. This card is the only place the setup
+// script is shown; it deliberately never embeds a real secret since the
+// Setup tab has no password gate (see HANDOFF.md) — the placeholder is safe
+// to ship in the public bundle, the real EMAIL_INGEST_SECRET only ever lives
+// in Vercel's env vars and the user's private Apps Script project.
+function EmailReportsSetupTab() {
+  const webhookUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/email-report` : 'https://YOUR-SITE.vercel.app/api/email-report';
+  const script = `// Google Apps Script — forwards labeled Gmail attachments to the site
+// so weekly reports upload themselves. Paste this whole file in at
+// script.google.com as a new project, fill in SHARED_SECRET below, then
+// follow the numbered steps in Setup > Email Reports.
+
+const WEBHOOK_URL = '${webhookUrl}';
+const SHARED_SECRET = 'PASTE_YOUR_SECRET_HERE'; // must exactly match EMAIL_INGEST_SECRET in Vercel
+
+// Add a { label, type } pair here (and a matching case in api/email-report.js)
+// to ingest another emailed report type in the future.
+const REPORT_LABELS = [
+  { label: 'SC-StylistReport', type: 'stylist_report' },
+  { label: 'SC-Reviews', type: 'reviews' },
+  { label: 'SC-EmployeeStartDates', type: 'employee_start_dates' },
+];
+
+function checkForReports() {
+  REPORT_LABELS.forEach(({ label, type }) => processLabel(label, type));
+}
+
+function processLabel(labelName, type) {
+  const label = GmailApp.getUserLabelByName(labelName);
+  if (!label) return; // label doesn't exist in this Gmail account — skip it
+  label.getThreads().forEach(thread => {
+    thread.getMessages().forEach(message => {
+      if (message.isUnread() && message.getAttachments().length > 0) {
+        processMessage(message, type, labelName);
+      }
+    });
+  });
+}
+
+function processMessage(message, type, labelName) {
+  const attachments = message.getAttachments();
+  const attachment = attachments.find(a => /\\.(xlsx|xls|csv)$/i.test(a.getName())) || attachments[0];
+  try {
+    const contentBase64 = Utilities.base64Encode(attachment.getBytes());
+    const response = UrlFetchApp.fetch(WEBHOOK_URL, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({ secret: SHARED_SECRET, type, fileName: attachment.getName(), contentBase64 }),
+      muteHttpExceptions: true,
+    });
+    const status = response.getResponseCode();
+    if (status >= 200 && status < 300) {
+      message.markRead();
+    } else {
+      notifyFailure(labelName, attachment.getName(), \`HTTP \${status}: \${response.getContentText()}\`);
+    }
+  } catch (err) {
+    notifyFailure(labelName, attachment.getName(), err.message);
+  }
+}
+
+function notifyFailure(labelName, fileName, detail) {
+  MailApp.sendEmail(
+    Session.getActiveUser().getEmail(),
+    \`Supercuts report upload failed — \${labelName}\`,
+    \`The file "\${fileName}" from a "\${labelName}" email could not be uploaded.\\n\\nDetails: \${detail}\\n\\nThe email is left unread so it retries automatically next run — check it manually if this keeps happening.\`
+  );
+}`;
+
+  return (
+    <div className="setup-section">
+      <div className="setup-sql-card">
+        <p className="chart-title">Auto-upload reports from a Gmail email</p>
+        <p className="step-body">Wires a Gmail label to this site: when a labeled email with an attachment arrives, a small script — running on a timer inside your own Google account, nothing new to host — uploads it automatically, the same way the Upload tab does it by hand.</p>
+      </div>
+      <div className="setup-step">
+        <div className="step-num">1</div>
+        <div><p className="step-title">Create Gmail labels + filters</p><p className="step-body">In Gmail, open one of the automated report emails → the ⋮ menu → "Filter messages like these" → set the From (and/or Subject) → "Create filter" → check "Apply the label" and create a label. Do this once per report type you actually get by email: <code>SC-StylistReport</code>, <code>SC-Reviews</code>, <code>SC-EmployeeStartDates</code>. Don't check "Mark as read" — the script uses "unread" to know what's new.</p></div>
+      </div>
+      <div className="setup-step">
+        <div className="step-num">2</div>
+        <div><p className="step-title">Add the script</p><p className="step-body">Go to <code>script.google.com</code> → New project → paste in the code below (replacing everything) → paste your secret into <code>SHARED_SECRET</code>.</p></div>
+      </div>
+      <pre className="setup-sql">{script}</pre>
+      <div className="setup-step">
+        <div className="step-num">3</div>
+        <div><p className="step-title">Authorize it</p><p className="step-body">Pick <code>checkForReports</code> from the function dropdown at the top of the editor and click Run once. Google will show an "unverified app" warning since this is your own private script — click "Advanced" → "Go to (project name) (unsafe)" → Allow. It's only asking to read your Gmail and make a web request; nothing leaves your Google account except that one request.</p></div>
+      </div>
+      <div className="setup-step">
+        <div className="step-num">4</div>
+        <div><p className="step-title">Set it to run automatically</p><p className="step-body">Click the clock icon ("Triggers") in the left sidebar → "+ Add Trigger" → function: <code>checkForReports</code> → Time-driven → Minutes timer → Every 30 minutes → Save.</p></div>
+      </div>
+      <div className="setup-step">
+        <div className="step-num">5</div>
+        <div><p className="step-title">Add the matching secret in Vercel</p><p className="step-body">Vercel project → Settings → Environment Variables → add <code>EMAIL_INGEST_SECRET</code> set to the exact same value you pasted into the script → redeploy. If the two don't match, uploads fail (safely) and you'll get an email explaining why.</p></div>
+      </div>
+      <p className="step-body">If a report ever fails to parse or upload, you get an email at your own address explaining why — the source email stays unread so it's retried automatically the next time the script runs.</p>
+    </div>
+  );
+}
 
 function SetupTab({ configured, section, onSection, goalsProps, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps }) {
   const steps = [
@@ -3957,6 +4062,7 @@ function SetupTab({ configured, section, onSection, goalsProps, managersProps, m
       {section === 'homepage' && <HomepageAdminTab {...homepageAdminProps} />}
       {section === 'history' && <HistoricalImportTab {...historyProps} />}
       {section === 'upload' && <UploadTab {...uploadProps} />}
+      {section === 'emailReports' && <EmailReportsSetupTab />}
 
       {section === 'guide' && <>
       <div className="setup-section">

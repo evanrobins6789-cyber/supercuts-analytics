@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 
-function sheetToGrid(ws) {
+export function sheetToGrid(ws) {
   const ref = ws['!ref'];
   if (!ref) return [];
   const range = XLSX.utils.decode_range(ref);
@@ -88,7 +88,13 @@ function rollup(employees) {
 // "Grand Total" row, which we skip since it has no name at all.
 export async function parseStylistReport(file) {
   const grid = await readWorkbookGrid(file);
+  return parseStylistReportFromGrid(grid, file.name);
+}
 
+// Grid-in, no-File-object-required variant — shared with the server-side
+// email ingestion path (api/email-report.js), which has no FileReader/File
+// and builds a grid straight from a Buffer instead.
+export function parseStylistReportFromGrid(grid, fileName) {
   const header = grid[0];
   const col = {
     startDate: findCol(header, 'Report Start Date'),
@@ -194,7 +200,7 @@ export async function parseStylistReport(file) {
     companyTotals,
     storeCount: stores.length,
     employeeCount: allEmployees.length,
-    fileName: file.name,
+    fileName,
   };
 }
 
@@ -222,7 +228,10 @@ function parseDateCell(cell) {
 
 export async function parseEmployeeStartDates(file) {
   const grid = await readWorkbookGrid(file);
+  return parseEmployeeStartDatesFromGrid(grid, file.name);
+}
 
+export function parseEmployeeStartDatesFromGrid(grid, fileName) {
   const hdrRowIdx = grid.findIndex(row => row.some(c => cellText(c).toLowerCase() === 'employee name'));
   if (hdrRowIdx === -1) throw new Error('Could not find an "Employee Name" column in this file.');
   const headerRow = grid[hdrRowIdx];
@@ -247,7 +256,7 @@ export async function parseEmployeeStartDates(file) {
 
   if (!employees.length) throw new Error('No employees with a valid start date were found in this file.');
 
-  return { employees, fileName: file.name };
+  return { employees, fileName };
 }
 
 // ─── Goal file (DL | Salon | Goal amount) ──────────────────────────────────
@@ -337,6 +346,10 @@ export async function parseMilestoneGoalFile(file) {
 // store CODE, which is what we actually match on (same pattern as goals).
 export async function parseReviews(file) {
   const grid = await readWorkbookGrid(file); // XLSX.read auto-detects CSV too
+  return parseReviewsFromGrid(grid, file.name);
+}
+
+export function parseReviewsFromGrid(grid, fileName) {
   const header = grid[0];
   const col = {
     location: findCol(header, 'location'),
@@ -371,7 +384,7 @@ export async function parseReviews(file) {
   }
   if (!reviews.length) throw new Error('No review rows found in this file.');
 
-  return { reviews, fileName: file.name };
+  return { reviews, fileName };
 }
 
 // ─── Historical import: Sales-Accrual & Attendance ─────────────────────────
