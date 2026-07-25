@@ -123,6 +123,7 @@ const STORE_METRICS = [
   { key: 'rpc', label: 'RPC', fmt: fmtNum },
   { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
   { key: 'cph', label: 'CPH', fmt: n => fmtNum(n, 2) },
+  { key: 'signatureS', label: 'Signature S', fmt: fmt$ },
 ];
 
 // Employee-level metrics shown on Employees and within each Stores card.
@@ -136,6 +137,7 @@ const EMPLOYEE_METRICS = [
   { key: 'tsth', label: 'TSTH', fmt: fmtRate },
   { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
   { key: 'cph', label: 'CPH', fmt: n => fmtNum(n, 2) },
+  { key: 'signatureS', label: 'Signature S', fmt: fmt$ },
 ];
 
 function sortByMetric(rows, key, order = 'desc') {
@@ -206,12 +208,14 @@ function rollupRows(rows) {
   const totalColor = sum('colorSales');
   const totalRetail = sum('retail');
   const totalHaircuts = sum('haircuts');
+  const totalSignatureS = sum('signatureS');
   return {
     sales: totalSales,
     totalHours,
     colorSales: totalColor,
     retail: totalRetail,
     haircuts: totalHaircuts,
+    signatureS: totalSignatureS,
     tsth: totalHours > 0 ? totalSales / totalHours : null,
     cpc: totalHaircuts > 0 ? totalColor / totalHaircuts : null,
     rpc: totalHaircuts > 0 ? totalRetail / totalHaircuts : null,
@@ -252,7 +256,7 @@ function groupStoresByLeader(storeRows) {
 // an uploaded weekly report if its whole range sits inside the query range;
 // any day already covered by SOME weekly report is skipped from the daily
 // (Sales-Accrual/Attendance) bucket either way, so nothing is ever counted twice.
-const EMPTY_RANGE_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0 };
+const EMPTY_RANGE_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0 };
 function addRangeInto(target, src) {
   target.service += src.service || 0;
   target.retail += src.retail || 0;
@@ -260,6 +264,7 @@ function addRangeInto(target, src) {
   target.hours += src.hours || 0;
   target.giftCards += src.giftCards || 0;
   target.haircuts += src.haircuts || 0;
+  target.signatureS += src.signatureS || 0;
 }
 function expandDateRangeDays(start, end) {
   const dates = [];
@@ -280,13 +285,14 @@ function expandDateRangeDays(start, end) {
 // recomputing tsth/cpc/rpc from those sums — never averaging ratios.
 function mergeEmployeesInto(targetMap, employees) {
   employees.forEach(e => {
-    if (!targetMap[e.name]) targetMap[e.name] = { name: e.name, sales: 0, colorSales: 0, retail: 0, haircuts: 0, totalHours: 0 };
+    if (!targetMap[e.name]) targetMap[e.name] = { name: e.name, sales: 0, colorSales: 0, retail: 0, haircuts: 0, totalHours: 0, signatureS: 0 };
     const t = targetMap[e.name];
     t.sales += e.sales || 0;
     t.colorSales += e.colorSales || 0;
     t.retail += e.retail || 0;
     t.haircuts += e.haircuts || 0;
     t.totalHours += e.totalHours || 0;
+    t.signatureS += e.signatureS || 0;
   });
 }
 function finalizeEmployee(e) {
@@ -353,6 +359,7 @@ function historyTotalsToReportShape(t) {
     colorSales: t?.color || 0,
     retail: t?.retail || 0,
     giftCards: t?.giftCards || 0,
+    signatureS: t?.signatureS || 0,
     haircuts: haircuts || null,
     tsth: hours > 0 ? service / hours : null,
     cpc: haircuts > 0 ? (t.color || 0) / haircuts : null,
@@ -1361,6 +1368,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
                   {s.rpc != null && <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(s.rpc)}</span></div>}
                   <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(s.haircuts)}</span></div>
                   {s.cph != null && <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(s.cph)}</span></div>}
+                  <div className="dl-stat"><span className="dl-stat-label">Signature S</span><span className="dl-stat-value">{fmt$(s.signatureS)}</span></div>
                 </div>
               </button>
               {isOpen && hasEmployeeData && (
@@ -1368,7 +1376,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
                   <EmployeeTable
                     rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                     showStoreCol={false}
-                    footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph }}
+                    footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS }}
                     footerLabel="Store total / weighted avg"
                   />
                 </div>
@@ -1659,7 +1667,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                                     <EmployeeTable
                                       rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                                       showStoreCol={false}
-                                      footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph }}
+                                      footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS }}
                                       footerLabel="Store total / weighted avg"
                                     />
                                   </td>
@@ -1732,7 +1740,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                           <EmployeeTable
                             rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                             showStoreCol={false}
-                            footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph }}
+                            footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS }}
                             footerLabel="Store total / weighted avg"
                           />
                         </td>
@@ -1874,6 +1882,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                       <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(t.rpc)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(t.haircuts)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(t.cph)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Signature S</span><span className="dl-stat-value">{fmt$(t.signatureS)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{groupGoal > 0 ? fmt$(groupGoal) : '—'}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupActual} goal={groupGoal} milestone={groupMilestone} /></div>
                     </div>
@@ -1884,7 +1893,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                         <tr>
                           <th className="ledger-name-col">Store</th><th className="ledger-name-col">Manager</th>
                           <th>Sales</th><th>TSTH</th><th>Total Hours</th><th>Color Sales</th>
-                          <th>CPC</th><th>Retail</th><th>RPC</th><th>Cuts</th><th>CPH</th>
+                          <th>CPC</th><th>Retail</th><th>RPC</th><th>Cuts</th><th>CPH</th><th>Signature S</th>
                           <th>Goal</th><th>Milestone</th><th>Progress</th>
                         </tr>
                       </thead>
@@ -1902,6 +1911,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                             <td>{fmtNum(s.rpc)}</td>
                             <td>{fmtInt(s.haircuts)}</td>
                             <td>{fmtNum(s.cph)}</td>
+                            <td>{fmt$(s.signatureS)}</td>
                             <td>{milestoneGoals?.[s.code]?.goal != null ? fmt$(milestoneGoals[s.code].goal) : '—'}</td>
                             <td>{milestoneGoals?.[s.code]?.milestone != null ? fmt$(milestoneGoals[s.code].milestone) : '—'}</td>
                             <td><MilestoneThermometer actual={monthToDateSalesByCode[s.code]} goal={milestoneGoals?.[s.code]?.goal} milestone={milestoneGoals?.[s.code]?.milestone} /></td>
@@ -1921,6 +1931,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                           <td>{fmtNum(t.rpc)}</td>
                           <td>{fmtInt(t.haircuts)}</td>
                           <td>{fmtNum(t.cph)}</td>
+                          <td>{fmt$(t.signatureS)}</td>
                           <td>{groupGoal > 0 ? fmt$(groupGoal) : '—'}</td>
                           <td>{groupMilestone > 0 ? fmt$(groupMilestone) : '—'}</td>
                           <td><MilestoneThermometer actual={groupActual} goal={groupGoal} milestone={groupMilestone} /></td>
@@ -1963,6 +1974,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                       <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(t.rpc)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(t.haircuts)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(t.cph)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Signature S</span><span className="dl-stat-value">{fmt$(t.signatureS)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{groupGoal > 0 ? fmt$(groupGoal) : '—'}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupActual} goal={groupGoal} milestone={groupMilestone} /></div>
                     </div>
@@ -1979,6 +1991,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                             <th>RPC</th>
                             <th>Cuts</th>
                             <th>CPH</th>
+                            <th>Signature S</th>
                             <th>Goal</th>
                             <th>Milestone</th>
                             <th>Progress</th>
@@ -2003,17 +2016,18 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                                   <td>{fmtNum(s.rpc)}</td>
                                   <td>{fmtInt(s.haircuts)}</td>
                                   <td>{fmtNum(s.cph)}</td>
+                                  <td>{fmt$(s.signatureS)}</td>
                                   <td>{milestoneGoals?.[s.code]?.goal != null ? fmt$(milestoneGoals[s.code].goal) : '—'}</td>
                                   <td>{milestoneGoals?.[s.code]?.milestone != null ? fmt$(milestoneGoals[s.code].milestone) : '—'}</td>
                                   <td><MilestoneThermometer actual={monthToDateSalesByCode[s.code]} goal={milestoneGoals?.[s.code]?.goal} milestone={milestoneGoals?.[s.code]?.milestone} /></td>
                                 </tr>
                                 {isStoreOpen && hasEmployeeData && (
                                   <tr className="store-expand-row">
-                                    <td colSpan={13}>
+                                    <td colSpan={14}>
                                       <EmployeeTable
                                         rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                                         showStoreCol={false}
-                                        footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph }}
+                                        footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS }}
                                         footerLabel="Store total / weighted avg"
                                       />
                                     </td>
@@ -3250,7 +3264,7 @@ function expandDateRange(start, end) {
   }
   return dates;
 }
-const EMPTY_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0 };
+const EMPTY_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0 };
 function addInto(target, src) {
   target.service += src.service || 0;
   target.retail += src.retail || 0;
@@ -3258,6 +3272,7 @@ function addInto(target, src) {
   target.hours += src.hours || 0;
   target.giftCards += src.giftCards || 0;
   target.haircuts += src.haircuts || 0;
+  target.signatureS += src.signatureS || 0;
 }
 
 // Builds one row per week — a real uploaded Stylist Report week where one
@@ -3335,6 +3350,7 @@ const WEEKLY_METRICS = [
   { key: 'color', label: 'Color Sales', fmt: fmt$ },
   { key: 'retail', label: 'Retail', fmt: fmt$ },
   { key: 'giftCards', label: 'Gift Cards', fmt: fmt$ },
+  { key: 'signatureS', label: 'Signature S', fmt: fmt$ },
   { key: 'hours', label: 'Total Hours', fmt: n => fmtNum(n, 0) },
   { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
   { key: 'cph', label: 'CPH (Cuts per Hour)', fmt: n => fmtNum(n, 2) },
@@ -3662,7 +3678,7 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
     months.forEach(m => {
       const t = periodTotals(m.stores);
       const cph = t.hours > 0 ? t.haircuts / t.hours : null;
-      lines.push(`${m.month}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Gift Cards $${Math.round(t.giftCards)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}, CPH ${cph != null ? cph.toFixed(2) : 'n/a'}`);
+      lines.push(`${m.month}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Gift Cards $${Math.round(t.giftCards)}, Signature S $${Math.round(t.signatureS || 0)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}, CPH ${cph != null ? cph.toFixed(2) : 'n/a'}`);
     });
 
     // Per-store breakdown + top employees, computed once per month from the
@@ -3680,7 +3696,7 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
       lines.push(`${m.month}:`);
       Object.entries(monthlyTotals.get(m.month)).forEach(([code, t]) => {
         const name = STORE_CODE_TO_NAME[code] || `Store ${code}`;
-        lines.push(`  ${name}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}`);
+        lines.push(`  ${name}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Signature S $${Math.round(t.signatureS || 0)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}`);
       });
     });
 

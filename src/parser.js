@@ -421,6 +421,14 @@ function isColorItem(itemName) {
   return COLOR_KEYWORDS.some(k => t.includes(k));
 }
 
+// "Signature Service" — its own tracked $ figure (Setup > Historical Import
+// only; the routine weekly Stylist Report has no item-level detail to match
+// against). Matched by name rather than Item Category since there's no
+// generic category for it the way there is for Color/Haircut Services.
+function isSignatureServiceItem(itemName) {
+  return /signature\s*service/i.test(itemName);
+}
+
 // CPC/RPC need a "customer count" to divide by — the file's own Item
 // Category gives this exactly ("Haircut Services") when present; otherwise
 // fall back to matching common haircut SKU names.
@@ -455,7 +463,7 @@ export async function parseSalesAccrualFile(file) {
   // no double-dipping between Sales and Retail.
   const hasExactTypes = col.itemType !== -1;
 
-  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color, giftCards, haircuts, employees: {name: {sales, colorSales, haircuts}} }
+  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color, giftCards, haircuts, signatureS, employees: {name: {sales, colorSales, haircuts, signatureS}} }
   for (let r = hdrRowIdx + 1; r < grid.length; r++) {
     const row = grid[r];
     if (!rowHasData(row)) continue;
@@ -473,19 +481,20 @@ export async function parseSalesAccrualFile(file) {
     const soldBy = col.soldBy !== -1 ? cellText(row[col.soldBy]) : '';
 
     const key = `${code}|${isoDate}`;
-    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, employees: {} });
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, employees: {} });
     const rec = daily.get(key);
     const employeeFor = name => {
       if (!name) return null;
-      if (!rec.employees[name]) rec.employees[name] = { sales: 0, colorSales: 0, haircuts: 0, retail: 0 };
+      if (!rec.employees[name]) rec.employees[name] = { sales: 0, colorSales: 0, haircuts: 0, retail: 0, signatureS: 0 };
       return rec.employees[name];
     };
-    const addService = (name, isColor, isHaircut) => {
+    const addService = (name, isColor, isHaircut, isSignature) => {
       const emp = employeeFor(name);
       if (!emp) return;
       emp.sales += amount;
       if (isColor) emp.colorSales += amount;
       if (isHaircut) emp.haircuts += qty;
+      if (isSignature) emp.signatureS += amount;
     };
     const addRetail = name => {
       const emp = employeeFor(name);
@@ -504,9 +513,11 @@ export async function parseSalesAccrualFile(file) {
         const category = col.itemCategory !== -1 ? cellText(row[col.itemCategory]) : '';
         const isColor = category === 'Color Services';
         const isHaircut = category === 'Haircut Services';
+        const isSignature = isSignatureServiceItem(itemName);
         if (isColor) rec.color += amount;
         if (isHaircut) rec.haircuts += qty;
-        addService(stylist, isColor, isHaircut);
+        if (isSignature) rec.signatureS += amount;
+        addService(stylist, isColor, isHaircut, isSignature);
       }
     } else {
       // Older export without Item Type/Category — fall back to name-based heuristics.
@@ -518,9 +529,11 @@ export async function parseSalesAccrualFile(file) {
         rec.service += amount;
         const isColor = isColorItem(itemName);
         const isHaircut = isHaircutItem(itemName);
+        const isSignature = isSignatureServiceItem(itemName);
         if (isColor) rec.color += amount;
         if (isHaircut) rec.haircuts += qty;
-        addService(stylist, isColor, isHaircut);
+        if (isSignature) rec.signatureS += amount;
+        addService(stylist, isColor, isHaircut, isSignature);
       }
     }
   }
@@ -533,9 +546,11 @@ export async function parseSalesAccrualFile(file) {
     color: Math.round(r.color * 100) / 100,
     giftCards: Math.round(r.giftCards * 100) / 100,
     haircuts: Math.round(r.haircuts * 100) / 100,
+    signatureS: Math.round(r.signatureS * 100) / 100,
     employees: Object.entries(r.employees).map(([name, v]) => ({
       name, sales: Math.round(v.sales * 100) / 100, colorSales: Math.round(v.colorSales * 100) / 100,
       haircuts: Math.round(v.haircuts * 100) / 100, retail: Math.round(v.retail * 100) / 100,
+      signatureS: Math.round(v.signatureS * 100) / 100,
     })),
   }));
   return { records, fileName: file.name };
@@ -604,10 +619,10 @@ export function mergeSalesIntoHistory(history, salesRecords) {
   const next = { ...history };
   salesRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, employees: {} };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, employees: {} };
     next[key] = {
-      ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards, haircuts: r.haircuts,
-      employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales', 'haircuts', 'retail']),
+      ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards, haircuts: r.haircuts, signatureS: r.signatureS,
+      employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales', 'haircuts', 'retail', 'signatureS']),
     };
   });
   return next;
@@ -616,7 +631,7 @@ export function mergeAttendanceIntoHistory(history, attendanceRecords) {
   const next = { ...history };
   attendanceRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, employees: {} };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, employees: {} };
     next[key] = {
       ...existing, hours: r.hours,
       employees: mergeEmployeeFields(existing.employees, r.employees || [], ['totalHours']),
