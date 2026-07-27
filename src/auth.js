@@ -35,12 +35,16 @@ async function postJson(url, body) {
   return { ok: true, ...json };
 }
 
-export function signUp({ employeeCode, phone, password }) {
-  return postJson('/api/auth', { action: 'signup', employeeCode, phone, password });
+export function checkEligible({ employeeCode, phone }) {
+  return postJson('/api/auth', { action: 'checkEligible', employeeCode, phone });
 }
 
-export function logIn({ phone, password }) {
-  return postJson('/api/auth', { action: 'login', phone, password });
+export function signUp({ employeeCode, phone, pin }) {
+  return postJson('/api/auth', { action: 'signup', employeeCode, phone, pin });
+}
+
+export function logIn({ pin }) {
+  return postJson('/api/auth', { action: 'login', pin });
 }
 
 export function logOut(token) {
@@ -71,6 +75,6 @@ export function rosterUpload(token, rows) {
   return postJson('/api/roster', { action: 'upload', token, rows });
 }
 
-export function rosterResetPassword(token, id) {
-  return postJson('/api/roster', { action: 'resetPassword', token, id });
+export function rosterResetPin(token, id) {
+  return postJson('/api/roster', { action: 'resetPin', token, id });
 }

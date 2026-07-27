@@ -8,8 +8,8 @@ import {
   buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile,
 } from './parser';
 import {
-  getSession, setSession, clearSession, signUp, logIn, logOut,
-  loadScoped, loadScopedByPrefix, rosterList, rosterUpload, rosterResetPassword,
+  getSession, setSession, clearSession, checkEligible, signUp, logIn, logOut,
+  loadScoped, loadScopedByPrefix, rosterList, rosterUpload, rosterResetPin,
 } from './auth';
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
@@ -20,24 +20,53 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip);
 
 // ─── Login ──────────────────────────────────────────────────────────────────
 const ROLE_LABELS = { owner: 'Owner', district_leader: 'District Leader', manager: 'Manager', employee: 'Employee' };
+const PIN_PATTERN = /^[a-zA-Z0-9]{5,}$/;
 
+// Global PIN-only login, no username — opening the site offers a choice
+// (Sign In / Create a Login), Sign In is just a PIN, and Create a Login is a
+// two-step wizard: employee code + phone (checked against the roster the
+// owner uploaded) first, then a PIN is set. Because there's no username at
+// login time, the PIN itself is what api/auth.js uses to find the account
+// (scanning every registered employee's hashed PIN) — see HANDOFF.md for
+// the trade-off that comes with that.
 function LoginScreen({ onLoggedIn }) {
-  const [mode, setMode] = useState('login'); // 'login' | 'signup'
+  const [mode, setMode] = useState('choice'); // 'choice' | 'signin' | 'create1' | 'create2'
   const [phone, setPhone] = useState('');
-  const [password, setPassword] = useState('');
   const [employeeCode, setEmployeeCode] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
+  const [pin, setPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [signinPin, setSigninPin] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
-  const switchMode = next => { setMode(next); setErr(''); setPassword(''); setConfirmPassword(''); };
+  const goTo = next => { setMode(next); setErr(''); };
 
-  const submit = async () => {
+  const submitSignIn = async () => {
     setErr('');
-    if (mode === 'signup' && password.length < 6) { setErr('Password must be at least 6 characters.'); return; }
-    if (mode === 'signup' && password !== confirmPassword) { setErr("Passwords don't match."); return; }
     setBusy(true);
-    const result = mode === 'login' ? await logIn({ phone, password }) : await signUp({ employeeCode, phone, password });
+    const result = await logIn({ pin: signinPin });
+    setBusy(false);
+    if (!result.ok) { setErr(result.error); return; }
+    const session = { token: result.token, name: result.name, role: result.role };
+    setSession(session);
+    onLoggedIn(session);
+  };
+
+  const submitStep1 = async () => {
+    setErr('');
+    setBusy(true);
+    const result = await checkEligible({ employeeCode, phone });
+    setBusy(false);
+    if (!result.ok) { setErr(result.error); return; }
+    goTo('create2');
+  };
+
+  const submitStep2 = async () => {
+    setErr('');
+    if (!PIN_PATTERN.test(pin)) { setErr('PIN must be at least 5 letters and/or numbers.'); return; }
+    if (pin !== confirmPin) { setErr("PINs don't match."); return; }
+    setBusy(true);
+    const result = await signUp({ employeeCode, phone, pin });
     setBusy(false);
     if (!result.ok) { setErr(result.error); return; }
     const session = { token: result.token, name: result.name, role: result.role };
@@ -49,41 +78,108 @@ function LoginScreen({ onLoggedIn }) {
     <div className="app">
       <div className="login-screen">
         <div className="password-gate login-card">
-          <p className="password-gate-title">🔒 {mode === 'login' ? 'Log In' : 'Sign Up'}</p>
-          <p className="password-gate-hint">
-            {mode === 'login' ? 'Enter your phone number and password.' : 'Enter the employee code and phone number you were given, then set a password.'}
-          </p>
-          {mode === 'signup' && (
-            <input className="text-input" placeholder="Employee code" value={employeeCode} onChange={e => setEmployeeCode(e.target.value)} />
+          {mode === 'choice' && (
+            <>
+              <p className="password-gate-title">🔒 Supercuts Metrics</p>
+              <p className="password-gate-hint">Sign in with your PIN, or create a login if this is your first time.</p>
+              <button className="btn-primary" onClick={() => goTo('signin')}>Sign In</button>
+              <button className="btn-primary btn-secondary" onClick={() => goTo('create1')}>Create a Login</button>
+            </>
           )}
-          <input
-            className="text-input" type="tel" placeholder="Phone number" value={phone}
-            onChange={e => setPhone(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && mode === 'login') submit(); }}
-          />
-          <input
-            className="text-input" type="password" placeholder="Password" value={password}
-            onChange={e => setPassword(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && mode === 'login') submit(); }}
-          />
-          {mode === 'signup' && (
-            <input
-              className="text-input" type="password" placeholder="Confirm password" value={confirmPassword}
-              onChange={e => setConfirmPassword(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') submit(); }}
-            />
+
+          {mode === 'signin' && (
+            <>
+              <p className="password-gate-title">🔒 Sign In</p>
+              <p className="password-gate-hint">Enter your PIN.</p>
+              <input
+                className="text-input" type="password" placeholder="PIN" value={signinPin} autoFocus
+                onChange={e => setSigninPin(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') submitSignIn(); }}
+              />
+              <button className="btn-primary" onClick={submitSignIn} disabled={busy}>{busy ? '…' : 'Sign In'}</button>
+              {err && <p className="password-error">{err}</p>}
+              <p className="login-toggle">
+                New here? <button type="button" className="link-btn" onClick={() => goTo('create1')}>Create a Login</button>
+              </p>
+            </>
           )}
-          <button className="btn-primary" onClick={submit} disabled={busy}>{busy ? '…' : (mode === 'login' ? 'Log In' : 'Sign Up')}</button>
-          {err && <p className="password-error">{err}</p>}
-          <p className="login-toggle">
-            {mode === 'login'
-              ? <>New here? <button type="button" className="link-btn" onClick={() => switchMode('signup')}>Sign Up</button></>
-              : <>Already set up? <button type="button" className="link-btn" onClick={() => switchMode('login')}>Log In</button></>}
-          </p>
+
+          {mode === 'create1' && (
+            <>
+              <p className="password-gate-title">🔒 Create a Login</p>
+              <p className="password-gate-hint">Enter the employee code and phone number you were given.</p>
+              <input className="text-input" placeholder="Employee code" value={employeeCode} autoFocus onChange={e => setEmployeeCode(e.target.value)} />
+              <input
+                className="text-input" type="tel" placeholder="Phone number" value={phone}
+                onChange={e => setPhone(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') submitStep1(); }}
+              />
+              <button className="btn-primary" onClick={submitStep1} disabled={busy}>{busy ? '…' : 'Next'}</button>
+              {err && <p className="password-error">{err}</p>}
+              <p className="login-toggle">
+                Already have a PIN? <button type="button" className="link-btn" onClick={() => goTo('signin')}>Sign In</button>
+              </p>
+            </>
+          )}
+
+          {mode === 'create2' && (
+            <>
+              <p className="password-gate-title">🔒 Create Your PIN</p>
+              <p className="password-gate-hint">At least 5 letters and/or numbers. You'll use just this PIN to sign in from now on — no need to re-enter your employee code or phone number.</p>
+              <input
+                className="text-input" type="password" placeholder="New PIN" value={pin} autoFocus
+                onChange={e => setPin(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') submitStep2(); }}
+              />
+              <input
+                className="text-input" type="password" placeholder="Confirm PIN" value={confirmPin}
+                onChange={e => setConfirmPin(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') submitStep2(); }}
+              />
+              <button className="btn-primary" onClick={submitStep2} disabled={busy}>{busy ? '…' : 'Create Login'}</button>
+              {err && <p className="password-error">{err}</p>}
+              <p className="login-toggle">
+                <button type="button" className="link-btn" onClick={() => goTo('create1')}>Back</button>
+              </p>
+            </>
+          )}
         </div>
       </div>
     </div>
   );
+}
+
+// Warns then logs out after IDLE_LIMIT_MS with no mouse/keyboard/touch/scroll
+// activity — worth having now that Sign In is a bare global PIN with no
+// username to also match, on a device that might be shared in the salon.
+// Resets on any activity, not a flat un-renewable session cap.
+const IDLE_LIMIT_MS = 30 * 60 * 1000;
+const IDLE_WARNING_MS = 60 * 1000;
+
+function useIdleLogout(active, onTimeout) {
+  const lastActivityRef = useRef(Date.now());
+  const [warning, setWarning] = useState(false);
+
+  useEffect(() => {
+    if (!active) { setWarning(false); return; }
+    const markActive = () => { lastActivityRef.current = Date.now(); setWarning(false); };
+    const events = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
+    events.forEach(ev => window.addEventListener(ev, markActive, { passive: true }));
+    markActive();
+
+    const interval = setInterval(() => {
+      const idleFor = Date.now() - lastActivityRef.current;
+      if (idleFor >= IDLE_LIMIT_MS) onTimeout();
+      else if (idleFor >= IDLE_LIMIT_MS - IDLE_WARNING_MS) setWarning(true);
+    }, 5000);
+
+    return () => {
+      events.forEach(ev => window.removeEventListener(ev, markActive));
+      clearInterval(interval);
+    };
+  }, [active, onTimeout]);
+
+  return warning;
 }
 
 // ─── Bitmoji peeks — Homepage-only. One mascot at a time, hopping between a
@@ -4058,9 +4154,9 @@ function EmployeeAccessSetupTab({ token }) {
   };
 
   const handleReset = async id => {
-    const res = await rosterResetPassword(token, id);
+    const res = await rosterResetPin(token, id);
     if (!res.ok) setMsg({ type: 'error', text: res.error });
-    else { setMsg({ type: 'ok', text: 'Password cleared — they can sign up again.' }); refresh(); }
+    else { setMsg({ type: 'ok', text: 'PIN cleared — they can create a new one.' }); refresh(); }
   };
 
   return (
@@ -4111,7 +4207,7 @@ function EmployeeAccessSetupTab({ token }) {
                   <td className="ledger-text-col">{(e.storeCodes || []).join(', ') || '—'}</td>
                   <td className="ledger-text-col">{e.active ? (e.registered ? 'Active' : 'Active · not signed up yet') : 'No access'}</td>
                   <td className="ledger-text-col">
-                    {e.registered && <button className="btn-ghost btn-danger" onClick={() => handleReset(e.id)}>Reset password</button>}
+                    {e.registered && <button className="btn-ghost btn-danger" onClick={() => handleReset(e.id)}>Reset PIN</button>}
                   </td>
                 </tr>
               ))}
@@ -4499,10 +4595,15 @@ export default function App() {
     setTimeout(() => setToast(null), 3500);
   };
 
-  const handleLogout = () => {
-    if (currentUser) logOut(currentUser.token);
+  // useCallback so useIdleLogout's effect below doesn't tear down and
+  // rebuild its event listeners/interval on every unrelated re-render —
+  // only reacts when currentUser itself actually changes.
+  const handleLogout = useCallback(() => {
+    setCurrentUser(current => {
+      if (current) logOut(current.token);
+      return null;
+    });
     clearSession();
-    setCurrentUser(null);
     setLoading(true);
     // Clear out the previous session's scoped data so a different person
     // logging in on this same device never sees a stale flash of it before
@@ -4510,7 +4611,9 @@ export default function App() {
     setReport(null); setGoals({}); setManagers({}); setMilestoneGoals({});
     setReviews(null); setHistory({}); setWeeklyHistory({});
     setTab('Homepage'); setSetupSection('guide');
-  };
+  }, []);
+
+  const idleWarning = useIdleLogout(!!currentUser, handleLogout);
 
   const setQuery = (tabName, val) => setQueries(prev => ({ ...prev, [tabName]: val }));
 
@@ -5059,6 +5162,7 @@ export default function App() {
   return (
     <div className="app">
       {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
+      {idleWarning && <div className="toast toast-error">You've been idle — you'll be signed out in under a minute. Move the mouse or tap anywhere to stay signed in.</div>}
       {celebrate && <GoldCombCelebration />}
 
       <header className="app-header">

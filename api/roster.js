@@ -1,7 +1,7 @@
 // Vercel serverless function — Node.js runtime.
 // Owner-only admin over the `employees` table (Setup > Employee Access):
 // list the current roster, upload a replacement roster, or reset one
-// person's password so they can sign back up. The uploaded file is parsed
+// person's PIN so they can create a new one. The uploaded file is parsed
 // client-side (parseEmployeeAccessFromGrid in src/parser.js, same pattern as
 // every other upload in this app) — this endpoint receives plain rows, not
 // a raw file.
@@ -19,7 +19,7 @@ function serializeEmployee(e) {
     role: e.role,
     storeCodes: e.store_codes || [],
     active: e.active,
-    registered: !!e.password_hash,
+    registered: !!e.pin_hash,
   };
 }
 
@@ -89,12 +89,12 @@ export default async function handler(req, res) {
       return;
     }
 
-    if (action === 'resetPassword') {
+    if (action === 'resetPin') {
       if (!id) {
         res.status(400).json({ error: 'Missing employee id.' });
         return;
       }
-      const { error } = await supabase.from('employees').update({ password_hash: null }).eq('id', id);
+      const { error } = await supabase.from('employees').update({ pin_hash: null }).eq('id', id);
       if (error) throw new Error(error.message);
       res.status(200).json({ ok: true });
       return;
