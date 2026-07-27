@@ -60,8 +60,11 @@ function readWorkbookGrid(file) {
   });
 }
 
-// Weighted (not naively summed) rollup for a group of employee rows.
-function rollup(employees) {
+// Weighted (not naively summed) rollup for a group of employee rows. Exported
+// so api/scoped-data.js can recompute companyTotals after filtering a
+// stylist_report down to one role's allowed stores (same math the original
+// company-wide total already used, just over a smaller employee list).
+export function rollup(employees) {
   const sum = key => employees.reduce((s, e) => s + (e[key] || 0), 0);
   const totalSales = sum('sales');
   const totalHours = sum('totalHours');
@@ -385,6 +388,64 @@ export function parseReviewsFromGrid(grid, fileName) {
   if (!reviews.length) throw new Error('No review rows found in this file.');
 
   return { reviews, fileName };
+}
+
+// ─── Employee access roster (login system) ─────────────────────────────────
+// Admin-maintained list that drives who can sign up/log in and what they can
+// see: Employee Name | Employee Code | Phone Number | Role | Store Codes.
+// Role is Owner / District Leader / Manager / Employee (case-insensitive,
+// "DL" also accepted for District Leader). Store Codes only matters for
+// District Leader (multiple codes, separated by commas/semicolons/spaces)
+// and Manager (one code) — blank for Owner/Employee. Every upload is treated
+// as the full current roster by api/roster.js, not a diff.
+function normalizeAccessRole(raw) {
+  const t = String(raw || '').trim().toLowerCase();
+  if (t === 'owner') return 'owner';
+  if (t === 'district leader' || t === 'dl') return 'district_leader';
+  if (t === 'manager') return 'manager';
+  if (t === 'employee') return 'employee';
+  return null;
+}
+
+export async function parseEmployeeAccessFile(file) {
+  const grid = await readWorkbookGrid(file);
+  return parseEmployeeAccessFromGrid(grid, file.name);
+}
+
+export function parseEmployeeAccessFromGrid(grid, fileName) {
+  const header = grid[0];
+  const col = {
+    name: findCol(header, 'Employee Name'),
+    code: findCol(header, 'Employee Code'),
+    phone: findCol(header, 'Phone Number'),
+    role: findCol(header, 'Role'),
+    storeCodes: findCol(header, 'Store Codes'),
+  };
+  if (col.name === -1 || col.code === -1 || col.phone === -1 || col.role === -1) {
+    throw new Error('Could not find the expected columns (Employee Name, Employee Code, Phone Number, Role) in this file.');
+  }
+
+  const employees = [];
+  const errors = [];
+  for (let r = 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (!rowHasData(row)) continue;
+    const name = cellText(row[col.name]);
+    const employeeCode = cellText(row[col.code]);
+    const phone = cellText(row[col.phone]).replace(/\D/g, '');
+    const role = normalizeAccessRole(cellText(row[col.role]));
+    if (!name || !employeeCode || !phone || !role) {
+      errors.push(`Row ${r + 1}: missing or unrecognized data — need a name, employee code, phone number, and a valid Role (Owner/District Leader/Manager/Employee).`);
+      continue;
+    }
+    const storeCodes = col.storeCodes !== -1
+      ? cellText(row[col.storeCodes]).split(/[,;\s]+/).map(s => s.trim()).filter(Boolean)
+      : [];
+    employees.push({ name, employeeCode, phone, role, storeCodes });
+  }
+  if (!employees.length) throw new Error('No usable rows found in this file.');
+
+  return { employees, errors, fileName };
 }
 
 // ─── Historical import: Sales-Accrual & Attendance ─────────────────────────

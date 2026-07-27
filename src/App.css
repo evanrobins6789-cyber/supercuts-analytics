@@ -30,7 +30,8 @@
   color: #fff;
 }
 .app-subtitle { font-size: 13px; color: #B9C6D6; margin-top: 2px; }
-.header-right { padding-top: 4px; }
+.header-right { padding-top: 4px; display: flex; align-items: center; gap: 10px; }
+.header-user { color: #fff; font-size: 12.5px; }
 .btn-ghost {
   background: transparent; border: 1px solid rgba(255,255,255,0.4); color: #fff;
   font-family: 'Inter', sans-serif; font-size: 12px; padding: 7px 14px; border-radius: 20px; cursor: pointer;
@@ -116,6 +117,22 @@
 }
 .btn-primary:hover { background: var(--red-deep); }
 .password-error { color: var(--red); font-size: 12px; margin-top: 10px; }
+
+/* ─── Login screen ────────────────────────────────────────────────────── */
+.login-screen { min-height: calc(100vh - 40px); display: flex; align-items: center; justify-content: center; padding: 20px; }
+.login-card { max-width: 340px; margin: 0; }
+.text-input {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+  font-family: 'Inter', sans-serif; font-size: 14px; margin-bottom: 10px;
+}
+.text-input:focus { outline: none; border-color: var(--red); }
+.login-toggle { font-size: 12.5px; color: var(--ink-soft); margin-top: 14px; }
+.link-btn { background: none; border: none; padding: 0; color: var(--red-deep); text-decoration: underline; cursor: pointer; font-size: inherit; font-family: inherit; }
+
+/* Plain left-aligned text column for ledger-table use — unlike
+   .ledger-name-col, not sticky/frozen, meant for any non-leading column
+   holding text rather than a right-aligned number. */
+.ledger-text-col { text-align: left !important; font-family: 'Inter', sans-serif; font-weight: 500; }
 
 /* ─── Goal inputs ────────────────────────────────────────────────────── */
 .goal-input {

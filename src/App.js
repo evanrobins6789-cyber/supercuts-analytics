@@ -5,14 +5,86 @@ import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDat
 import {
   parseStylistReport, parseEmployeeStartDates, parseGoalFile, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
   parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory,
-  buildWeeklyRecord, mergeWeeklyIntoHistory,
+  buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile,
 } from './parser';
+import {
+  getSession, setSession, clearSession, signUp, logIn, logOut,
+  loadScoped, loadScopedByPrefix, rosterList, rosterUpload, rosterResetPassword,
+} from './auth';
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
 import { BITMOJI_POOLS } from './bitmoji';
 import './App.css';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip);
+
+// ─── Login ──────────────────────────────────────────────────────────────────
+const ROLE_LABELS = { owner: 'Owner', district_leader: 'District Leader', manager: 'Manager', employee: 'Employee' };
+
+function LoginScreen({ onLoggedIn }) {
+  const [mode, setMode] = useState('login'); // 'login' | 'signup'
+  const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [employeeCode, setEmployeeCode] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const switchMode = next => { setMode(next); setErr(''); setPassword(''); setConfirmPassword(''); };
+
+  const submit = async () => {
+    setErr('');
+    if (mode === 'signup' && password.length < 6) { setErr('Password must be at least 6 characters.'); return; }
+    if (mode === 'signup' && password !== confirmPassword) { setErr("Passwords don't match."); return; }
+    setBusy(true);
+    const result = mode === 'login' ? await logIn({ phone, password }) : await signUp({ employeeCode, phone, password });
+    setBusy(false);
+    if (!result.ok) { setErr(result.error); return; }
+    const session = { token: result.token, name: result.name, role: result.role };
+    setSession(session);
+    onLoggedIn(session);
+  };
+
+  return (
+    <div className="app">
+      <div className="login-screen">
+        <div className="password-gate login-card">
+          <p className="password-gate-title">🔒 {mode === 'login' ? 'Log In' : 'Sign Up'}</p>
+          <p className="password-gate-hint">
+            {mode === 'login' ? 'Enter your phone number and password.' : 'Enter the employee code and phone number you were given, then set a password.'}
+          </p>
+          {mode === 'signup' && (
+            <input className="text-input" placeholder="Employee code" value={employeeCode} onChange={e => setEmployeeCode(e.target.value)} />
+          )}
+          <input
+            className="text-input" type="tel" placeholder="Phone number" value={phone}
+            onChange={e => setPhone(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && mode === 'login') submit(); }}
+          />
+          <input
+            className="text-input" type="password" placeholder="Password" value={password}
+            onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && mode === 'login') submit(); }}
+          />
+          {mode === 'signup' && (
+            <input
+              className="text-input" type="password" placeholder="Confirm password" value={confirmPassword}
+              onChange={e => setConfirmPassword(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+            />
+          )}
+          <button className="btn-primary" onClick={submit} disabled={busy}>{busy ? '…' : (mode === 'login' ? 'Log In' : 'Sign Up')}</button>
+          {err && <p className="password-error">{err}</p>}
+          <p className="login-toggle">
+            {mode === 'login'
+              ? <>New here? <button type="button" className="link-btn" onClick={() => switchMode('signup')}>Sign Up</button></>
+              : <>Already set up? <button type="button" className="link-btn" onClick={() => switchMode('login')}>Log In</button></>}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── Bitmoji peeks — Homepage-only. One mascot at a time, hopping between a
 // fixed set of named spots that are each anchored to a real widget's corner
@@ -3941,7 +4013,116 @@ const SETUP_SECTIONS = [
   { key: 'history', label: 'Historical Import' },
   { key: 'upload', label: 'Upload' },
   { key: 'emailReports', label: 'Email Reports' },
+  { key: 'employeeAccess', label: 'Employee Access' },
 ];
+
+// Owner-only roster of who can log in — Employee Name | Employee Code |
+// Phone Number | Role | Store Codes (see parseEmployeeAccessFromGrid in
+// parser.js). Every upload replaces the full current list; api/roster.js
+// deactivates anyone whose employee code isn't in the new file, which is
+// what actually revokes access for someone who quit/was let go.
+function EmployeeAccessSetupTab({ token }) {
+  const [employees, setEmployees] = useState([]);
+  const [loadingList, setLoadingList] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [msg, setMsg] = useState(null); // { type: 'ok'|'error', text, rowErrors? }
+
+  const refresh = useCallback(() => {
+    setLoadingList(true);
+    rosterList(token).then(res => {
+      setLoadingList(false);
+      if (res.ok) setEmployees(res.employees);
+      else setMsg({ type: 'error', text: res.error });
+    });
+  }, [token]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const handleFile = async file => {
+    setUploading(true);
+    setMsg(null);
+    try {
+      const parsed = await parseEmployeeAccessFile(file);
+      const res = await rosterUpload(token, parsed.employees);
+      if (!res.ok) {
+        setMsg({ type: 'error', text: res.error });
+      } else {
+        const warn = parsed.errors.length ? ` (${parsed.errors.length} row(s) skipped — see below)` : '';
+        setMsg({ type: 'ok', text: `Uploaded ${res.count} employee(s), ${res.deactivated} lost access.${warn}`, rowErrors: parsed.errors });
+        refresh();
+      }
+    } catch (err) {
+      setMsg({ type: 'error', text: err.message });
+    }
+    setUploading(false);
+  };
+
+  const handleReset = async id => {
+    const res = await rosterResetPassword(token, id);
+    if (!res.ok) setMsg({ type: 'error', text: res.error });
+    else { setMsg({ type: 'ok', text: 'Password cleared — they can sign up again.' }); refresh(); }
+  };
+
+  return (
+    <div className="tab-content">
+      <p className="section-hint">
+        Upload the employee access list — one row per person: <b>Employee Name | Employee Code | Phone Number | Role | Store Codes</b>.
+        Role is Owner, District Leader, Manager, or Employee. Store Codes only matters for District Leader (multiple codes, separated by commas or spaces) and Manager (one code) — leave it blank for Owner/Employee.
+        Every upload replaces the current list — anyone whose Employee Code isn't in the new file loses access immediately, even if they're already logged in.
+      </p>
+      <div className="goal-import-row">
+        <label className="goal-import-btn">
+          <input
+            type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+            onChange={e => { if (e.target.files[0]) handleFile(e.target.files[0]); e.target.value = ''; }}
+          />
+          {uploading ? <span className="spinner small" /> : '📥'} Upload Employee Access List
+        </label>
+      </div>
+      {msg && (
+        <div className={msg.type === 'error' ? 'password-error' : 'section-hint'}>
+          {msg.text}
+          {msg.rowErrors && msg.rowErrors.length > 0 && (
+            <ul>{msg.rowErrors.map((e, i) => <li key={i}>{e}</li>)}</ul>
+          )}
+        </div>
+      )}
+      {loadingList ? <span className="spinner small" /> : (
+        <div className="ledger-scroll">
+          <table className="ledger-table">
+            <thead>
+              <tr>
+                <th className="ledger-name-col">Name</th>
+                <th className="ledger-text-col">Phone</th>
+                <th className="ledger-text-col">Employee Code</th>
+                <th className="ledger-text-col">Role</th>
+                <th className="ledger-text-col">Store Codes</th>
+                <th className="ledger-text-col">Status</th>
+                <th className="ledger-text-col"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {employees.map(e => (
+                <tr key={e.id}>
+                  <td className="ledger-name-col">{e.name}</td>
+                  <td className="ledger-text-col">{e.phone}</td>
+                  <td className="ledger-text-col">{e.employeeCode}</td>
+                  <td className="ledger-text-col">{ROLE_LABELS[e.role] || e.role}</td>
+                  <td className="ledger-text-col">{(e.storeCodes || []).join(', ') || '—'}</td>
+                  <td className="ledger-text-col">{e.active ? (e.registered ? 'Active' : 'Active · not signed up yet') : 'No access'}</td>
+                  <td className="ledger-text-col">
+                    {e.registered && <button className="btn-ghost btn-danger" onClick={() => handleReset(e.id)}>Reset password</button>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {!loadingList && !employees.length && <p className="empty-note">No one uploaded yet.</p>}
+    </div>
+  );
+}
 
 // Auto-upload a report straight from Gmail — a Google Apps Script (run on a
 // timer inside the user's own Google account, no new hosting) forwards a
@@ -4047,7 +4228,7 @@ function notifyFailure(labelName, fileName, detail) {
   );
 }
 
-function SetupTab({ configured, section, onSection, goalsProps, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps }) {
+function SetupTab({ configured, section, onSection, goalsProps, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps, employeeAccessProps }) {
   const steps = [
     { n: 1, title: 'Export this week\u2019s stylist report', body: 'Run the report with every store and every employee under it, covering the week you want to see.' },
     { n: 2, title: 'Upload it', body: 'Go to the Upload section below and drop it into the "Stylist Report" slot. The date range fills in automatically.' },
@@ -4079,6 +4260,7 @@ function SetupTab({ configured, section, onSection, goalsProps, managersProps, m
       {section === 'history' && <HistoricalImportTab {...historyProps} />}
       {section === 'upload' && <UploadTab {...uploadProps} />}
       {section === 'emailReports' && <EmailReportsSetupTab />}
+      {section === 'employeeAccess' && <EmployeeAccessSetupTab {...employeeAccessProps} />}
 
       {section === 'guide' && <>
       <div className="setup-section">
@@ -4120,6 +4302,7 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;`}<
 const TABS = ['Homepage', 'News', 'Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Weekly', 'Setup'];
 
 export default function App() {
+  const [currentUser, setCurrentUser] = useState(() => getSession());
   const [report, setReport] = useState(null);
   const [employeeRoster, setEmployeeRoster] = useState(null);
   const [goals, setGoals] = useState({});
@@ -4160,13 +4343,21 @@ export default function App() {
   const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', Retail: '', 'Color Sales': '', DL: '', '60 Day Employee': '', Reviews: '' });
 
   useEffect(() => {
+    if (!currentUser) return;
+    // Sensitive, store-scoped datasets go through the server-enforced
+    // scoped-data endpoint (loadScoped/loadScopedByPrefix from ./auth) so a
+    // District Leader/Manager session only ever receives their own stores'
+    // data — an Owner session gets everything back unfiltered on the same
+    // call. Everything else (homepage content, the company-wide employee
+    // start-date list, review notes/gold combs) is lower-stakes and stays
+    // on the direct loadData/loadDataByPrefix path, unchanged.
     Promise.all([
-      loadData('stylist_report'), loadData('employee_start_dates'), loadData('store_goals'), loadData('store_managers'), loadData('milestone_goals'), loadData('reviews'), loadData('review_notes'), loadData('review_gold_combs'),
+      loadScoped('stylist_report'), loadData('employee_start_dates'), loadScoped('store_goals'), loadScoped('store_managers'), loadScoped('milestone_goals'), loadScoped('reviews'), loadData('review_notes'), loadData('review_gold_combs'),
       loadData('homepage_news'), loadData('homepage_events'), loadData('homepage_news_groups'),
-      loadDataByPrefix('daily_history_'), loadDataByPrefix('weekly_history_'),
-      loadData('daily_history'), loadData('weekly_history'), // legacy single-row format, if anything was saved before chunking
+      loadScopedByPrefix('daily_history_'), loadScopedByPrefix('weekly_history_'),
+      loadScoped('daily_history'), loadScoped('weekly_history'), // legacy single-row format, if anything was saved before chunking
     ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
-      if (reportRes.data) setReport(ensureReportCph(reportRes.data)); else { setTab('Setup'); setSetupSection('upload'); }
+      if (reportRes.data) setReport(ensureReportCph(reportRes.data)); else if (currentUser.role === 'owner') { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
       if (managersRes.data) setManagers(managersRes.data);
@@ -4253,9 +4444,18 @@ export default function App() {
       setWeeklyHistory(mergedWeekly);
 
       setLoading(false);
-      if (isConfigured() && (reportRes.source === 'local' || rosterRes.source === 'local' || goalsRes.source === 'local' || managersRes.source === 'local' || milestoneGoalsRes.source === 'local' || reviewsRes.source === 'local' || newsRes.source === 'local' || eventsRes.source === 'local' || dailyChunksRes.source === 'local' || weeklyChunksRes.source === 'local')) {
-        const err = reportRes.error || rosterRes.error || goalsRes.error || managersRes.error || milestoneGoalsRes.error || reviewsRes.error || newsRes.error || eventsRes.error || dailyChunksRes.error || weeklyChunksRes.error;
+      // Non-scoped keys (roster/news/events) still fall back to a local
+      // mirror on a Supabase outage, same as before. The scoped keys
+      // (report/goals/managers/milestones/reviews/history) go through the
+      // server-enforced endpoint instead, which has no local fallback of
+      // its own — an error there just means the data didn't load, so it
+      // gets its own message rather than the "local data only" one.
+      if (isConfigured() && (rosterRes.source === 'local' || newsRes.source === 'local' || eventsRes.source === 'local')) {
+        const err = rosterRes.error || newsRes.error || eventsRes.error;
         showToast(`Couldn't reach Supabase (${err || 'unknown error'}) — showing this device's local data only`, 'error');
+      } else {
+        const scopedError = reportRes.error || goalsRes.error || managersRes.error || milestoneGoalsRes.error || reviewsRes.error || dailyChunksRes.error || weeklyChunksRes.error;
+        if (scopedError) showToast(`Couldn't load some data (${scopedError}) — try refreshing the page.`, 'error');
       }
 
       // Some chunks can exist only in this device's local backup — e.g. a
@@ -4292,11 +4492,24 @@ export default function App() {
         });
       }
     }).catch(() => setLoading(false));
-  }, []);
+  }, [currentUser]);
 
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3500);
+  };
+
+  const handleLogout = () => {
+    if (currentUser) logOut(currentUser.token);
+    clearSession();
+    setCurrentUser(null);
+    setLoading(true);
+    // Clear out the previous session's scoped data so a different person
+    // logging in on this same device never sees a stale flash of it before
+    // the next load effect finishes.
+    setReport(null); setGoals({}); setManagers({}); setMilestoneGoals({});
+    setReviews(null); setHistory({}); setWeeklyHistory({});
+    setTab('Homepage'); setSetupSection('guide');
   };
 
   const setQuery = (tabName, val) => setQueries(prev => ({ ...prev, [tabName]: val }));
@@ -4837,8 +5050,10 @@ export default function App() {
     showToast('Historical data cleared');
   };
 
+  if (!currentUser) return <LoginScreen onLoggedIn={setCurrentUser} />;
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
+  const visibleTabs = TABS.filter(t => t !== 'Setup' || currentUser.role === 'owner');
   const needsReport = !report && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News';
 
   return (
@@ -4854,10 +5069,14 @@ export default function App() {
             <p className="app-subtitle">{label || 'Weekly performance across every location'}</p>
           </div>
         </div>
+        <div className="header-right">
+          <span className="header-user">{currentUser.name} · {ROLE_LABELS[currentUser.role] || currentUser.role}</span>
+          <button className="btn-ghost" onClick={handleLogout}>Log Out</button>
+        </div>
       </header>
 
       <nav className="tab-nav">
-        {TABS.map(t => (
+        {visibleTabs.map(t => (
           <button key={t} className={`tab-btn ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>{t}</button>
         ))}
       </nav>
@@ -4933,6 +5152,7 @@ export default function App() {
               employeeRoster, uploadingRoster, onRosterFile: handleRosterFile, onClearRoster: handleClearRoster,
               reviews, uploadingReviews, onReviewsFile: handleReviewsFile, onClearReviews: handleClearReviews,
             }}
+            employeeAccessProps={{ token: currentUser.token }}
           />
         )}
       </main>
