@@ -48,8 +48,7 @@ function LoginScreen({ onLoggedIn }) {
     setBusy(false);
     if (!result.ok) { setErr(result.error); return; }
     const session = { token: result.token, name: result.name, role: result.role };
-    setSession(session);
-    onLoggedIn(session);
+    onLoggedIn(session, setSession(session));
   };
 
   const submitStep1 = async () => {
@@ -70,8 +69,7 @@ function LoginScreen({ onLoggedIn }) {
     setBusy(false);
     if (!result.ok) { setErr(result.error); return; }
     const session = { token: result.token, name: result.name, role: result.role };
-    setSession(session);
-    onLoggedIn(session);
+    onLoggedIn(session, setSession(session));
   };
 
   return (
@@ -4447,11 +4445,12 @@ export default function App() {
     // call. Everything else (homepage content, the company-wide employee
     // start-date list, review notes/gold combs) is lower-stakes and stays
     // on the direct loadData/loadDataByPrefix path, unchanged.
+    const token = currentUser.token;
     Promise.all([
-      loadScoped('stylist_report'), loadData('employee_start_dates'), loadScoped('store_goals'), loadScoped('store_managers'), loadScoped('milestone_goals'), loadScoped('reviews'), loadData('review_notes'), loadData('review_gold_combs'),
+      loadScoped('stylist_report', token), loadData('employee_start_dates'), loadScoped('store_goals', token), loadScoped('store_managers', token), loadScoped('milestone_goals', token), loadScoped('reviews', token), loadData('review_notes'), loadData('review_gold_combs'),
       loadData('homepage_news'), loadData('homepage_events'), loadData('homepage_news_groups'),
-      loadScopedByPrefix('daily_history_'), loadScopedByPrefix('weekly_history_'),
-      loadScoped('daily_history'), loadScoped('weekly_history'), // legacy single-row format, if anything was saved before chunking
+      loadScopedByPrefix('daily_history_', token), loadScopedByPrefix('weekly_history_', token),
+      loadScoped('daily_history', token), loadScoped('weekly_history', token), // legacy single-row format, if anything was saved before chunking
     ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
       if (reportRes.data) setReport(ensureReportCph(reportRes.data)); else if (currentUser.role === 'owner') { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
@@ -4593,6 +4592,16 @@ export default function App() {
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3500);
+  };
+
+  // `persisted` is false when setSession() couldn't write to localStorage
+  // (e.g. quota exceeded) — the current page still works fine either way
+  // (loadScoped/loadScopedByPrefix use currentUser.token directly, not a
+  // localStorage re-read), but the session won't survive a refresh, so say
+  // so instead of leaving that a silent surprise.
+  const handleLoggedIn = (session, persisted) => {
+    setCurrentUser(session);
+    if (!persisted) showToast("Signed in, but this browser's storage is full so it couldn't remember your login — you'll need to sign in again next time you visit. Nothing else is affected.", 'error');
   };
 
   // useCallback so useIdleLogout's effect below doesn't tear down and
@@ -5153,7 +5162,7 @@ export default function App() {
     showToast('Historical data cleared');
   };
 
-  if (!currentUser) return <LoginScreen onLoggedIn={setCurrentUser} />;
+  if (!currentUser) return <LoginScreen onLoggedIn={handleLoggedIn} />;
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
   const visibleTabs = TABS.filter(t => t !== 'Setup' || currentUser.role === 'owner');

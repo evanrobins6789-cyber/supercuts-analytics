@@ -15,8 +15,13 @@ export function getSession() {
   }
 }
 
+// Returns true if the session was actually persisted. This can fail (quota
+// exceeded — this app mirrors a lot of data into localStorage, including
+// base64 images/PDFs from Homepage News, which can fill a browser's whole
+// per-origin quota) without throwing, so a caller that ignores the return
+// value would never know the session silently didn't survive a refresh.
 export function setSession(session) {
-  try { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); } catch { /* ignore */ }
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); return true; } catch { return false; }
 }
 
 export function clearSession() {
@@ -51,18 +56,22 @@ export function logOut(token) {
   return postJson('/api/auth', { action: 'logout', token });
 }
 
-export async function loadScoped(key) {
-  const session = getSession();
-  if (!session) return { data: null, source: 'supabase', error: 'Not logged in' };
-  const res = await postJson('/api/scoped-data', { token: session.token, key });
+// Takes the token explicitly (from React state) instead of re-reading it via
+// getSession() — the localStorage-backed session is a "remember me across a
+// refresh" nicety, not the source of truth for the CURRENT page load. If
+// that write silently failed (see setSession above), re-reading it here
+// would wrongly treat an already-logged-in page as logged out and every
+// scoped fetch would come back empty with no visible error.
+export async function loadScoped(key, token) {
+  if (!token) return { data: null, source: 'supabase', error: 'Not logged in' };
+  const res = await postJson('/api/scoped-data', { token, key });
   if (!res.ok) return { data: null, source: 'supabase', error: res.error };
   return { data: res.data, source: 'supabase', error: null };
 }
 
-export async function loadScopedByPrefix(prefix) {
-  const session = getSession();
-  if (!session) return { data: [], source: 'supabase', error: 'Not logged in' };
-  const res = await postJson('/api/scoped-data', { token: session.token, prefix });
+export async function loadScopedByPrefix(prefix, token) {
+  if (!token) return { data: [], source: 'supabase', error: 'Not logged in' };
+  const res = await postJson('/api/scoped-data', { token, prefix });
   if (!res.ok) return { data: [], source: 'supabase', error: res.error };
   return { data: res.data, source: 'supabase', error: null };
 }
