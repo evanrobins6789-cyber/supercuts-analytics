@@ -1,9 +1,51 @@
 # Handoff — Supercuts Analytics
 
-Last updated: 2026-07-26, after a design-only discussion (no code) about an employee points/rewards system. See "Discussed but not built — employee rewards/points system" below (most recent). Most recent *shipped* work is still the Signature S metric from 2026-07-25.
+Last updated: 2026-07-27. Code for a full employee login system is written and committed locally (commit `926e092`) but **NOT pushed** — see "Built but not yet deployed — employee login system" below, first thing to read/finish next session. The points/rewards design discussion from 2026-07-26 is still just a discussion, unchanged, see further down.
 
 ## What this app is
 A Store Scoreboard / analytics dashboard for a Supercuts franchise (React SPA, Supabase-backed, deployed on Vercel). Tabs: **Homepage** (default landing tab), **News**, Overview, Stores, Employees, Retail, Color Sales, DL, 60 Day Employee, Reviews, Weekly, and Setup (which also holds Goals / Managers / Milestone Goals / Homepage (News & Events admin) / Historical Import / Upload / **Email Reports** as sub-sections). Has an in-app AI assistant, "Tilly," that answers questions about the business data via a serverless Anthropic API proxy (`api/chat.js`).
+
+## Built but not yet deployed — employee login system
+User asked for real login (District Leaders see only their store group, Managers only their store, Owner sees everything) plus an admin-managed roster that can revoke access. This is genuinely new infrastructure — every prior "password gate" in this app (`GOALS_PASSWORD`, the Setup tab's joke banner) was a client-side flag that reset on reload, not real auth. Full design reasoning is in the plan file the session used: `curried-booping-stonebraker.md` (Claude Code plan mode), worth reading if picking this back up since it explains the tradeoffs, not just the "what."
+
+**Scope decision the user explicitly made**: protect only the sensitive data (sales numbers, goals, reviews) with real server-side enforcement this round — not a full lockdown of every read/write in the app. Rationale: the Supabase anon key is already public (compiled into the site's JS bundle, like any React app) and nothing currently restricts what it can read/write; truly closing that off means rewriting how every single tab loads *and saves* data (homepage news, goal edits, review notes, etc.), which is a much bigger and riskier job than "add login" alone. So: homepage news/events, the employee start-date list, review notes/gold combs, and **all writes app-wide** still go through the original direct-to-Supabase anon-key path, unchanged. Only reads of `stylist_report`, `store_goals`, `store_managers`, `milestone_goals`, `reviews`, and the `daily_history_*`/`weekly_history_*` chunks (+ legacy singular forms) are now server-filtered.
+
+**How it works**:
+- Two new Supabase tables need to be created by the user (SQL below) — `employees` (id, employee_code unique, phone unique, name, role, store_codes text[], password_hash nullable, active, created_at) and `sessions` (opaque token, employee_id, created_at). Both need RLS enabled with **no policies** — that alone locks the public anon key out of them entirely; only a new Supabase **service-role key** (server-only, `SUPABASE_SERVICE_ROLE_KEY` in Vercel, never `REACT_APP_`-prefixed) can touch them. This is the same trick that let this round skip a full data-access rewrite: the existing `weekly_report` table's RLS/anon-key setup is untouched, but the *new* server-enforced endpoint reads it with the service-role key instead of the client reading it directly.
+- **Sign up** (not admin-created accounts): a person enters their employee code + phone number (must match an active, not-yet-registered row the owner uploaded) and sets their own password. `api/auth.js` (signup/login/logout), `api/roster.js` (owner-only: list/upload/resetPassword), `api/scoped-data.js` (the filtering endpoint — role `owner` gets everything unfiltered, everyone else gets their `store_codes` intersected against the payload). Passwords hashed with `bcryptjs`. Sessions are opaque random tokens in the `sessions` table, not JWTs — every request re-reads the employee's *current* row fresh, so revoking someone (or changing their role/stores) takes effect on their very next request, not just their next login.
+- **Setup > Employee Access** (new sub-tab, owner-only since the whole Setup tab is now hidden from non-owners) uploads the roster: one Excel/CSV with columns `Employee Name | Employee Code | Phone Number | Role | Store Codes` (Role: Owner/District Leader/Manager/Employee; Store Codes: comma/space-separated, only meaningful for DL and Manager rows). **Every upload replaces the full current list** — anyone whose employee code isn't in the new file gets `active = false`, which is what actually implements "remove someone from the list, they lose access." Parser: `parseEmployeeAccessFromGrid`/`parseEmployeeAccessFile` in `src/parser.js`.
+- `src/App.js`: new `currentUser` state gates the whole app behind a new `LoginScreen` component (phone+password, with a Sign Up toggle) if there's no valid session in `localStorage`. Once logged in, the sensitive keys load via `loadScoped`/`loadScopedByPrefix` (`src/auth.js`) instead of `loadData`/`loadDataByPrefix` (`src/db.js`) — same `{data, source, error}` shape, so no call-site logic had to change beyond swapping which function is called. `TABS` hides `'Setup'` for non-owners. Tilly (`buildAIContext`/`AIChatWidget`) needed **no changes at all** — she reads the same already-scoped state variables (`report`, `history`, `goals`, `reviews`, etc.), so a DL's Tilly session automatically can't see other stores' numbers either, for free.
+- `stylist_report`'s `companyTotals`/`storeCount`/`employeeCount` are recomputed by the filter (reusing `rollup()`, now exported from `parser.js`) after dropping stores outside a role's `store_codes` — otherwise a scoped DL would still see a company-wide total sales figure even with individual stores hidden.
+
+**Not done / deferred**: role `'employee'` can sign up/log in (same roster drives it) but has no real per-person stats view yet — lands on the normal tabs with nothing scoped to them specifically, since "employee sees own stats" was explicitly a someday-maybe in the earlier points/rewards discussion, not this round's ask. No password-reset self-service (owner clears `password_hash` via a "Reset password" button in Setup > Employee Access, person signs up again) — no email/SMS infra exists to do it any other way yet. No session expiry (logout is explicit only).
+
+**Still pending before this can go live** (session ended here — user deferred the walkthrough, "not right now"):
+1. In Supabase SQL Editor, create the tables:
+```sql
+create table employees (
+  id bigint generated always as identity primary key,
+  employee_code text not null unique,
+  phone text not null unique,
+  name text not null,
+  role text not null check (role in ('owner','district_leader','manager','employee')),
+  store_codes text[] not null default '{}',
+  password_hash text,
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+create table sessions (
+  token text primary key,
+  employee_id bigint not null references employees(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+alter table employees enable row level security;
+alter table sessions enable row level security;
+```
+   (Deliberately no policies — that's what locks the anon key out.)
+2. Supabase → Settings → API → copy the **service_role** key (not anon) → Vercel → Settings → Environment Variables → add `SUPABASE_SERVICE_ROLE_KEY`.
+3. Seed the user's own Owner row so they can sign up: `insert into employees (employee_code, phone, name, role) values ('OWNER1', '<their phone digits only>', 'Evan', 'owner');` (pick any employee_code).
+4. **Only then** push commit `926e092` (already made locally, not pushed) — pushing before steps 1-3 are done locks every visitor, including the owner, out of the live site with no way back in except finishing this checklist anyway. Once pushed and deployed, sign up at the login screen using the seeded phone number + any password.
+5. Verify: upload a small test roster row (fake DL/manager with a couple of real store codes), sign up as that person in a private/incognito window, confirm they only see their assigned store(s) across Stores/Employees/DL/Reviews/Weekly and via Tilly. Confirm removing their row from a re-uploaded roster cuts off access without needing them to log out first (their next click should 401).
 
 ## What shipped this session — Signature S metric
 The user wanted a new $ metric, "Signature S," tracked everywhere store/employee data shows up. Turned out to only be derivable from one specific file, which shaped the whole implementation:
@@ -90,6 +132,8 @@ User asked feasibility questions only this session (explicitly said not to imple
 - Deploys automatically via Vercel on push to `main`. Two Vercel projects exist for this repo (`supercuts-analytics` and `supercuts-analytics-llxh`) — the status-check poll above reports both; both need to be green.
 
 ## What's next
-Likely direction: building the employee points/rewards system described above (points + shop + Twilio texting + phone/SMS-code login) — user is engaged on it and willing to pay for Twilio, but hasn't given a go-ahead to implement yet and the shared-device-vs-personal-phone question is still open. Confirm that before starting.
+Immediate: finish deploying the employee login system above — the Supabase/Vercel setup checklist is the very next thing to do, before anything else touches this repo (an unrelated push before that checklist is done would still carry the login code and lock everyone out).
+
+After that: the employee points/rewards system described below (points + shop + Twilio texting) — note the **login/identity piece it would have needed is now mostly built** (real employee records with phone numbers, real sessions) — re-read that section with this in mind next time it comes up, some of its "doesn't exist today" framing is now stale. User was engaged on it and willing to pay for Twilio, but hadn't given a go-ahead to implement, and the shared-device-vs-personal-phone question is still open. Confirm that before starting.
 
 Other natural follow-ups if asked: a password gate for the Homepage admin section, drag-to-reorder for groups (currently ↑/↓ buttons only), or more Top 10 widgets (Net Sales, Cuts) if four isn't enough.
