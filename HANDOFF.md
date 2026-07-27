@@ -1,11 +1,11 @@
 # Handoff — Supercuts Analytics
 
-Last updated: 2026-07-27. Code for a full employee login system is written and committed locally but **NOT pushed** — see "Built but not yet deployed — employee login system" below, first thing to read/finish next session. Login was redesigned mid-session from phone+password to a **global PIN with no username at all**, plus a 30-minute idle auto-logout, both per direct user request — read the whole section, not just the SQL, since the auth model changed. The points/rewards design discussion from 2026-07-26 is still just a discussion, unchanged, see further down.
+Last updated: 2026-07-27. The employee login system is **live and confirmed working** on both Vercel deployments — see "What shipped this session — employee login system" below. One real bug was found and fixed post-launch (reports appearing to vanish — root cause was a full browser localStorage quota, not data loss; see that section). Remaining work is just finishing the real employee roster upload, not infrastructure. The points/rewards design discussion from 2026-07-26 is still just a discussion, unchanged, see further down.
 
 ## What this app is
 A Store Scoreboard / analytics dashboard for a Supercuts franchise (React SPA, Supabase-backed, deployed on Vercel). Tabs: **Homepage** (default landing tab), **News**, Overview, Stores, Employees, Retail, Color Sales, DL, 60 Day Employee, Reviews, Weekly, and Setup (which also holds Goals / Managers / Milestone Goals / Homepage (News & Events admin) / Historical Import / Upload / **Email Reports** as sub-sections). Has an in-app AI assistant, "Tilly," that answers questions about the business data via a serverless Anthropic API proxy (`api/chat.js`).
 
-## Built but not yet deployed — employee login system
+## What shipped this session — employee login system
 User asked for real login (District Leaders see only their store group, Managers only their store, Owner sees everything) plus an admin-managed roster that can revoke access. This is genuinely new infrastructure — every prior "password gate" in this app (`GOALS_PASSWORD`, the Setup tab's joke banner) was a client-side flag that reset on reload, not real auth. Full design reasoning is in the plan file the session used: `curried-booping-stonebraker.md` (Claude Code plan mode), worth reading if picking this back up since it explains the tradeoffs, not just the "what."
 
 **Scope decision the user explicitly made**: protect only the sensitive data (sales numbers, goals, reviews) with real server-side enforcement this round — not a full lockdown of every read/write in the app. Rationale: the Supabase anon key is already public (compiled into the site's JS bundle, like any React app) and nothing currently restricts what it can read/write; truly closing that off means rewriting how every single tab loads *and saves* data (homepage news, goal edits, review notes, etc.), which is a much bigger and riskier job than "add login" alone. So: homepage news/events, the employee start-date list, review notes/gold combs, and **all writes app-wide** still go through the original direct-to-Supabase anon-key path, unchanged. Only reads of `stylist_report`, `store_goals`, `store_managers`, `milestone_goals`, `reviews`, and the `daily_history_*`/`weekly_history_*` chunks (+ legacy singular forms) are now server-filtered.
@@ -21,33 +21,22 @@ User asked for real login (District Leaders see only their store group, Managers
 
 **Not done / deferred**: role `'employee'` can sign up/log in (same roster drives it) but has no real per-person stats view yet — lands on the normal tabs with nothing scoped to them specifically, since "employee sees own stats" was explicitly a someday-maybe in the earlier points/rewards discussion, not this round's ask. No PIN-recovery self-service (owner clears `pin_hash` via "Reset PIN" in Setup > Employee Access, person creates a new one) — no email/SMS infra exists to do it any other way yet. No rate-limiting/lockout on repeated failed PIN attempts — worth adding if this ever feels abusable in practice, not built this round.
 
-**Still pending before this can go live** (session ended here — user deferred the walkthrough, "not right now"):
-1. In Supabase SQL Editor, create the tables:
-```sql
-create table employees (
-  id bigint generated always as identity primary key,
-  employee_code text not null unique,
-  phone text not null unique,
-  name text not null,
-  role text not null check (role in ('owner','district_leader','manager','employee')),
-  store_codes text[] not null default '{}',
-  pin_hash text,
-  active boolean not null default true,
-  created_at timestamptz not null default now()
-);
-create table sessions (
-  token text primary key,
-  employee_id bigint not null references employees(id) on delete cascade,
-  created_at timestamptz not null default now()
-);
-alter table employees enable row level security;
-alter table sessions enable row level security;
-```
-   (Deliberately no policies — that's what locks the anon key out.)
-2. Supabase → Settings → API → copy the **service_role** key (not anon) → Vercel → Settings → Environment Variables → add `SUPABASE_SERVICE_ROLE_KEY`.
-3. Seed the user's own Owner row so they can sign up: `insert into employees (employee_code, phone, name, role) values ('OWNER1', '<their phone digits only>', 'Evan', 'owner');` (pick any employee_code — no PIN column to set here, they create it themselves via "Create a Login" using this code + phone, same as everyone else).
-4. **Only then** push the local commits (not yet pushed) — pushing before steps 1-3 are done locks every visitor, including the owner, out of the live site with no way back in except finishing this checklist anyway. Once pushed and deployed, use "Create a Login" with the seeded employee code + phone number to set an Owner PIN.
-5. Verify: upload a small test roster row (fake DL/manager with a couple of real store codes), create a login as that person in a private/incognito window, confirm they only see their assigned store(s) across Stores/Employees/DL/Reviews/Weekly and via Tilly. Confirm removing their row from a re-uploaded roster cuts off access without needing them to sign out first (their next click should 401). Also verify: two people can't create the same PIN (second one should get a clear "already in use" error), and that 30 minutes of no mouse/keyboard activity signs someone out (a warning banner should show about a minute before it fires).
+**Deployment is done**: `employees`/`sessions` tables created in Supabase (RLS on, no policies), `SUPABASE_SERVICE_ROLE_KEY` set in Vercel, owner row seeded and confirmed working (name "Leadership", role owner). Both Vercel projects (`supercuts-analytics` and `supercuts-analytics-llxh`) are green on the latest commit. The user is actively using the `-llxh` URL day to day — worth remembering that's the one that matters for "is it live" checks, not just the primary project name.
+
+## Post-launch bug — reports appeared to vanish (found and fixed same session)
+Right after going live, the user reported stylist_report/history/goals data disappearing on every refresh, with no error shown. Root-caused via the deployed bundle + the user's own browser DevTools (Network/Console) rather than guessing — worth reading if a similar "data disappeared" report ever comes back, since the debugging path (pull the public anon key straight out of the deployed JS bundle to query Supabase directly and confirm the data still existed server-side) is a reusable technique for this kind of "is it a save bug or a read bug" question.
+
+- **Actual cause**: this app already mirrors a lot of data into `localStorage` as a backup (`db.js`'s `saveData` — historical daily/weekly chunks, and especially `homepage_news`, which can carry base64-inlined images/PDFs up to 8MB each). On this user's browser that mirror had grown close to the browser's per-origin storage quota. `setSession()` (`src/auth.js`) writes the login session to `localStorage` too — a tiny write, but with zero headroom left it threw `QuotaExceededError`, which the original code caught and silently ignored. Meanwhile `loadScoped`/`loadScopedByPrefix` were re-reading the token via `getSession()` (i.e. re-reading `localStorage`) on every single fetch instead of trusting the token already held in React state — so with the session never actually persisted, every scoped fetch quietly saw "not logged in" and returned nothing, even within the same already-authenticated page view, no error surfaced anywhere.
+- **Fix** (commit after the login-system launch commit): `loadScoped(key, token)`/`loadScopedByPrefix(prefix, token)` now take the token explicitly from `currentUser.token` (App.js) instead of re-reading `localStorage` — matches how `rosterList`/`rosterUpload`/`rosterResetPin` already worked. `setSession()` now returns whether the write actually succeeded; `LoginScreen`'s `onLoggedIn` passes that through to a new `handleLoggedIn` in `App.js`, which shows a toast ("you'll need to sign in again next time") when it didn't, instead of failing silently.
+- **Not fixed / still true**: if a browser's localStorage is genuinely full, that browser still won't remember a login across a refresh (harmless now — just means signing in again next visit — but no longer causes data loss). The underlying cause (base64 images/PDFs from Homepage News accumulating in localStorage, per the existing "Known limitations" note further down) is unchanged; worth real attention if this keeps coming up for the user's own browser or anyone else's.
+
+## Still open — real employee roster not uploaded yet
+The login system works, but only the seeded Owner account exists in `employees` — no District Leaders, Managers, or regular Employees have accounts yet.
+- Built `C:\Users\evanr\Downloads\EmployeeAccessRoster.csv` (on the user's machine, not in this repo) by combining three sources: the real POS employee export (`Employees(1).xls` — actually an HTML file Excel mislabeled, 341 employees with code/name/phone/store), `src/leaderRoster.js`'s DL/Area Supervisor → store-codes mapping (auto-applied, no user input needed), and a Setup > Managers export (`Book1.xlsx`, store → manager name, 59 stores) fuzzy-matched against the leader list via Levenshtein distance so a manager who's ALSO a District Leader/Area Supervisor for that store doesn't get a redundant duplicate role.
+- **18 rows still need the user to fill in Employee Code + Phone Number by hand** (not derivable from any source available this session) — 6 District Leaders/Area Supervisors (Katie Ingram, Lia Koutsikos, Allie Clifford, Julie Beauzier, Laura Guth, LouAnne Costanzo) and 12 store Managers (Dani Goodrich/Hatfield, Samantha Sullivan/Exton, Shawna Bate/Granite Run, Jen Urieta/Sinking Spring, Maritza Robles/Broadcasting Sq, Tricia Hilsop/Langhorne, Matheana Smalls/Wynnewood, Megan Rose Friday/Fairfax, Kayla Wisenowski/Parkesburg, Christine Noles/Malvern, Kiara Finch/Bear, Katie Butler/Madison Farms).
+- **One flagged for manual review**: Malvern's manager is listed as "Christine Noles" — very close to "Christina Nole," the Area Supervisor already covering Frazer + Malvern. Possibly the same person spelled two ways (in which case delete the separate Manager row — her Area Supervisor row already covers Malvern) or a genuinely different person. User hadn't resolved this as of this handoff.
+- 7 stores currently have no manager in Book1.xlsx ("Open") — Eagle, Havertown, Harrisburg, Phoenixville, Morrell, Kutztown, Muhlenberg — left as Employee-only rows, no action needed unless/until those get filled.
+- **Once the CSV is finalized**: upload via Setup > Employee Access. Then the real verification pass from the original plan is still worth doing — sign up as a real DL and a real Manager (private/incognito window) and confirm each only sees their own store(s) across Stores/Employees/DL/Reviews/Weekly and via Tilly; confirm removing someone from a re-uploaded roster cuts off their access without needing them to sign out first.
 
 ## What shipped this session — Signature S metric
 The user wanted a new $ metric, "Signature S," tracked everywhere store/employee data shows up. Turned out to only be derivable from one specific file, which shaped the whole implementation:
@@ -134,8 +123,8 @@ User asked feasibility questions only this session (explicitly said not to imple
 - Deploys automatically via Vercel on push to `main`. Two Vercel projects exist for this repo (`supercuts-analytics` and `supercuts-analytics-llxh`) — the status-check poll above reports both; both need to be green.
 
 ## What's next
-Immediate: finish deploying the employee login system above — the Supabase/Vercel setup checklist is the very next thing to do, before anything else touches this repo (an unrelated push before that checklist is done would still carry the login code and lock everyone out).
+Immediate: help the user finish `EmployeeAccessRoster.csv` (the 18 manual rows + the Malvern name check) and upload it, then do the DL/Manager scoping verification pass — see "Still open — real employee roster not uploaded yet" above.
 
-After that: the employee points/rewards system described below (points + shop + Twilio texting) — note the **login/identity piece it would have needed is now mostly built** (real employee records with phone numbers, real sessions) — re-read that section with this in mind next time it comes up, some of its "doesn't exist today" framing is now stale. User was engaged on it and willing to pay for Twilio, but hadn't given a go-ahead to implement, and the shared-device-vs-personal-phone question is still open. Confirm that before starting.
+After that: the employee points/rewards system described below (points + shop + Twilio texting) — note the **login/identity piece it would have needed is now built** (real employee records with phone numbers, real sessions, real roles) — re-read that section with this in mind next time it comes up, its "doesn't exist today" framing is now stale. User was engaged on it and willing to pay for Twilio, but hadn't given a go-ahead to implement, and the shared-device-vs-personal-phone question is still open. Confirm that before starting.
 
 Other natural follow-ups if asked: a password gate for the Homepage admin section, drag-to-reorder for groups (currently ↑/↓ buttons only), or more Top 10 widgets (Net Sales, Cuts) if four isn't enough.
