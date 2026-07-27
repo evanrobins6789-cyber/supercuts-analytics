@@ -1,6 +1,6 @@
 # Handoff — Supercuts Analytics
 
-Last updated: 2026-07-25, after adding a "Signature S" ($ tracking for the Signature Service item) across Stores/Employees/DL/Weekly/Tilly. See "What shipped this session — Signature S metric" below (most recent).
+Last updated: 2026-07-26, after a design-only discussion (no code) about an employee points/rewards system. See "Discussed but not built — employee rewards/points system" below (most recent). Most recent *shipped* work is still the Signature S metric from 2026-07-25.
 
 ## What this app is
 A Store Scoreboard / analytics dashboard for a Supercuts franchise (React SPA, Supabase-backed, deployed on Vercel). Tabs: **Homepage** (default landing tab), **News**, Overview, Stores, Employees, Retail, Color Sales, DL, 60 Day Employee, Reviews, Weekly, and Setup (which also holds Goals / Managers / Milestone Goals / Homepage (News & Events admin) / Historical Import / Upload / **Email Reports** as sub-sections). Has an in-app AI assistant, "Tilly," that answers questions about the business data via a serverless Anthropic API proxy (`api/chat.js`).
@@ -62,6 +62,17 @@ Not Homepage, but touched this session while fixing a Homepage-adjacent complain
 - DL tab's per-DL summary bar (`.dl-card-stats`) was clipping the milestone %. Fixed by folding the milestone $ figure into the thermometer itself (`MilestoneThermometer` now renders a compact "of $60K" label inside the bar) and dropping the separate "Milestone" stat cell that summary row used to have. The detailed per-store `<table>` below (Goal/Milestone/Progress as 3 separate columns) is untouched — only the cramped card-header summary was consolidated.
 - Retail and Color Sales tabs (both render via the shared `StoreMetricTab`) now also show a Progress thermometer in their DL-grouped summary bar, replacing the old plain "vs Goal" $ delta — reuses the existing weekly retail/color goal (`goals` state, distinct from `milestoneGoals`) as the thermometer's single target (no separate goal-tick, since there's only one number here, not a goal+stretch pair like DL's monthly sales milestone).
 
+## Discussed but not built — employee rewards/points system
+User asked feasibility questions only this session (explicitly said not to implement); nothing below exists in the code yet. Captured here so a future session doesn't re-derive the same design questions/answers.
+- **Ask**: award employees points (admin action), track a running balance, show it per-employee; a "shop" where employees spend points on rewards; a text message sent to the employee when they get shouted out.
+- **Points + balance**: straightforward extension of existing patterns — new Supabase table/row for per-employee balance + transaction log, admin award action gated like the existing `GOALS_PASSWORD` pattern (`src/App.js`).
+- **Shop**: bigger lift than points — needs an admin-managed reward catalog (name/cost/stock) plus a redemption flow that decrements balance and logs the redemption for the manager to actually fulfill in person (app can't dispense real rewards).
+- **Texting on shoutout**: needs a real SMS provider — no SMS infra exists today. User said they're willing to pay, so the plan is **Twilio**, not a free workaround (email-to-SMS carrier gateways were mentioned as a free alternative but are fragile/carrier-dependent — ruled out once the user said budget isn't a constraint).
+- **Login system (user asked, wants this)**: recommended approach is **phone number + SMS one-time code**, not a traditional username/password — deliberately chosen because (a) it avoids password-reset support burden for hourly stylists, and (b) it reuses the same Twilio number/integration as the shoutout-texting feature, so login and notifications become one piece of infra instead of two. Supabase (already the backend here) has built-in Phone Auth with Twilio, so this is a config/feature-flip on existing infra, not a new system bolted on.
+- **New infrastructure this would require that doesn't exist today**: (1) a real employee identity record (name ↔ phone number ↔ point balance) — currently employees are just name-strings matched via the `Stylist` column in parsed reports, there's no employee table/id anywhere; (2) real persisted login sessions — every "password gate" in the app today (Goals, etc.) is just a client-side unlocked flag that resets on reload, not actual auth.
+- **Open design question, unresolved**: shared salon device vs. employee's personal phone for checking points — affects whether the login needs an explicit logout/switch-user step (shared device) or can just stay signed in (personal phone). Needs an answer before building the login flow.
+- **Not started**: no schema, no Twilio account, no code. Pure design discussion.
+
 ## Known limitations (deliberate, not oversights)
 - Tilly's historical data is **month-level only** — no day/week granularity in her context.
 - Review text sent to Tilly is capped at 40 most-recent-negative / 15 most-recent-positive — aggregates/counts are uncapped, only raw quotes are bounded.
@@ -79,4 +90,6 @@ Not Homepage, but touched this session while fixing a Homepage-adjacent complain
 - Deploys automatically via Vercel on push to `main`. Two Vercel projects exist for this repo (`supercuts-analytics` and `supercuts-analytics-llxh`) — the status-check poll above reports both; both need to be green.
 
 ## What's next
-No specific direction from the user beyond what's shipped. Natural follow-ups if asked: a password gate for the Homepage admin section, drag-to-reorder for groups (currently ↑/↓ buttons only), or more Top 10 widgets (Net Sales, Cuts) if four isn't enough.
+Likely direction: building the employee points/rewards system described above (points + shop + Twilio texting + phone/SMS-code login) — user is engaged on it and willing to pay for Twilio, but hasn't given a go-ahead to implement yet and the shared-device-vs-personal-phone question is still open. Confirm that before starting.
+
+Other natural follow-ups if asked: a password gate for the Homepage admin section, drag-to-reorder for groups (currently ↑/↓ buttons only), or more Top 10 widgets (Net Sales, Cuts) if four isn't enough.
