@@ -73,6 +73,8 @@ const ALIASES = {
   'kop': '80108',
   'broadcasting': '82993',     // roster calls this "Broadcasting Sq"
   'naamans': '82262',          // stylist report calls this "Valley View"
+  'morrell plaza': '80684',    // Master Salon List calls this "Morrell"
+  'sinking springs': '80014',  // Master Salon List calls this "Sinking Spring" (singular)
 };
 
 function normalize(name) {

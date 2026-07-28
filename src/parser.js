@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { getCodeForStoreName } from './storeDirectory';
 
 export function sheetToGrid(ws) {
   const ref = ws['!ref'];
@@ -51,6 +52,32 @@ function readWorkbookGrid(file) {
         const g = sheetToGrid(ws);
         if (!g.length) { reject(new Error('No data found in file.')); return; }
         resolve(g);
+      } catch (err) {
+        reject(new Error('Could not read this file. Make sure it is a valid Excel export.'));
+      }
+    };
+    reader.onerror = () => reject(new Error('Failed to read file.'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+// Reads several specific named sheets out of one workbook in a single pass —
+// unlike readWorkbookGrid above, which only ever looks at the first sheet.
+// Needed for the Master Salon List import, which combines data spread
+// across three different tabs of one big multi-tab company workbook.
+function readWorkbookSheetsByName(file, sheetNames) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const wb = XLSX.read(ev.target.result, { type: 'array' });
+        const grids = {};
+        for (const name of sheetNames) {
+          const ws = wb.Sheets[name];
+          if (!ws) { reject(new Error(`Could not find a sheet named "${name}" in this file.`)); return; }
+          grids[name] = sheetToGrid(ws);
+        }
+        resolve(grids);
       } catch (err) {
         reject(new Error('Could not read this file. Make sure it is a valid Excel export.'));
       }
@@ -450,6 +477,171 @@ export function parseEmployeeAccessFromGrid(grid, fileName) {
   if (!employees.length) throw new Error('No usable rows found in this file.');
 
   return { employees, errors, fileName };
+}
+
+// ─── Master Salon List import (the big internal multi-tab company workbook,
+// as opposed to the purpose-built EmployeeAccessRoster.csv above) ──────────
+// Combines three tabs of one workbook into the same {name, employeeCode,
+// phone, role, storeCodes} shape parseEmployeeAccessFromGrid produces, so it
+// feeds the exact same rosterUpload endpoint with no server-side changes:
+//   - "Emplopyee List": every stylist, one row per person, with a real
+//     numeric Emp ID and phone — becomes role 'employee'.
+//   - "Exec Team, DL & Salons": has a "District Leaders" and an "Area
+//     Supervisors" section, each a list of leader-groups (a named row with
+//     that leader's own phone, followed by blank-name rows that are just
+//     more store codes covered by the leader named above them) — becomes
+//     role 'district_leader' (this app doesn't distinguish DL from Area
+//     Supervisor, matching leaderRoster.js's existing convention).
+//   - "DLs and Managers": same leader-group shape, but each store row also
+//     names that store's Manager — becomes role 'manager'. A store whose
+//     Manager is the DL/Area Supervisor themself (matched by email, since
+//     names are sometimes spelled two different ways for the same person —
+//     see the Christina Nole / Christine Noles case) is skipped, since that
+//     store is already covered by the leader's own district_leader row.
+// The Administrative Team and Education Team sections of the Exec sheet are
+// deliberately never read — those people aren't stylists, DLs, or store
+// managers, and were explicitly excluded from this import by the owner.
+export const MASTER_LIST_SHEETS = ['Emplopyee List', 'Exec Team, DL & Salons', 'DLs and Managers'];
+
+function normalizeEmail(raw) {
+  return String(raw).trim().toLowerCase();
+}
+
+function parseMasterEmployeeListGrid(grid) {
+  const hdrIdx = grid.findIndex(row => row.some(c => cellText(c).toLowerCase() === 'emp id'));
+  if (hdrIdx === -1) throw new Error('Could not find the "Emp ID" column on the Employee List sheet.');
+  const header = grid[hdrIdx];
+  const col = {
+    salon: findCol(header, 'Salon'),
+    empId: findCol(header, 'Emp ID'),
+    first: findCol(header, 'First Name'),
+    last: findCol(header, 'Last Name'),
+    phone: findCol(header, 'Phone'),
+  };
+  if (Object.values(col).some(c => c === -1)) {
+    throw new Error('Could not find the expected columns (Salon, Emp ID, First Name, Last Name, Phone) on the Employee List sheet.');
+  }
+
+  const stylists = [];
+  const skipped = [];
+  for (let r = hdrIdx + 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (!rowHasData(row)) continue;
+    const salon = cellText(row[col.salon]);
+    const empId = cellText(row[col.empId]);
+    const name = `${cellText(row[col.first])} ${cellText(row[col.last])}`.replace(/\s+/g, ' ').trim();
+    const phone = cellText(row[col.phone]).replace(/\D/g, '');
+    if (!salon || !empId || !name) continue;
+    const storeCode = getCodeForStoreName(salon);
+    if (!storeCode) {
+      // Almost always a store from a different business sharing this same
+      // workbook (e.g. "WTC ..." — Waxing the City stores), not a real gap.
+      skipped.push(`${name} (Emp ID ${empId}): unrecognized salon "${salon}" — skipped.`);
+      continue;
+    }
+    stylists.push({ name, employeeCode: empId, phone, salon, storeCode });
+  }
+  return { stylists, skipped };
+}
+
+// Shared shape for both the "District Leaders"/"Area Supervisors" section
+// grouping on the Exec sheet and the leader-groups on the DLs and Managers
+// sheet — a leader-summary row (name in col 0) followed by continuation rows
+// (col 0 blank) that each carry one more store code under that leader.
+function parseLeaderGroupsGrid(grid, sectionMarkers, { storeCodeCol, emailCol, phoneCol }) {
+  const groups = [];
+  let inSection = false;
+  let current = null;
+  for (const row of grid) {
+    const c0 = cellText(row[0]);
+    if (sectionMarkers.includes(c0)) { inSection = true; current = null; continue; }
+    if (!inSection || !rowHasData(row)) continue;
+    if (c0) {
+      current = { name: c0, email: normalizeEmail(cellText(row[emailCol])), phone: cellText(row[phoneCol]).replace(/\D/g, ''), storeCodes: [] };
+      groups.push(current);
+    }
+    const code = cellText(row[storeCodeCol]);
+    if (current && code) current.storeCodes.push(code);
+  }
+  return groups;
+}
+
+function parseMasterManagersGrid(grid) {
+  // Both "District Leader and Managers by Salons" and "Area Supervisors and
+  // Managers by Salon" sections share this layout: col0=leader name (blank
+  // on continuation/store rows), col1=store code, col2=location, col3=
+  // manager name, col4=manager email, col5=manager phone. A leader-summary
+  // row (col0 set) carries that leader's own email in col4 — captured so
+  // store rows underneath it can tell a self-managed store apart from a
+  // real separate manager.
+  const SECTION_MARKERS = ['District Leader and Managers by Salons', 'Area Supervisors and Managers by Salon'];
+  const HEADER_ROWS = ['District Leader', 'Area Supervisor'];
+  const managers = new Map(); // key: manager email (or name fallback) -> { name, phone, storeCodes }
+  let inSection = false;
+  let currentLeaderEmail = null;
+  for (const row of grid) {
+    const c0 = cellText(row[0]);
+    if (SECTION_MARKERS.includes(c0)) { inSection = true; currentLeaderEmail = null; continue; }
+    if (HEADER_ROWS.includes(c0)) continue; // the column-header row itself, not a person
+    if (!inSection || !rowHasData(row)) continue;
+    if (c0) {
+      currentLeaderEmail = normalizeEmail(cellText(row[4]));
+      continue;
+    }
+    const storeCode = cellText(row[1]);
+    const managerName = cellText(row[3]);
+    const managerEmail = normalizeEmail(cellText(row[4]));
+    const managerPhone = cellText(row[5]).replace(/\D/g, '');
+    if (!storeCode || !managerName || managerName.toLowerCase() === 'open') continue;
+    if (managerEmail && managerEmail === currentLeaderEmail) continue; // self-managed — the leader's own row already covers this store
+    const key = managerEmail || `name:${normalizeName(managerName)}`;
+    if (!managers.has(key)) managers.set(key, { name: managerName, phone: managerPhone, storeCodes: [] });
+    const m = managers.get(key);
+    if (!m.phone && managerPhone) m.phone = managerPhone;
+    m.storeCodes.push(storeCode);
+  }
+  return managers;
+}
+
+export function parseMasterSalonListFromGrids(grids, fileName) {
+  const { stylists, skipped } = parseMasterEmployeeListGrid(grids['Emplopyee List']);
+  const leaders = parseLeaderGroupsGrid(grids['Exec Team, DL & Salons'], ['District Leaders', 'Area Supervisors'], { storeCodeCol: 1, emailCol: 3, phoneCol: 4 });
+  const managers = parseMasterManagersGrid(grids['DLs and Managers']);
+
+  const stylistByPhone = new Map();
+  stylists.forEach(s => { if (s.phone && !stylistByPhone.has(s.phone)) stylistByPhone.set(s.phone, s); });
+
+  const employees = stylists.map(s => ({ name: s.name, employeeCode: s.employeeCode, phone: s.phone, role: 'employee', storeCodes: [] }));
+
+  const dedupe = codes => Array.from(new Set(codes));
+  // Merge into an existing row for the same employeeCode rather than
+  // replacing it outright — the source workbook sometimes lists the same
+  // leader twice under slightly different names with only a partial store
+  // list each (e.g. "Allie Clifford" and "Allie Clifford (under KI)"), and
+  // overwriting would silently drop whichever store subset processed first.
+  const overlay = (name, phone, role, storeCodes) => {
+    const match = phone && stylistByPhone.get(phone);
+    const employeeCode = match ? match.employeeCode : '';
+    const idx = employeeCode ? employees.findIndex(e => e.employeeCode === employeeCode) : -1;
+    // Keep the first-seen name on a merge — a duplicate listing like "Allie
+    // Clifford (under KI)" is an annotation on the duplicate row, not a
+    // better name than the original "Allie Clifford".
+    const displayName = idx >= 0 ? employees[idx].name : name;
+    const priorCodes = idx >= 0 ? employees[idx].storeCodes : [];
+    const rec = { name: displayName, employeeCode, phone, role, storeCodes: dedupe([...priorCodes, ...storeCodes]) };
+    if (idx >= 0) employees[idx] = rec; else employees.push(rec);
+  };
+
+  managers.forEach(m => overlay(m.name, m.phone, 'manager', m.storeCodes));
+  leaders.forEach(l => overlay(l.name, l.phone, 'district_leader', l.storeCodes));
+
+  if (!employees.length) throw new Error('No usable rows found in this file.');
+  return { employees, errors: skipped, fileName };
+}
+
+export async function parseMasterSalonListFile(file) {
+  const grids = await readWorkbookSheetsByName(file, MASTER_LIST_SHEETS);
+  return parseMasterSalonListFromGrids(grids, file.name);
 }
 
 // ─── Historical import: Sales-Accrual & Attendance ─────────────────────────

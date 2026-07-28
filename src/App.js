@@ -5,7 +5,7 @@ import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDat
 import {
   parseStylistReport, parseEmployeeStartDates, parseGoalFile, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
   parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory,
-  buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile,
+  buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile, parseMasterSalonListFile,
 } from './parser';
 import {
   getSession, setSession, clearSession, checkEligible, signUp, logIn, logOut,
@@ -4106,11 +4106,11 @@ function EmployeeAccessSetupTab({ token }) {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const handleFile = async file => {
+  const handleFile = async (file, parseFn) => {
     setUploading(true);
     setMsg(null);
     try {
-      const parsed = await parseEmployeeAccessFile(file);
+      const parsed = await parseFn(file);
       const res = await rosterUpload(token, parsed.employees);
       if (!res.ok) {
         setMsg({ type: 'error', text: res.error });
@@ -4161,13 +4161,23 @@ function EmployeeAccessSetupTab({ token }) {
         Employee Code and Phone Number can be left blank if you don't have them yet — that person still gets added to the table below (with a placeholder code) so you can fill them in directly, right in this table, once you find out.
         Every upload replaces the current list — anyone whose Employee Code isn't in the new file loses access immediately, even if they're already logged in.
       </p>
+      <p className="section-hint">
+        Or upload the Master Salon List workbook directly — it pulls every stylist (Emp ID + phone), District Leader/Area Supervisor (with their store group), and store Manager straight out of that file's own "Emplopyee List", "Exec Team, DL & Salons", and "DLs and Managers" tabs. Admin Team and Education Team rows are skipped on purpose (they aren't stylists, DLs, or managers). This also replaces the current list, same as above.
+      </p>
       <div className="goal-import-row">
         <label className="goal-import-btn">
           <input
             type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
-            onChange={e => { if (e.target.files[0]) handleFile(e.target.files[0]); e.target.value = ''; }}
+            onChange={e => { if (e.target.files[0]) handleFile(e.target.files[0], parseEmployeeAccessFile); e.target.value = ''; }}
           />
           {uploading ? <span className="spinner small" /> : '📥'} Upload Employee Access List
+        </label>
+        <label className="goal-import-btn">
+          <input
+            type="file" accept=".xlsx,.xls" style={{ display: 'none' }}
+            onChange={e => { if (e.target.files[0]) handleFile(e.target.files[0], parseMasterSalonListFile); e.target.value = ''; }}
+          />
+          {uploading ? <span className="spinner small" /> : '📥'} Upload Master Salon List
         </label>
       </div>
       {msg && (
