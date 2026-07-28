@@ -9,7 +9,7 @@ import {
 } from './parser';
 import {
   getSession, setSession, clearSession, checkEligible, signUp, logIn, logOut,
-  loadScoped, loadScopedByPrefix, rosterList, rosterUpload, rosterResetPin,
+  loadScoped, loadScopedByPrefix, rosterList, rosterUpload, rosterResetPin, rosterUpdate,
 } from './auth';
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
@@ -4092,6 +4092,8 @@ function EmployeeAccessSetupTab({ token }) {
   const [loadingList, setLoadingList] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [msg, setMsg] = useState(null); // { type: 'ok'|'error', text, rowErrors? }
+  const [drafts, setDrafts] = useState({}); // { id: { name?, phone?, employeeCode?, storeCodes? } } — in-progress edits
+  const [savingId, setSavingId] = useState(null);
 
   const refresh = useCallback(() => {
     setLoadingList(true);
@@ -4114,7 +4116,10 @@ function EmployeeAccessSetupTab({ token }) {
         setMsg({ type: 'error', text: res.error });
       } else {
         const warn = parsed.errors.length ? ` (${parsed.errors.length} row(s) skipped — see below)` : '';
-        setMsg({ type: 'ok', text: `Uploaded ${res.count} employee(s), ${res.deactivated} lost access.${warn}`, rowErrors: parsed.errors });
+        const pendingNote = res.pending
+          ? ` ${res.pending} were added without a code/phone yet — look for "PENDING-" codes below and fill them in directly in this table once you know them. Once you do, re-uploading this same file again will wipe that fix out unless you've also updated the file with their real info.`
+          : '';
+        setMsg({ type: 'ok', text: `Uploaded ${res.count} employee(s), ${res.deactivated} lost access.${pendingNote}${warn}`, rowErrors: parsed.errors });
         refresh();
       }
     } catch (err) {
@@ -4129,11 +4134,31 @@ function EmployeeAccessSetupTab({ token }) {
     else { setMsg({ type: 'ok', text: 'PIN cleared — they can create a new one.' }); refresh(); }
   };
 
+  const getVal = (id, field, fallback) => (drafts[id]?.[field] !== undefined ? drafts[id][field] : fallback);
+  const handleChange = (id, field, value) => setDrafts(prev => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
+
+  const handleSave = async (id, field, value) => {
+    setSavingId(id);
+    const patch = field === 'storeCodes'
+      ? { storeCodes: value.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean) }
+      : { [field]: value };
+    const res = await rosterUpdate(token, id, patch);
+    setSavingId(null);
+    if (!res.ok) setMsg({ type: 'error', text: res.error });
+    else refresh();
+  };
+
+  const handleBlurSave = (id, field) => {
+    if (drafts[id]?.[field] === undefined) return;
+    handleSave(id, field, drafts[id][field]);
+  };
+
   return (
     <div className="tab-content">
       <p className="section-hint">
         Upload the employee access list — one row per person: <b>Employee Name | Employee Code | Phone Number | Role | Store Codes</b>.
         Role is Owner, District Leader, Manager, or Employee. Store Codes only matters for District Leader (multiple codes, separated by commas or spaces) and Manager (one code) — leave it blank for Owner/Employee.
+        Employee Code and Phone Number can be left blank if you don't have them yet — that person still gets added to the table below (with a placeholder code) so you can fill them in directly, right in this table, once you find out.
         Every upload replaces the current list — anyone whose Employee Code isn't in the new file loses access immediately, even if they're already logged in.
       </p>
       <div className="goal-import-row">
@@ -4168,19 +4193,54 @@ function EmployeeAccessSetupTab({ token }) {
               </tr>
             </thead>
             <tbody>
-              {employees.map(e => (
-                <tr key={e.id}>
-                  <td className="ledger-name-col">{e.name}</td>
-                  <td className="ledger-text-col">{e.phone}</td>
-                  <td className="ledger-text-col">{e.employeeCode}</td>
-                  <td className="ledger-text-col">{ROLE_LABELS[e.role] || e.role}</td>
-                  <td className="ledger-text-col">{(e.storeCodes || []).join(', ') || '—'}</td>
-                  <td className="ledger-text-col">{e.active ? (e.registered ? 'Active' : 'Active · not signed up yet') : 'No access'}</td>
-                  <td className="ledger-text-col">
-                    {e.registered && <button className="btn-ghost btn-danger" onClick={() => handleReset(e.id)}>Reset PIN</button>}
-                  </td>
-                </tr>
-              ))}
+              {employees.map(e => {
+                const needsInfo = !e.phone || (e.employeeCode || '').startsWith('PENDING-');
+                return (
+                  <tr key={e.id}>
+                    <td className="ledger-name-col">
+                      <input
+                        className="goal-input" style={{ width: '100%' }} value={getVal(e.id, 'name', e.name)}
+                        onChange={ev => handleChange(e.id, 'name', ev.target.value)}
+                        onBlur={() => handleBlurSave(e.id, 'name')}
+                      />
+                    </td>
+                    <td className="ledger-text-col">
+                      <input
+                        className="goal-input" placeholder="Phone" value={getVal(e.id, 'phone', e.phone || '')}
+                        onChange={ev => handleChange(e.id, 'phone', ev.target.value)}
+                        onBlur={() => handleBlurSave(e.id, 'phone')}
+                      />
+                    </td>
+                    <td className="ledger-text-col">
+                      <input
+                        className="goal-input" placeholder="Employee Code" value={getVal(e.id, 'employeeCode', e.employeeCode || '')}
+                        onChange={ev => handleChange(e.id, 'employeeCode', ev.target.value)}
+                        onBlur={() => handleBlurSave(e.id, 'employeeCode')}
+                      />
+                    </td>
+                    <td className="ledger-text-col">
+                      <select value={e.role} onChange={ev => handleSave(e.id, 'role', ev.target.value)}>
+                        {Object.entries(ROLE_LABELS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
+                      </select>
+                    </td>
+                    <td className="ledger-text-col">
+                      <input
+                        className="goal-input" placeholder="Store Codes" value={getVal(e.id, 'storeCodes', (e.storeCodes || []).join(', '))}
+                        onChange={ev => handleChange(e.id, 'storeCodes', ev.target.value)}
+                        onBlur={() => handleBlurSave(e.id, 'storeCodes')}
+                      />
+                    </td>
+                    <td className="ledger-text-col">
+                      {e.active ? (e.registered ? 'Active' : 'Active · not signed up yet') : 'No access'}
+                      {needsInfo && <><br /><span className="password-error">⚠ needs code/phone</span></>}
+                    </td>
+                    <td className="ledger-text-col">
+                      {savingId === e.id && <span className="spinner small" />}
+                      {e.registered && <button className="btn-ghost btn-danger" onClick={() => handleReset(e.id)}>Reset PIN</button>}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

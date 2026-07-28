@@ -10,6 +10,15 @@ import { createServiceClient, requireSession } from '../src/serverAuth.js';
 
 const VALID_ROLES = ['owner', 'district_leader', 'manager', 'employee'];
 
+// Stable per-name placeholder so re-uploading the SAME still-incomplete row
+// twice doesn't create a duplicate — it always resolves to the same code,
+// so the upsert below updates the same DB row instead of inserting a new
+// one. Only used when a row has no real Employee Code yet.
+function pendingCode(name) {
+  const slug = String(name).toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return `PENDING-${slug || 'unknown'}`;
+}
+
 function serializeEmployee(e) {
   return {
     id: e.id,
@@ -35,7 +44,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { action, token, rows, id } = req.body || {};
+  const { action, token, rows, id, name, employeeCode, phone, role, storeCodes } = req.body || {};
   const { employee, error: sessionError } = await requireSession(supabase, token);
   if (!employee) {
     res.status(401).json({ error: sessionError });
@@ -63,15 +72,25 @@ export default async function handler(req, res) {
         res.status(400).json({ error: 'One or more rows has an invalid Role.' });
         return;
       }
-      const newCodes = rows.map(r => String(r.employeeCode).trim());
-      const upserts = rows.map(r => ({
-        employee_code: String(r.employeeCode).trim(),
-        phone: String(r.phone).replace(/\D/g, ''),
-        name: r.name,
-        role: r.role,
-        store_codes: r.storeCodes || [],
-        active: true,
-      }));
+      // A row can arrive with no Employee Code / Phone yet (parseEmployeeAccessFromGrid
+      // no longer drops those — see its comment). Give it a stable placeholder
+      // code instead so it still gets a real DB row (visible in Setup >
+      // Employee Access for the owner to fill in later) rather than being
+      // silently skipped or colliding with every other blank row on the
+      // unique employee_code target this upsert conflicts on.
+      const upserts = rows.map(r => {
+        const trimmedCode = String(r.employeeCode || '').trim();
+        const phoneDigits = String(r.phone || '').replace(/\D/g, '');
+        return {
+          employee_code: trimmedCode || pendingCode(r.name),
+          phone: phoneDigits || null,
+          name: r.name,
+          role: r.role,
+          store_codes: r.storeCodes || [],
+          active: true,
+        };
+      });
+      const newCodes = upserts.map(u => u.employee_code);
       const { error: upsertError } = await supabase.from('employees').upsert(upserts, { onConflict: 'employee_code' });
       if (upsertError) throw new Error(upsertError.message);
 
@@ -85,7 +104,36 @@ export default async function handler(req, res) {
         const { error: deactivateError } = await supabase.from('employees').update({ active: false }).in('id', toDeactivate);
         if (deactivateError) throw new Error(deactivateError.message);
       }
-      res.status(200).json({ ok: true, count: rows.length, deactivated: toDeactivate.length });
+      const pending = upserts.filter(u => u.employee_code.startsWith('PENDING-')).length;
+      res.status(200).json({ ok: true, count: rows.length, deactivated: toDeactivate.length, pending });
+      return;
+    }
+
+    if (action === 'update') {
+      if (!id) {
+        res.status(400).json({ error: 'Missing employee id.' });
+        return;
+      }
+      const patch = {};
+      if (typeof name === 'string') patch.name = name.trim();
+      if (typeof employeeCode === 'string') {
+        const trimmed = employeeCode.trim();
+        if (!trimmed) { res.status(400).json({ error: 'Employee code cannot be blank.' }); return; }
+        patch.employee_code = trimmed;
+      }
+      if (typeof phone === 'string') patch.phone = phone.replace(/\D/g, '') || null;
+      if (typeof role === 'string') {
+        if (!VALID_ROLES.includes(role)) { res.status(400).json({ error: 'Invalid role.' }); return; }
+        patch.role = role;
+      }
+      if (Array.isArray(storeCodes)) patch.store_codes = storeCodes;
+      if (!Object.keys(patch).length) {
+        res.status(400).json({ error: 'Nothing to update.' });
+        return;
+      }
+      const { error } = await supabase.from('employees').update(patch).eq('id', id);
+      if (error) throw new Error(error.message);
+      res.status(200).json({ ok: true });
       return;
     }
 

@@ -87,3 +87,7 @@ export function rosterUpload(token, rows) {
 export function rosterResetPin(token, id) {
   return postJson('/api/roster', { action: 'resetPin', token, id });
 }
+
+export function rosterUpdate(token, id, patch) {
+  return postJson('/api/roster', { action: 'update', token, id, ...patch });
+}

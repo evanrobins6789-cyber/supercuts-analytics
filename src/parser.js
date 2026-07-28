@@ -434,14 +434,18 @@ export function parseEmployeeAccessFromGrid(grid, fileName) {
     const employeeCode = cellText(row[col.code]);
     const phone = cellText(row[col.phone]).replace(/\D/g, '');
     const role = normalizeAccessRole(cellText(row[col.role]));
-    if (!name || !employeeCode || !phone || !role) {
-      errors.push(`Row ${r + 1}: missing or unrecognized data — need a name, employee code, phone number, and a valid Role (Owner/District Leader/Manager/Employee).`);
+    // Employee Code and Phone Number can be blank — that person still gets a
+    // row (with a placeholder code, assigned server-side) so they show up in
+    // Setup > Employee Access for the owner to fill in by hand once known,
+    // rather than being silently dropped from the roster entirely.
+    if (!name || !role) {
+      errors.push(`Row ${r + 1}: missing or unrecognized data — need at least a name and a valid Role (Owner/District Leader/Manager/Employee).`);
       continue;
     }
     const storeCodes = col.storeCodes !== -1
       ? cellText(row[col.storeCodes]).split(/[,;\s]+/).map(s => s.trim()).filter(Boolean)
       : [];
-    employees.push({ name, employeeCode, phone, role, storeCodes });
+    employees.push({ name, employeeCode, phone, role, storeCodes, incomplete: !employeeCode || !phone });
   }
   if (!employees.length) throw new Error('No usable rows found in this file.');
 
