@@ -96,10 +96,15 @@ export default async function handler(req, res) {
 
       // Every upload is the full current roster, not a diff — anyone whose
       // employee code isn't in this file loses access, which is the whole
-      // point of re-uploading when someone quits or is let go.
+      // point of re-uploading when someone quits or is let go. Except the
+      // person doing the upload right now: a file that doesn't happen to
+      // include them (e.g. the Master Salon List import, which deliberately
+      // skips the Admin Team the seeded Owner account isn't sourced from)
+      // must never deactivate the very account performing the upload —
+      // that's a self-lockout with no in-app way back in.
       const { data: existing, error: listError } = await supabase.from('employees').select('id, employee_code');
       if (listError) throw new Error(listError.message);
-      const toDeactivate = (existing || []).filter(e => !newCodes.includes(e.employee_code)).map(e => e.id);
+      const toDeactivate = (existing || []).filter(e => e.id !== employee.id && !newCodes.includes(e.employee_code)).map(e => e.id);
       if (toDeactivate.length) {
         const { error: deactivateError } = await supabase.from('employees').update({ active: false }).in('id', toDeactivate);
         if (deactivateError) throw new Error(deactivateError.message);
