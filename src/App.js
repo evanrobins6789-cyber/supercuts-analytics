@@ -2350,21 +2350,11 @@ function NewHireTab({ report, employeeRoster, query, onQuery }) {
   );
 }
 
-// ─── Goals tab (password protected) ────────────────────────────────────────
-const GOALS_PASSWORD = '2124';
-
+// ─── Goals tab ──────────────────────────────────────────────────────────────
 function GoalsTab({ report, goals, onSaveGoal, onImportGoals }) {
-  const [unlocked, setUnlocked] = useState(false);
-  const [pwInput, setPwInput] = useState('');
-  const [pwError, setPwError] = useState(false);
   const [query, setQuery] = useState('');
   const [drafts, setDrafts] = useState({}); // { code: { colorGoal, retailGoal } } — in-progress edits
   const [importing, setImporting] = useState(null); // 'colorGoal' | 'retailGoal' | null
-
-  const tryUnlock = () => {
-    if (pwInput === GOALS_PASSWORD) { setUnlocked(true); setPwError(false); }
-    else { setPwError(true); }
-  };
 
   const handleImportFile = async (field, file) => {
     setImporting(field);
@@ -2374,24 +2364,6 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals }) {
 
   if (!report) {
     return <div className="empty-state"><p className="empty-title">No report yet</p><p>Upload a stylist report first, so there's a store list to set goals for.</p></div>;
-  }
-
-  if (!unlocked) {
-    return (
-      <div className="tab-content">
-        <div className="password-gate">
-          <p className="password-gate-title">🔒 Goals</p>
-          <p className="password-gate-hint">This section is password protected. Enter the password to continue.</p>
-          <input
-            type="password" className="password-input" placeholder="Password" value={pwInput}
-            onChange={e => { setPwInput(e.target.value); setPwError(false); }}
-            onKeyDown={e => { if (e.key === 'Enter') tryUnlock(); }}
-          />
-          <button className="btn-primary" onClick={tryUnlock}>Unlock</button>
-          {pwError && <p className="password-error">Incorrect password.</p>}
-        </div>
-      </div>
-    );
   }
 
   const stores = report.stores
@@ -4322,7 +4294,37 @@ function notifyFailure(labelName, fileName, detail) {
   );
 }
 
+const SETUP_PASSWORD = 'sc4310';
+
 function SetupTab({ configured, section, onSection, goalsProps, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps, employeeAccessProps }) {
+  const [unlocked, setUnlocked] = useState(false);
+  const [pwInput, setPwInput] = useState('');
+  const [pwError, setPwError] = useState(false);
+
+  const tryUnlock = () => {
+    if (pwInput === SETUP_PASSWORD) { setUnlocked(true); setPwError(false); }
+    else { setPwError(true); }
+  };
+
+  if (!unlocked) {
+    return (
+      <div className="tab-content">
+        <div className="password-gate">
+          <p className="password-gate-title">🔒 Setup</p>
+          <p className="password-gate-hint">This section is password protected. Enter the password to continue.</p>
+          <input
+            type="password" className="password-input" placeholder="Password" value={pwInput}
+            onChange={e => { setPwInput(e.target.value); setPwError(false); }}
+            onKeyDown={e => { if (e.key === 'Enter') tryUnlock(); }}
+            autoFocus
+          />
+          <button className="btn-primary" onClick={tryUnlock}>Unlock</button>
+          {pwError && <p className="password-error">Incorrect password.</p>}
+        </div>
+      </div>
+    );
+  }
+
   const steps = [
     { n: 1, title: 'Export this week\u2019s stylist report', body: 'Run the report with every store and every employee under it, covering the week you want to see.' },
     { n: 2, title: 'Upload it', body: 'Go to the Upload section below and drop it into the "Stylist Report" slot. The date range fills in automatically.' },
