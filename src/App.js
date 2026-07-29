@@ -4132,6 +4132,7 @@ const SETUP_SECTIONS = [
   { key: 'upload', label: 'Upload' },
   { key: 'emailReports', label: 'Email Reports' },
   { key: 'employeeAccess', label: 'Employee Access' },
+  { key: 'rewards', label: 'Rewards' },
 ];
 
 // Owner-only roster of who can log in — Employee Name | Employee Code |
@@ -4418,7 +4419,7 @@ function notifyFailure(labelName, fileName, detail) {
 
 const SETUP_PASSWORD = 'sc4310';
 
-function SetupTab({ configured, section, onSection, goalsProps, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps, employeeAccessProps }) {
+function SetupTab({ configured, section, onSection, goalsProps, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps, employeeAccessProps, rewardsProps }) {
   const [unlocked, setUnlocked] = useState(false);
   const [pwInput, setPwInput] = useState('');
   const [pwError, setPwError] = useState(false);
@@ -4479,6 +4480,7 @@ function SetupTab({ configured, section, onSection, goalsProps, managersProps, m
       {section === 'upload' && <UploadTab {...uploadProps} />}
       {section === 'emailReports' && <EmailReportsSetupTab />}
       {section === 'employeeAccess' && <EmployeeAccessSetupTab {...employeeAccessProps} />}
+      {section === 'rewards' && <RewardsSetupTab {...rewardsProps} />}
 
       {section === 'guide' && <>
       <div className="setup-section">
@@ -4519,24 +4521,15 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;`}<
 // ─── Tillie's Nest — points shop ───────────────────────────────────────────
 // Every logged-in role can reach this tab (unlike Setup) since anyone can
 // earn points via the click-to-award buttons scattered through the app and
-// needs somewhere to spend them. Owner gets extra sections further down the
-// same tab: manage the reward catalog, work the redemption fulfillment
-// queue, and see/correct everyone's balances.
-function TilliesNestTab({ currentUser, token, showToast }) {
-  const isOwner = currentUser.role === 'owner';
+// needs somewhere to spend them. Just the shop — catalog management,
+// the fulfillment queue, and everyone's balances live in Setup > Rewards
+// (RewardsSetupTab, owner-only), not here.
+function TilliesNestTab({ token, showToast }) {
   const [loading, setLoading] = useState(true);
   const [balance, setBalance] = useState(0);
   const [myTxns, setMyTxns] = useState([]);
   const [rewards, setRewards] = useState([]);
   const [redeemingId, setRedeemingId] = useState(null);
-
-  const [allBalances, setAllBalances] = useState([]);
-  const [queue, setQueue] = useState([]);
-  const [expandedPerson, setExpandedPerson] = useState(null);
-  const [personTxns, setPersonTxns] = useState([]);
-  const blankDraft = { name: '', description: '', cost: '', stock: '', active: true };
-  const [rewardDraft, setRewardDraft] = useState(blankDraft);
-  const [editingRewardId, setEditingRewardId] = useState(null);
 
   const refreshSelf = useCallback(() => {
     pointsBalance(token).then(res => { if (res.ok) { setBalance(res.balance); setMyTxns(res.transactions); } });
@@ -4546,12 +4539,6 @@ function TilliesNestTab({ currentUser, token, showToast }) {
     pointsListRewards(token).then(res => { if (res.ok) setRewards(res.rewards); });
   }, [token]);
 
-  const refreshAdmin = useCallback(() => {
-    if (!isOwner) return;
-    pointsAllBalances(token).then(res => { if (res.ok) setAllBalances(res.balances); });
-    pointsTransactions(token).then(res => { if (res.ok) setQueue(res.transactions.filter(t => t.type === 'redeem' && !t.fulfilled)); });
-  }, [token, isOwner]);
-
   useEffect(() => {
     setLoading(true);
     Promise.all([pointsBalance(token), pointsListRewards(token)]).then(([balRes, rewardsRes]) => {
@@ -4559,8 +4546,7 @@ function TilliesNestTab({ currentUser, token, showToast }) {
       if (rewardsRes.ok) setRewards(rewardsRes.rewards);
       setLoading(false);
     });
-    refreshAdmin();
-  }, [token, refreshAdmin]);
+  }, [token]);
 
   const handleRedeem = async reward => {
     if (!window.confirm(`Spend ${reward.cost} points on "${reward.name}"?`)) return;
@@ -4571,8 +4557,79 @@ function TilliesNestTab({ currentUser, token, showToast }) {
     showToast(`Redeemed "${reward.name}" — ${res.balance} points left`);
     refreshSelf();
     refreshRewards();
-    refreshAdmin();
   };
+
+  return (
+    <div className="tab-content">
+      <div className="points-header-card">
+        <p className="points-header-label">Your Points</p>
+        <p className="points-header-balance">{loading ? '…' : balance}</p>
+        {myTxns.length > 0 && (
+          <ul className="points-activity-list">
+            {myTxns.map(t => (
+              <li key={t.id}>
+                <span className={t.delta > 0 ? 'points-delta-pos' : 'points-delta-neg'}>{t.delta > 0 ? '+' : ''}{t.delta}</span>
+                {' '}{t.type === 'award' ? `Great job!${t.awardedBy ? ` (from ${t.awardedBy})` : ''}` : `Redeemed: ${t.rewardName || 'a reward'}`}
+                {' · '}{fmtDateLong(t.createdAt)}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <p className="section-label">🛍 Shop</p>
+      {!rewards.length ? (
+        <p className="empty-note">No rewards available yet — check back soon.</p>
+      ) : (
+        <div className="rewards-grid">
+          {rewards.map(r => {
+            const outOfStock = r.stock != null && r.stock <= 0;
+            const canAfford = balance >= r.cost;
+            return (
+              <div key={r.id} className={`reward-card${!r.active ? ' reward-card--inactive' : ''}`}>
+                <p className="reward-card-name">{r.name}</p>
+                {r.description && <p className="reward-card-desc">{r.description}</p>}
+                <p className="reward-card-cost">{r.cost} pts{r.stock != null ? ` · ${r.stock} left` : ''}</p>
+                {!r.active ? (
+                  <p className="reward-card-note">Not currently offered</p>
+                ) : (
+                  <button className="btn-primary" disabled={!canAfford || outOfStock || redeemingId === r.id} onClick={() => handleRedeem(r)}>
+                    {redeemingId === r.id ? <span className="spinner small" /> : outOfStock ? 'Out of stock' : !canAfford ? 'Not enough points' : 'Redeem'}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Owner-only, in Setup: manage the reward catalog, work the redemption
+// fulfillment queue, and see/correct everyone's point balances. Split out
+// of Tillie's Nest (which is just the shop, for every logged-in role) so
+// the admin side lives with the rest of the owner-only Setup sections.
+function RewardsSetupTab({ token, showToast }) {
+  const [rewards, setRewards] = useState([]);
+  const [allBalances, setAllBalances] = useState([]);
+  const [queue, setQueue] = useState([]);
+  const [expandedPerson, setExpandedPerson] = useState(null);
+  const [personTxns, setPersonTxns] = useState([]);
+  const blankDraft = { name: '', description: '', cost: '', stock: '', active: true };
+  const [rewardDraft, setRewardDraft] = useState(blankDraft);
+  const [editingRewardId, setEditingRewardId] = useState(null);
+
+  const refreshRewards = useCallback(() => {
+    pointsListRewards(token).then(res => { if (res.ok) setRewards(res.rewards); });
+  }, [token]);
+
+  const refreshAdmin = useCallback(() => {
+    pointsAllBalances(token).then(res => { if (res.ok) setAllBalances(res.balances); });
+    pointsTransactions(token).then(res => { if (res.ok) setQueue(res.transactions.filter(t => t.type === 'redeem' && !t.fulfilled)); });
+  }, [token]);
+
+  useEffect(() => { refreshRewards(); refreshAdmin(); }, [refreshRewards, refreshAdmin]);
 
   const handleSaveReward = async () => {
     const costNum = Number(rewardDraft.cost);
@@ -4625,150 +4682,102 @@ function TilliesNestTab({ currentUser, token, showToast }) {
     showToast('Transaction removed, balance adjusted.');
     refreshAdmin();
     if (expandedPerson) pointsTransactions(token, expandedPerson).then(r => { if (r.ok) setPersonTxns(r.transactions); });
-    if (t.employeeName === currentUser.name) refreshSelf();
   };
 
   return (
     <div className="tab-content">
-      <div className="points-header-card">
-        <p className="points-header-label">Your Points</p>
-        <p className="points-header-balance">{loading ? '…' : balance}</p>
-        {myTxns.length > 0 && (
-          <ul className="points-activity-list">
-            {myTxns.map(t => (
-              <li key={t.id}>
-                <span className={t.delta > 0 ? 'points-delta-pos' : 'points-delta-neg'}>{t.delta > 0 ? '+' : ''}{t.delta}</span>
-                {' '}{t.type === 'award' ? `Great job!${t.awardedBy ? ` (from ${t.awardedBy})` : ''}` : `Redeemed: ${t.rewardName || 'a reward'}`}
-                {' · '}{fmtDateLong(t.createdAt)}
-              </li>
-            ))}
-          </ul>
-        )}
+      <p className="section-label">Manage Rewards</p>
+      <div className="goal-import-row" style={{ flexWrap: 'wrap' }}>
+        <input className="goal-input" placeholder="Name" value={rewardDraft.name} onChange={e => setRewardDraft(d => ({ ...d, name: e.target.value }))} />
+        <input className="goal-input" placeholder="Description (optional)" value={rewardDraft.description} onChange={e => setRewardDraft(d => ({ ...d, description: e.target.value }))} />
+        <input className="goal-input" placeholder="Cost (pts)" type="number" value={rewardDraft.cost} onChange={e => setRewardDraft(d => ({ ...d, cost: e.target.value }))} style={{ width: 100 }} />
+        <input className="goal-input" placeholder="Stock (blank = unlimited)" type="number" value={rewardDraft.stock} onChange={e => setRewardDraft(d => ({ ...d, stock: e.target.value }))} style={{ width: 170 }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+          <input type="checkbox" checked={rewardDraft.active} onChange={e => setRewardDraft(d => ({ ...d, active: e.target.checked }))} /> Active
+        </label>
+        <button className="btn-primary" onClick={handleSaveReward}>{editingRewardId ? 'Save changes' : 'Add reward'}</button>
+        {editingRewardId && <button className="btn-ghost" onClick={() => { setEditingRewardId(null); setRewardDraft(blankDraft); }}>Cancel</button>}
       </div>
-
-      <p className="section-label">🛍 Shop</p>
-      {!rewards.length ? (
-        <p className="empty-note">{isOwner ? 'Add a reward below to open the shop.' : 'No rewards available yet — check back soon.'}</p>
-      ) : (
-        <div className="rewards-grid">
-          {rewards.map(r => {
-            const outOfStock = r.stock != null && r.stock <= 0;
-            const canAfford = balance >= r.cost;
-            return (
-              <div key={r.id} className={`reward-card${!r.active ? ' reward-card--inactive' : ''}`}>
-                <p className="reward-card-name">{r.name}</p>
-                {r.description && <p className="reward-card-desc">{r.description}</p>}
-                <p className="reward-card-cost">{r.cost} pts{r.stock != null ? ` · ${r.stock} left` : ''}</p>
-                {!r.active ? (
-                  <p className="reward-card-note">Not currently offered</p>
-                ) : (
-                  <button className="btn-primary" disabled={!canAfford || outOfStock || redeemingId === r.id} onClick={() => handleRedeem(r)}>
-                    {redeemingId === r.id ? <span className="spinner small" /> : outOfStock ? 'Out of stock' : !canAfford ? 'Not enough points' : 'Redeem'}
-                  </button>
-                )}
-              </div>
-            );
-          })}
+      {!rewards.length ? <p className="empty-note">No rewards yet — add one above to open the shop.</p> : (
+        <div className="ledger-scroll">
+          <table className="ledger-table">
+            <thead><tr><th className="ledger-name-col">Name</th><th>Cost</th><th>Stock</th><th>Active</th><th></th></tr></thead>
+            <tbody>
+              {rewards.map(r => (
+                <tr key={r.id}>
+                  <td className="ledger-name-col">{r.name}</td>
+                  <td>{r.cost}</td>
+                  <td>{r.stock == null ? 'Unlimited' : r.stock}</td>
+                  <td>{r.active ? 'Yes' : 'No'}</td>
+                  <td>
+                    <button className="btn-ghost" onClick={() => handleEditReward(r)}>Edit</button>
+                    <button className="btn-ghost btn-danger" onClick={() => handleDeleteReward(r)}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
-      {isOwner && (
-        <>
-          <hr className="points-admin-divider" />
-          <p className="section-label">Manage Rewards</p>
-          <div className="goal-import-row" style={{ flexWrap: 'wrap' }}>
-            <input className="goal-input" placeholder="Name" value={rewardDraft.name} onChange={e => setRewardDraft(d => ({ ...d, name: e.target.value }))} />
-            <input className="goal-input" placeholder="Description (optional)" value={rewardDraft.description} onChange={e => setRewardDraft(d => ({ ...d, description: e.target.value }))} />
-            <input className="goal-input" placeholder="Cost (pts)" type="number" value={rewardDraft.cost} onChange={e => setRewardDraft(d => ({ ...d, cost: e.target.value }))} style={{ width: 100 }} />
-            <input className="goal-input" placeholder="Stock (blank = unlimited)" type="number" value={rewardDraft.stock} onChange={e => setRewardDraft(d => ({ ...d, stock: e.target.value }))} style={{ width: 170 }} />
-            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
-              <input type="checkbox" checked={rewardDraft.active} onChange={e => setRewardDraft(d => ({ ...d, active: e.target.checked }))} /> Active
-            </label>
-            <button className="btn-primary" onClick={handleSaveReward}>{editingRewardId ? 'Save changes' : 'Add reward'}</button>
-            {editingRewardId && <button className="btn-ghost" onClick={() => { setEditingRewardId(null); setRewardDraft(blankDraft); }}>Cancel</button>}
-          </div>
-          {rewards.length > 0 && (
-            <div className="ledger-scroll">
-              <table className="ledger-table">
-                <thead><tr><th className="ledger-name-col">Name</th><th>Cost</th><th>Stock</th><th>Active</th><th></th></tr></thead>
-                <tbody>
-                  {rewards.map(r => (
-                    <tr key={r.id}>
-                      <td className="ledger-name-col">{r.name}</td>
-                      <td>{r.cost}</td>
-                      <td>{r.stock == null ? 'Unlimited' : r.stock}</td>
-                      <td>{r.active ? 'Yes' : 'No'}</td>
-                      <td>
-                        <button className="btn-ghost" onClick={() => handleEditReward(r)}>Edit</button>
-                        <button className="btn-ghost btn-danger" onClick={() => handleDeleteReward(r)}>Delete</button>
+      <p className="section-label">Redemption Queue{queue.length > 0 ? ` (${queue.length})` : ''}</p>
+      {!queue.length ? <p className="empty-note">Nothing pending.</p> : (
+        <div className="ledger-scroll">
+          <table className="ledger-table">
+            <thead><tr><th className="ledger-name-col">Employee</th><th>Reward</th><th>Cost</th><th>When</th><th></th></tr></thead>
+            <tbody>
+              {queue.map(t => (
+                <tr key={t.id}>
+                  <td className="ledger-name-col">{t.employeeName}</td>
+                  <td>{t.rewardName}</td>
+                  <td>{Math.abs(t.delta)}</td>
+                  <td>{fmtDateLong(t.createdAt)}</td>
+                  <td><button className="btn-primary" onClick={() => handleMarkFulfilled(t)}>Mark fulfilled ✓</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <p className="section-label">Everyone's Balances</p>
+      {!allBalances.length ? <p className="empty-note">No one has points yet.</p> : (
+        <div className="ledger-scroll">
+          <table className="ledger-table">
+            <thead><tr><th className="ledger-name-col">Employee</th><th>Balance</th><th></th></tr></thead>
+            <tbody>
+              {allBalances.map(b => (
+                <React.Fragment key={b.employeeName}>
+                  <tr className="store-row-clickable" onClick={() => togglePerson(b.employeeName)}>
+                    <td className="ledger-name-col">
+                      <span className={`mini-chevron ${expandedPerson === b.employeeName ? 'mini-chevron--open' : ''}`}>▸</span> {b.employeeName}
+                    </td>
+                    <td>{b.balance}</td>
+                    <td></td>
+                  </tr>
+                  {expandedPerson === b.employeeName && (
+                    <tr className="store-expand-row">
+                      <td colSpan={3}>
+                        {!personTxns.length ? <p className="empty-note">No transactions yet.</p> : (
+                          <ul className="points-activity-list">
+                            {personTxns.map(t => (
+                              <li key={t.id}>
+                                <span className={t.delta > 0 ? 'points-delta-pos' : 'points-delta-neg'}>{t.delta > 0 ? '+' : ''}{t.delta}</span>
+                                {' '}{t.type === 'award' ? `award (${t.awardedBy || 'owner'})` : `redeemed: ${t.rewardName || 'reward'}`}
+                                {' · '}{fmtDateLong(t.createdAt)}
+                                {' '}<button className="btn-ghost btn-danger" onClick={() => handleDeleteTxn(t)}>✕ remove</button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
                       </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          <p className="section-label">Redemption Queue{queue.length > 0 ? ` (${queue.length})` : ''}</p>
-          {!queue.length ? <p className="empty-note">Nothing pending.</p> : (
-            <div className="ledger-scroll">
-              <table className="ledger-table">
-                <thead><tr><th className="ledger-name-col">Employee</th><th>Reward</th><th>Cost</th><th>When</th><th></th></tr></thead>
-                <tbody>
-                  {queue.map(t => (
-                    <tr key={t.id}>
-                      <td className="ledger-name-col">{t.employeeName}</td>
-                      <td>{t.rewardName}</td>
-                      <td>{Math.abs(t.delta)}</td>
-                      <td>{fmtDateLong(t.createdAt)}</td>
-                      <td><button className="btn-primary" onClick={() => handleMarkFulfilled(t)}>Mark fulfilled ✓</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          <p className="section-label">Everyone's Balances</p>
-          {!allBalances.length ? <p className="empty-note">No one has points yet.</p> : (
-            <div className="ledger-scroll">
-              <table className="ledger-table">
-                <thead><tr><th className="ledger-name-col">Employee</th><th>Balance</th><th></th></tr></thead>
-                <tbody>
-                  {allBalances.map(b => (
-                    <React.Fragment key={b.employeeName}>
-                      <tr className="store-row-clickable" onClick={() => togglePerson(b.employeeName)}>
-                        <td className="ledger-name-col">
-                          <span className={`mini-chevron ${expandedPerson === b.employeeName ? 'mini-chevron--open' : ''}`}>▸</span> {b.employeeName}
-                        </td>
-                        <td>{b.balance}</td>
-                        <td></td>
-                      </tr>
-                      {expandedPerson === b.employeeName && (
-                        <tr className="store-expand-row">
-                          <td colSpan={3}>
-                            {!personTxns.length ? <p className="empty-note">No transactions yet.</p> : (
-                              <ul className="points-activity-list">
-                                {personTxns.map(t => (
-                                  <li key={t.id}>
-                                    <span className={t.delta > 0 ? 'points-delta-pos' : 'points-delta-neg'}>{t.delta > 0 ? '+' : ''}{t.delta}</span>
-                                    {' '}{t.type === 'award' ? `award (${t.awardedBy || 'owner'})` : `redeemed: ${t.rewardName || 'reward'}`}
-                                    {' · '}{fmtDateLong(t.createdAt)}
-                                    {' '}<button className="btn-ghost btn-danger" onClick={() => handleDeleteTxn(t)}>✕ remove</button>
-                                  </li>
-                                ))}
-                              </ul>
-                            )}
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
@@ -5663,7 +5672,7 @@ export default function App() {
           <WeeklyTab dailyHistory={history} weeklyHistory={weeklyHistory} />
         )}
         {tab === "Tillie's Nest" && (
-          <TilliesNestTab currentUser={currentUser} token={currentUser.token} showToast={showToast} />
+          <TilliesNestTab token={currentUser.token} showToast={showToast} />
         )}
         {tab === 'Setup' && (
           <SetupTab
@@ -5686,6 +5695,7 @@ export default function App() {
               reviews, uploadingReviews, onReviewsFile: handleReviewsFile, onClearReviews: handleClearReviews,
             }}
             employeeAccessProps={{ token: currentUser.token }}
+            rewardsProps={{ token: currentUser.token, showToast }}
           />
         )}
       </main>

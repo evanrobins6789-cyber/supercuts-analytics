@@ -772,7 +772,6 @@
 .points-activity-list li { font-size: 12.5px; color: var(--ink-soft); padding: 2px 0; border-bottom: 1px dotted var(--line); }
 .points-delta-pos { font-family: 'IBM Plex Mono', monospace; font-weight: 700; color: #2E7D4F; }
 .points-delta-neg { font-family: 'IBM Plex Mono', monospace; font-weight: 700; color: var(--red-deep); }
-.points-admin-divider { border: none; border-top: 1px solid var(--line); margin: 24px 0; }
 
 .rewards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
 .reward-card {
