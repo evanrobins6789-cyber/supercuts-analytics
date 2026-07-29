@@ -10,6 +10,8 @@ import {
 import {
   getSession, setSession, clearSession, checkEligible, signUp, logIn, logOut,
   loadScoped, loadScopedByPrefix, rosterList, rosterUpload, rosterResetPin, rosterUpdate,
+  pointsBalance, pointsAward, pointsAllBalances, pointsTransactions, pointsDeleteTransaction,
+  pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled,
 } from './auth';
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
@@ -1206,7 +1208,7 @@ function matchCoreValueCategories(message) {
 // Cycles through 5-star reviews that name a stylist by name (via the same
 // detectEmployeeMention used on the Reviews tab) — a little "shoutouts" wall
 // for the front desk to leave running. 10s per review, pauses on hover.
-function ReviewSpotlightWidget({ report, reviews, bitmojiImg, bitmojiActive }) {
+function ReviewSpotlightWidget({ report, reviews, bitmojiImg, bitmojiActive, canAward, onAward }) {
   const [paused, setPaused] = useState(false);
   const spotlightReviews = useMemo(() => {
     if (!reviews || !report) return [];
@@ -1239,7 +1241,13 @@ function ReviewSpotlightWidget({ report, reviews, bitmojiImg, bitmojiActive }) {
           )}
           <p className="homepage-spotlight-stars">⭐⭐⭐⭐⭐</p>
           <div className="homepage-spotlight-quote-wrap"><p className="homepage-spotlight-quote">“{current.message}”</p></div>
-          <p className="homepage-spotlight-mention">💇 Shoutout to <strong>{current.mention}</strong>!</p>
+          <p className="homepage-spotlight-mention">
+            💇 Shoutout to <strong>{canAward ? (
+              <button type="button" className="ledger-name-award" onClick={() => onAward(current.mention)} title={`Award 5 points to ${current.mention}`}>
+                {current.mention}<span className="award-plus">+5</span>
+              </button>
+            ) : current.mention}</strong>!
+          </p>
           <p className="homepage-spotlight-meta">
             {current.userName || 'A happy guest'} · {STORE_CODE_TO_NAME[current.code] || current.code}
             {current.postedAt ? ` · ${fmtDateLong(current.postedAt)}` : ''}
@@ -1265,7 +1273,7 @@ const HOMEPAGE_BITMOJI_SLOTS = [
   { key: 'corevalues', corner: 'bottom-right', pool: 'curious' },
 ];
 
-function HomepageTab({ report, news, events, reviews, onOpenNews }) {
+function HomepageTab({ report, news, events, reviews, onOpenNews, canAward, onAward }) {
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
   const storeRows = useMemo(() => report ? report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })) : [], [report]);
@@ -1319,7 +1327,7 @@ function HomepageTab({ report, news, events, reviews, onOpenNews }) {
         </div>
 
         <div className="homepage-sidebar">
-          <ReviewSpotlightWidget report={report} reviews={reviews} bitmojiImg={bitmojiImg} bitmojiActive={bitmojiKey === 'spotlight'} />
+          <ReviewSpotlightWidget report={report} reviews={reviews} bitmojiImg={bitmojiImg} bitmojiActive={bitmojiKey === 'spotlight'} canAward={canAward} onAward={onAward} />
           <CoreValuesWidget bitmojiImg={bitmojiImg} bitmojiActive={bitmojiKey === 'corevalues'} />
         </div>
       </div>
@@ -1465,7 +1473,7 @@ function OverviewTab({ report, selected, onSelect, query, onQuery }) {
 }
 
 // ─── Stores tab ─────────────────────────────────────────────────────────────
-function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers }) {
+function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers, canAward, onAward }) {
   const [sortBy, setSortBy] = useState('tsth');
   const [expanded, setExpanded] = useState({});
   const isHistorical = !!(dateRange.start && dateRange.end);
@@ -1544,6 +1552,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
                     showStoreCol={false}
                     footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS }}
                     footerLabel="Store total / weighted avg"
+                    canAward={canAward} onAward={onAward}
                   />
                 </div>
               )}
@@ -1576,7 +1585,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
 }
 
 // ─── Employees tab ──────────────────────────────────────────────────────────
-function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel = 'Total / Avg (weighted)', focused = null, onFocus = null }) {
+function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel = 'Total / Avg (weighted)', focused = null, onFocus = null, canAward = false, onAward = null }) {
   return (
     <div className="ledger-scroll">
       <table className={`ledger-table ${focused ? 'ledger-table--focus-mode' : ''}`}>
@@ -1594,7 +1603,18 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
               className={onFocus ? `ledger-row-clickable ${focused === e.name ? 'ledger-row-focused' : ''}` : ''}
               onClick={onFocus ? () => onFocus(focused === e.name ? null : e.name) : undefined}
             >
-              <td className="ledger-name-col">{e.name}{e.isManager && <span className="manager-tag"> MANAGER</span>}</td>
+              <td className="ledger-name-col">
+                {canAward ? (
+                  <button
+                    type="button" className="ledger-name-award"
+                    onClick={evt => { evt.stopPropagation(); onAward(e.name); }}
+                    title={`Award 5 points to ${e.name}`}
+                  >
+                    {e.name}<span className="award-plus">+5</span>
+                  </button>
+                ) : e.name}
+                {e.isManager && <span className="manager-tag"> MANAGER</span>}
+              </td>
               {showStoreCol && <td className="ledger-store-col">{e.store}</td>}
               {EMPLOYEE_METRICS.map(m => (
                 <td key={m.key} className={m.key === 'tsth' ? `ledger-rate ${tsthClass(e[m.key])}` : ''}>{m.fmt(e[m.key])}</td>
@@ -1619,7 +1639,7 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
   );
 }
 
-function EmployeesTab({ report, query, onQuery, managers }) {
+function EmployeesTab({ report, query, onQuery, managers, canAward, onAward }) {
   const [sortBy, setSortBy] = useState('sales');
   const [focused, setFocused] = useState(null);
   // Store code isn't on the flat allEmployees rows (only the store NAME is),
@@ -1662,7 +1682,7 @@ function EmployeesTab({ report, query, onQuery, managers }) {
           Focused on <strong>{focused}</strong> — everyone else is dimmed. <button className="btn-ghost" onClick={() => setFocused(null)}>Clear focus</button>
         </p>
       )}
-      <EmployeeTable rows={sorted} showStoreCol focused={focused} onFocus={setFocused} />
+      <EmployeeTable rows={sorted} showStoreCol focused={focused} onFocus={setFocused} canAward={canAward} onAward={onAward} />
     </div>
   );
 }
@@ -1676,7 +1696,7 @@ function getPrevMonthRange() {
 }
 
 // ─── Single-focus store tabs (Retail, Color Sales) — grouped by DL ─────────
-function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers }) {
+function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers, canAward, onAward }) {
   const [sortBy, setSortBy] = useState(metricA.key);
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
   const [expanded, setExpanded] = useState({});
@@ -1835,6 +1855,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                                       showStoreCol={false}
                                       footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS }}
                                       footerLabel="Store total / weighted avg"
+                                      canAward={canAward} onAward={onAward}
                                     />
                                   </td>
                                 </tr>
@@ -1908,6 +1929,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                             showStoreCol={false}
                             footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS }}
                             footerLabel="Store total / weighted avg"
+                            canAward={canAward} onAward={onAward}
                           />
                         </td>
                       </tr>
@@ -1957,7 +1979,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
 }
 
 // ─── DL tab ─────────────────────────────────────────────────────────────────
-function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers, milestoneGoals }) {
+function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers, milestoneGoals, canAward, onAward }) {
   const [expanded, setExpanded] = useState({});
   const [expandedStore, setExpandedStore] = useState({});
   const [showManagers, setShowManagers] = useState(false);
@@ -2195,6 +2217,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                                         showStoreCol={false}
                                         footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS }}
                                         footerLabel="Store total / weighted avg"
+                                        canAward={canAward} onAward={onAward}
                                       />
                                     </td>
                                   </tr>
@@ -2272,7 +2295,7 @@ const NEW_HIRE_SORT_OPTIONS = [
   { key: 'tsth', label: 'TSTH' },
 ];
 
-function NewHireTab({ report, employeeRoster, query, onQuery }) {
+function NewHireTab({ report, employeeRoster, query, onQuery, canAward, onAward }) {
   const [sortBy, setSortBy] = useState('daysAgo');
   const rows = useMemo(() => buildNewHireRows(report, employeeRoster), [report, employeeRoster]);
   const filtered = useMemo(() => {
@@ -2323,7 +2346,13 @@ function NewHireTab({ report, employeeRoster, query, onQuery }) {
           <tbody>
             {sorted.map((r, i) => (
               <tr key={`${r.name}-${i}`}>
-                <td className="ledger-name-col">{r.name}</td>
+                <td className="ledger-name-col">
+                  {canAward ? (
+                    <button type="button" className="ledger-name-award" onClick={() => onAward(r.name)} title={`Award 5 points to ${r.name}`}>
+                      {r.name}<span className="award-plus">+5</span>
+                    </button>
+                  ) : r.name}
+                </td>
                 <td>{fmtDateLong(r.startDate)}</td>
                 <td>{r.daysAgo}</td>
                 <td className="ledger-store-col">{r.store || '—'}</td>
@@ -2822,7 +2851,7 @@ function ReviewNotes({ notes, onAdd }) {
   );
 }
 
-function ReviewCard({ review, employeeMatch, notes, onAddNote, goldComb, onToggleGoldComb }) {
+function ReviewCard({ review, employeeMatch, notes, onAddNote, goldComb, onToggleGoldComb, canAward, onAward }) {
   const tone = review.rating <= 2 ? 'neg' : review.rating >= 4 ? 'pos' : 'neu';
   return (
     <div className={`review-card review-card--${tone}${goldComb ? ' review-card--gold' : ''}`}>
@@ -2841,7 +2870,15 @@ function ReviewCard({ review, employeeMatch, notes, onAddNote, goldComb, onToggl
         )}
       </div>
       {review.message && <p className="review-message">{review.message}</p>}
-      {employeeMatch && <p className="review-employee-tag">👤 Mentions: {employeeMatch}</p>}
+      {employeeMatch && (
+        <p className="review-employee-tag">
+          👤 Mentions: {canAward ? (
+            <button type="button" className="ledger-name-award" onClick={() => onAward(employeeMatch)} title={`Award 5 points to ${employeeMatch}`}>
+              {employeeMatch}<span className="award-plus">+5</span>
+            </button>
+          ) : employeeMatch}
+        </p>
+      )}
       {onAddNote && <ReviewNotes notes={notes || []} onAdd={text => onAddNote(reviewKey(review), text)} />}
     </div>
   );
@@ -2874,7 +2911,7 @@ const REVIEW_SORT_OPTIONS = [
   { key: 'noNotes', label: 'No Notes' },
 ];
 
-function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewNote, goldCombs, onToggleGoldComb }) {
+function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewNote, goldCombs, onToggleGoldComb, canAward, onAward }) {
   const [viewMode, setViewMode] = useState('flat'); // 'flat' | 'dl'
   const [category, setCategory] = useState(null);
   const [sentiment, setSentiment] = useState(null); // null | 'pos' | 'neg'
@@ -3001,6 +3038,7 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
             key={i} review={r} employeeMatch={detectEmployeeMention(r.message, employeesForStore)}
             notes={reviewNotes?.[reviewKey(r)]} onAddNote={onAddReviewNote}
             goldComb={!!goldCombs?.[reviewKey(r)]} onToggleGoldComb={onToggleGoldComb ? () => onToggleGoldComb(reviewKey(r)) : undefined}
+            canAward={canAward} onAward={onAward}
           />
         ))}
         {!reviewList.length && <p className="empty-note" style={{ padding: '12px' }}>No reviews to show here.</p>}
@@ -3680,7 +3718,7 @@ function topEmployeeLine(employees, n = 5) {
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
-function buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events) {
+function buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points) {
   const lines = [];
 
   // Static reference info, independent of any report/date — who manages
@@ -3721,6 +3759,20 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
       const dateLabel = ev.endDate ? `${ev.date} to ${ev.endDate}` : ev.date;
       lines.push(`${dateLabel}: ${ev.title}${ev.description ? ` — ${ev.description}` : ''}`);
     });
+    lines.push('');
+  }
+
+  // Tillie's Nest points — the logged-in user's own balance always; a
+  // company-wide summary only for the owner (everyone's balances are only
+  // ever fetched for that role, matching how Tillie's other data is already
+  // naturally role-scoped).
+  if (points) {
+    lines.push(`TILLIE'S NEST POINTS: you (${points.selfName}) have ${points.selfBalance} point(s).`);
+    if (points.companyWide) {
+      const { totalOutstanding, topBalances, pendingRedemptions } = points.companyWide;
+      lines.push(`Company-wide: ${totalOutstanding} point(s) currently outstanding across everyone, ${pendingRedemptions} redemption(s) awaiting fulfillment.`);
+      if (topBalances.length) lines.push(`Top balances: ${topBalances.map(b => `${b.employeeName} (${b.balance})`).join(', ')}`);
+    }
     lines.push('');
   }
 
@@ -4014,7 +4066,7 @@ function RobinNestIcon({ size = 28 }) {
   );
 }
 
-function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events }) {
+function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -4027,7 +4079,7 @@ function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employee
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events);
+      const context = buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points);
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4464,8 +4516,266 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;`}<
   );
 }
 
+// ─── Tillie's Nest — points shop ───────────────────────────────────────────
+// Every logged-in role can reach this tab (unlike Setup) since anyone can
+// earn points via the click-to-award buttons scattered through the app and
+// needs somewhere to spend them. Owner gets extra sections further down the
+// same tab: manage the reward catalog, work the redemption fulfillment
+// queue, and see/correct everyone's balances.
+function TilliesNestTab({ currentUser, token, showToast }) {
+  const isOwner = currentUser.role === 'owner';
+  const [loading, setLoading] = useState(true);
+  const [balance, setBalance] = useState(0);
+  const [myTxns, setMyTxns] = useState([]);
+  const [rewards, setRewards] = useState([]);
+  const [redeemingId, setRedeemingId] = useState(null);
+
+  const [allBalances, setAllBalances] = useState([]);
+  const [queue, setQueue] = useState([]);
+  const [expandedPerson, setExpandedPerson] = useState(null);
+  const [personTxns, setPersonTxns] = useState([]);
+  const blankDraft = { name: '', description: '', cost: '', stock: '', active: true };
+  const [rewardDraft, setRewardDraft] = useState(blankDraft);
+  const [editingRewardId, setEditingRewardId] = useState(null);
+
+  const refreshSelf = useCallback(() => {
+    pointsBalance(token).then(res => { if (res.ok) { setBalance(res.balance); setMyTxns(res.transactions); } });
+  }, [token]);
+
+  const refreshRewards = useCallback(() => {
+    pointsListRewards(token).then(res => { if (res.ok) setRewards(res.rewards); });
+  }, [token]);
+
+  const refreshAdmin = useCallback(() => {
+    if (!isOwner) return;
+    pointsAllBalances(token).then(res => { if (res.ok) setAllBalances(res.balances); });
+    pointsTransactions(token).then(res => { if (res.ok) setQueue(res.transactions.filter(t => t.type === 'redeem' && !t.fulfilled)); });
+  }, [token, isOwner]);
+
+  useEffect(() => {
+    setLoading(true);
+    Promise.all([pointsBalance(token), pointsListRewards(token)]).then(([balRes, rewardsRes]) => {
+      if (balRes.ok) { setBalance(balRes.balance); setMyTxns(balRes.transactions); }
+      if (rewardsRes.ok) setRewards(rewardsRes.rewards);
+      setLoading(false);
+    });
+    refreshAdmin();
+  }, [token, refreshAdmin]);
+
+  const handleRedeem = async reward => {
+    if (!window.confirm(`Spend ${reward.cost} points on "${reward.name}"?`)) return;
+    setRedeemingId(reward.id);
+    const res = await pointsRedeem(token, reward.id);
+    setRedeemingId(null);
+    if (!res.ok) { showToast(res.error, 'error'); return; }
+    showToast(`Redeemed "${reward.name}" — ${res.balance} points left`);
+    refreshSelf();
+    refreshRewards();
+    refreshAdmin();
+  };
+
+  const handleSaveReward = async () => {
+    const costNum = Number(rewardDraft.cost);
+    if (!rewardDraft.name.trim() || !Number.isFinite(costNum) || costNum <= 0) {
+      showToast('Reward needs a name and a positive point cost.', 'error');
+      return;
+    }
+    const res = await pointsSaveReward(token, {
+      id: editingRewardId || undefined,
+      name: rewardDraft.name.trim(), description: rewardDraft.description.trim(),
+      cost: costNum, stock: rewardDraft.stock === '' ? null : Number(rewardDraft.stock), active: rewardDraft.active,
+    });
+    if (!res.ok) { showToast(res.error, 'error'); return; }
+    showToast(editingRewardId ? 'Reward updated.' : 'Reward added.');
+    setRewardDraft(blankDraft);
+    setEditingRewardId(null);
+    refreshRewards();
+  };
+
+  const handleEditReward = r => {
+    setEditingRewardId(r.id);
+    setRewardDraft({ name: r.name, description: r.description || '', cost: String(r.cost), stock: r.stock == null ? '' : String(r.stock), active: r.active });
+  };
+
+  const handleDeleteReward = async r => {
+    if (!window.confirm(`Delete "${r.name}"? This can't be undone (past redemptions keep their own record).`)) return;
+    const res = await pointsDeleteReward(token, r.id);
+    if (!res.ok) { showToast(res.error, 'error'); return; }
+    showToast('Reward deleted.');
+    if (editingRewardId === r.id) { setEditingRewardId(null); setRewardDraft(blankDraft); }
+    refreshRewards();
+  };
+
+  const handleMarkFulfilled = async t => {
+    const res = await pointsMarkFulfilled(token, t.id, true);
+    if (!res.ok) { showToast(res.error, 'error'); return; }
+    refreshAdmin();
+  };
+
+  const togglePerson = name => {
+    if (expandedPerson === name) { setExpandedPerson(null); return; }
+    setExpandedPerson(name);
+    pointsTransactions(token, name).then(res => { if (res.ok) setPersonTxns(res.transactions); });
+  };
+
+  const handleDeleteTxn = async t => {
+    if (!window.confirm(`Remove this ${t.delta > 0 ? 'award' : 'redemption'} of ${Math.abs(t.delta)} points for ${t.employeeName}?`)) return;
+    const res = await pointsDeleteTransaction(token, t.id);
+    if (!res.ok) { showToast(res.error, 'error'); return; }
+    showToast('Transaction removed, balance adjusted.');
+    refreshAdmin();
+    if (expandedPerson) pointsTransactions(token, expandedPerson).then(r => { if (r.ok) setPersonTxns(r.transactions); });
+    if (t.employeeName === currentUser.name) refreshSelf();
+  };
+
+  return (
+    <div className="tab-content">
+      <div className="points-header-card">
+        <p className="points-header-label">Your Points</p>
+        <p className="points-header-balance">{loading ? '…' : balance}</p>
+        {myTxns.length > 0 && (
+          <ul className="points-activity-list">
+            {myTxns.map(t => (
+              <li key={t.id}>
+                <span className={t.delta > 0 ? 'points-delta-pos' : 'points-delta-neg'}>{t.delta > 0 ? '+' : ''}{t.delta}</span>
+                {' '}{t.type === 'award' ? `Great job!${t.awardedBy ? ` (from ${t.awardedBy})` : ''}` : `Redeemed: ${t.rewardName || 'a reward'}`}
+                {' · '}{fmtDateLong(t.createdAt)}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <p className="section-label">🛍 Shop</p>
+      {!rewards.length ? (
+        <p className="empty-note">{isOwner ? 'Add a reward below to open the shop.' : 'No rewards available yet — check back soon.'}</p>
+      ) : (
+        <div className="rewards-grid">
+          {rewards.map(r => {
+            const outOfStock = r.stock != null && r.stock <= 0;
+            const canAfford = balance >= r.cost;
+            return (
+              <div key={r.id} className={`reward-card${!r.active ? ' reward-card--inactive' : ''}`}>
+                <p className="reward-card-name">{r.name}</p>
+                {r.description && <p className="reward-card-desc">{r.description}</p>}
+                <p className="reward-card-cost">{r.cost} pts{r.stock != null ? ` · ${r.stock} left` : ''}</p>
+                {!r.active ? (
+                  <p className="reward-card-note">Not currently offered</p>
+                ) : (
+                  <button className="btn-primary" disabled={!canAfford || outOfStock || redeemingId === r.id} onClick={() => handleRedeem(r)}>
+                    {redeemingId === r.id ? <span className="spinner small" /> : outOfStock ? 'Out of stock' : !canAfford ? 'Not enough points' : 'Redeem'}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {isOwner && (
+        <>
+          <hr className="points-admin-divider" />
+          <p className="section-label">Manage Rewards</p>
+          <div className="goal-import-row" style={{ flexWrap: 'wrap' }}>
+            <input className="goal-input" placeholder="Name" value={rewardDraft.name} onChange={e => setRewardDraft(d => ({ ...d, name: e.target.value }))} />
+            <input className="goal-input" placeholder="Description (optional)" value={rewardDraft.description} onChange={e => setRewardDraft(d => ({ ...d, description: e.target.value }))} />
+            <input className="goal-input" placeholder="Cost (pts)" type="number" value={rewardDraft.cost} onChange={e => setRewardDraft(d => ({ ...d, cost: e.target.value }))} style={{ width: 100 }} />
+            <input className="goal-input" placeholder="Stock (blank = unlimited)" type="number" value={rewardDraft.stock} onChange={e => setRewardDraft(d => ({ ...d, stock: e.target.value }))} style={{ width: 170 }} />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+              <input type="checkbox" checked={rewardDraft.active} onChange={e => setRewardDraft(d => ({ ...d, active: e.target.checked }))} /> Active
+            </label>
+            <button className="btn-primary" onClick={handleSaveReward}>{editingRewardId ? 'Save changes' : 'Add reward'}</button>
+            {editingRewardId && <button className="btn-ghost" onClick={() => { setEditingRewardId(null); setRewardDraft(blankDraft); }}>Cancel</button>}
+          </div>
+          {rewards.length > 0 && (
+            <div className="ledger-scroll">
+              <table className="ledger-table">
+                <thead><tr><th className="ledger-name-col">Name</th><th>Cost</th><th>Stock</th><th>Active</th><th></th></tr></thead>
+                <tbody>
+                  {rewards.map(r => (
+                    <tr key={r.id}>
+                      <td className="ledger-name-col">{r.name}</td>
+                      <td>{r.cost}</td>
+                      <td>{r.stock == null ? 'Unlimited' : r.stock}</td>
+                      <td>{r.active ? 'Yes' : 'No'}</td>
+                      <td>
+                        <button className="btn-ghost" onClick={() => handleEditReward(r)}>Edit</button>
+                        <button className="btn-ghost btn-danger" onClick={() => handleDeleteReward(r)}>Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <p className="section-label">Redemption Queue{queue.length > 0 ? ` (${queue.length})` : ''}</p>
+          {!queue.length ? <p className="empty-note">Nothing pending.</p> : (
+            <div className="ledger-scroll">
+              <table className="ledger-table">
+                <thead><tr><th className="ledger-name-col">Employee</th><th>Reward</th><th>Cost</th><th>When</th><th></th></tr></thead>
+                <tbody>
+                  {queue.map(t => (
+                    <tr key={t.id}>
+                      <td className="ledger-name-col">{t.employeeName}</td>
+                      <td>{t.rewardName}</td>
+                      <td>{Math.abs(t.delta)}</td>
+                      <td>{fmtDateLong(t.createdAt)}</td>
+                      <td><button className="btn-primary" onClick={() => handleMarkFulfilled(t)}>Mark fulfilled ✓</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <p className="section-label">Everyone's Balances</p>
+          {!allBalances.length ? <p className="empty-note">No one has points yet.</p> : (
+            <div className="ledger-scroll">
+              <table className="ledger-table">
+                <thead><tr><th className="ledger-name-col">Employee</th><th>Balance</th><th></th></tr></thead>
+                <tbody>
+                  {allBalances.map(b => (
+                    <React.Fragment key={b.employeeName}>
+                      <tr className="store-row-clickable" onClick={() => togglePerson(b.employeeName)}>
+                        <td className="ledger-name-col">
+                          <span className={`mini-chevron ${expandedPerson === b.employeeName ? 'mini-chevron--open' : ''}`}>▸</span> {b.employeeName}
+                        </td>
+                        <td>{b.balance}</td>
+                        <td></td>
+                      </tr>
+                      {expandedPerson === b.employeeName && (
+                        <tr className="store-expand-row">
+                          <td colSpan={3}>
+                            {!personTxns.length ? <p className="empty-note">No transactions yet.</p> : (
+                              <ul className="points-activity-list">
+                                {personTxns.map(t => (
+                                  <li key={t.id}>
+                                    <span className={t.delta > 0 ? 'points-delta-pos' : 'points-delta-neg'}>{t.delta > 0 ? '+' : ''}{t.delta}</span>
+                                    {' '}{t.type === 'award' ? `award (${t.awardedBy || 'owner'})` : `redeemed: ${t.rewardName || 'reward'}`}
+                                    {' · '}{fmtDateLong(t.createdAt)}
+                                    {' '}<button className="btn-ghost btn-danger" onClick={() => handleDeleteTxn(t)}>✕ remove</button>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Homepage', 'News', 'Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Weekly', 'Setup'];
+const TABS = ['Homepage', 'News', 'Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Weekly', "Tillie's Nest", 'Setup'];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
@@ -4507,6 +4817,7 @@ export default function App() {
   const [uploadingReviews, setUploadingReviews] = useState(false);
   const [selectedMetric, setSelectedMetric] = useState('tsth');
   const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', Retail: '', 'Color Sales': '', DL: '', '60 Day Employee': '', Reviews: '' });
+  const [pointsSummary, setPointsSummary] = useState(null);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -4661,6 +4972,29 @@ export default function App() {
     }).catch(() => setLoading(false));
   }, [currentUser]);
 
+  // Tillie's Nest points summary for the AI assistant's context — own
+  // balance always; a company-wide rollup only for the owner, matching how
+  // the rest of Tilly's data is already naturally scoped by role.
+  useEffect(() => {
+    if (!currentUser) return;
+    const token = currentUser.token;
+    pointsBalance(token).then(balRes => {
+      if (!balRes.ok) return;
+      const summary = { selfName: currentUser.name, selfBalance: balRes.balance };
+      if (currentUser.role !== 'owner') { setPointsSummary(summary); return; }
+      Promise.all([pointsAllBalances(token), pointsTransactions(token)]).then(([balancesRes, txnsRes]) => {
+        if (balancesRes.ok) {
+          summary.companyWide = {
+            totalOutstanding: balancesRes.balances.reduce((s, b) => s + b.balance, 0),
+            topBalances: balancesRes.balances.slice(0, 3),
+            pendingRedemptions: txnsRes.ok ? txnsRes.transactions.filter(t => t.type === 'redeem' && !t.fulfilled).length : 0,
+          };
+        }
+        setPointsSummary(summary);
+      });
+    });
+  }, [currentUser]);
+
   const showToast = (msg, type = 'success') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3500);
@@ -4674,6 +5008,15 @@ export default function App() {
   const handleLoggedIn = (session, persisted) => {
     setCurrentUser(session);
     if (!persisted) showToast("Signed in, but this browser's storage is full so it couldn't remember your login — you'll need to sign in again next time you visit. Nothing else is affected.", 'error');
+  };
+
+  // Wherever an employee's name shows up (owner-only), one click awards 5
+  // points via api/points.js. No confirm dialog — a mis-click is corrected
+  // from Tillie's Nest's "Everyone's Balances" panel, not an undo timer.
+  const handleAwardPoints = async name => {
+    const res = await pointsAward(currentUser.token, name);
+    if (!res.ok) showToast(res.error, 'error');
+    else showToast(`🎉 +5 points to ${name} — now ${res.balance}`);
   };
 
   // useCallback so useIdleLogout's effect below doesn't tear down and
@@ -5268,7 +5611,7 @@ export default function App() {
       <main className="app-main">
         {needsReport && <div className="empty-state"><p className="empty-title">No report yet</p><p>Go to the Setup tab's Upload section to add this week's report.</p></div>}
         {tab === 'Homepage' && (
-          <HomepageTab report={report} news={news} events={events} reviews={reviews} onOpenNews={handleOpenNews} />
+          <HomepageTab report={report} news={news} events={events} reviews={reviews} onOpenNews={handleOpenNews} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
         )}
         {tab === 'News' && (
           <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} />
@@ -5277,10 +5620,10 @@ export default function App() {
           <OverviewTab report={report} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} />
         )}
         {!needsReport && tab === 'Stores' && report && (
-          <StoresTab report={report} query={queries.Stores} onQuery={v => setQuery('Stores', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} />
+          <StoresTab report={report} query={queries.Stores} onQuery={v => setQuery('Stores', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
         )}
         {!needsReport && tab === 'Employees' && report && (
-          <EmployeesTab report={report} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={managers} />
+          <EmployeesTab report={report} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
         )}
         {!needsReport && tab === 'Retail' && report && (
           <StoreMetricTab
@@ -5288,7 +5631,7 @@ export default function App() {
             title="Retail" metricA={{ key: 'retail', label: 'Retail', fmt: fmt$ }} metricB={{ key: 'rpc', label: 'RPC', fmt: fmtNum }}
             goalType="retailGoal" goals={goals}
             history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
-            managers={managers}
+            managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints}
           />
         )}
         {!needsReport && tab === 'Color Sales' && report && (
@@ -5297,25 +5640,30 @@ export default function App() {
             title="Color Sales" metricA={{ key: 'colorSales', label: 'Color Sales', fmt: fmt$ }} metricB={{ key: 'cpc', label: 'CPC', fmt: fmtNum }}
             goalType="colorGoal" goals={goals}
             history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
+            canAward={currentUser.role === 'owner'} onAward={handleAwardPoints}
             showPrevMonthColor
             managers={managers}
           />
         )}
         {!needsReport && tab === 'DL' && report && (
-          <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} milestoneGoals={milestoneGoals} />
+          <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} milestoneGoals={milestoneGoals} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
         )}
         {tab === '60 Day Employee' && (
-          <NewHireTab report={report} employeeRoster={employeeRoster} query={queries['60 Day Employee']} onQuery={v => setQuery('60 Day Employee', v)} />
+          <NewHireTab report={report} employeeRoster={employeeRoster} query={queries['60 Day Employee']} onQuery={v => setQuery('60 Day Employee', v)} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
         )}
         {tab === 'Reviews' && (
           <ReviewsTab
             report={report} reviews={reviews} query={queries.Reviews} onQuery={v => setQuery('Reviews', v)}
             reviewNotes={reviewNotes} onAddReviewNote={handleAddReviewNote}
             goldCombs={goldCombs} onToggleGoldComb={handleToggleGoldComb}
+            canAward={currentUser.role === 'owner'} onAward={handleAwardPoints}
           />
         )}
         {tab === 'Weekly' && (
           <WeeklyTab dailyHistory={history} weeklyHistory={weeklyHistory} />
+        )}
+        {tab === "Tillie's Nest" && (
+          <TilliesNestTab currentUser={currentUser} token={currentUser.token} showToast={showToast} />
         )}
         {tab === 'Setup' && (
           <SetupTab
@@ -5341,7 +5689,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget report={report} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} milestoneGoals={milestoneGoals} news={news} events={events} />
+      <AIChatWidget report={report} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} milestoneGoals={milestoneGoals} news={news} events={events} points={pointsSummary} />
     </div>
   );
 }

@@ -91,3 +91,45 @@ export function rosterResetPin(token, id) {
 export function rosterUpdate(token, id, patch) {
   return postJson('/api/roster', { action: 'update', token, id, ...patch });
 }
+
+// Employee points / "Tillie's Nest" shop — thin wrappers over api/points.js,
+// same postJson shape as the roster wrappers above.
+export function pointsBalance(token) {
+  return postJson('/api/points', { action: 'balance', token });
+}
+
+export function pointsAward(token, employeeName) {
+  return postJson('/api/points', { action: 'award', token, employeeName });
+}
+
+export function pointsAllBalances(token) {
+  return postJson('/api/points', { action: 'allBalances', token });
+}
+
+export function pointsTransactions(token, employeeName) {
+  return postJson('/api/points', { action: 'transactions', token, employeeName });
+}
+
+export function pointsDeleteTransaction(token, id) {
+  return postJson('/api/points', { action: 'deleteTransaction', token, id });
+}
+
+export function pointsRedeem(token, rewardId) {
+  return postJson('/api/points', { action: 'redeem', token, rewardId });
+}
+
+export function pointsListRewards(token) {
+  return postJson('/api/points', { action: 'listRewards', token });
+}
+
+export function pointsSaveReward(token, patch) {
+  return postJson('/api/points', { action: 'saveReward', token, ...patch });
+}
+
+export function pointsDeleteReward(token, id) {
+  return postJson('/api/points', { action: 'deleteReward', token, id });
+}
+
+export function pointsMarkFulfilled(token, id, fulfilled) {
+  return postJson('/api/points', { action: 'markFulfilled', token, id, fulfilled });
+}

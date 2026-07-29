@@ -1,6 +1,49 @@
 # Handoff — Supercuts Analytics
 
-Last updated: 2026-07-28. The employee login system is **live**; the real roster upload is now built out but **not yet confirmed successful** — see "What shipped this session — Setup-wide password gate, roster upload tooling, and a self-lockout bug fix" below, and the updated "Still open" section. Two SQL statements were handed to the user to run in Supabase (drop a unique constraint, drop a NOT NULL constraint) plus a real bug (the roster upload could deactivate the account performing the upload) was found and fixed — confirm with the user whether the Master Salon List upload actually went through before assuming the roster is populated. The points/rewards design discussion from 2026-07-26 is still just a discussion, unchanged, see further down. A separate project (Waxing the City) got set up as a sibling local folder on 2026-07-27 — see "Housekeeping" below — no Supercuts code was touched for it.
+Last updated: 2026-07-28. New this session: employee points + "Tillie's Nest" shop (see below) — **shipped but needs 3 SQL statements run in Supabase before it works**, same handoff pattern as the login tables. The employee login system is **live** and the real roster upload is **confirmed successful** — user checked Supabase directly and real DL/Manager/Employee rows are populated, both pending SQL statements (drop phone unique constraint, drop phone NOT NULL) were run. See "What shipped this session — Setup-wide password gate, roster upload tooling, and a self-lockout bug fix" below for how that was built, and "Still open" for what's left (a real DL/Manager scoping verification pass, not yet done). The points/rewards design discussion from 2026-07-26 is still just a discussion, unchanged, see further down. A separate project (Waxing the City) got set up as a sibling local folder on 2026-07-27 — see "Housekeeping" below — no Supercuts code was touched for it.
+
+## What shipped this session — Employee points + "Tillie's Nest" shop (2026-07-28)
+The "points + shop" half of the rewards system discussed-but-not-built on 2026-07-26 (see that section further down) — the login/identity piece it needed is already built, so this only needed the points/shop layer. Not built this round: Twilio texting on shoutout (not asked for).
+
+- **Click-to-award, wherever an employee's name shows.** Owner-only: clicking a name pops it into a button with a small "+5" hint; one click awards 5 points instantly (no confirm dialog — see below for how a mis-click gets corrected). Wired into `EmployeeTable` (`src/App.js`) — the single shared component behind Employees, Stores, Retail, Color Sales, and DL tabs — plus the 60 Day Employee tab's own hand-coded table, `ReviewCard`'s detected-mention tag (Reviews tab), and the Homepage `ReviewSpotlightWidget` shoutout name. **Not done**: the Homepage Top 10 leaderboards render via chart.js canvas bars, not DOM text, so they weren't wired in — a real "not done," not an oversight, since making a canvas bar clickable is a different mechanism (`getElementsAtEventForMode`) from the button-wrap used everywhere else.
+- **Points are keyed by the plain employee NAME STRING**, not a roster foreign key — deliberate: most places a name renders come from parsed report data (`e.name`) with no guaranteed link to the `employees` login-roster row, same "exact-normalized-name, not fuzzy" limitation already true of Manager matching elsewhere in this app. Keying on name avoids a new silent-mismatch failure mode.
+- **New `api/points.js`** (mirrors `api/roster.js`'s action-dispatch shape): `balance` (own balance + recent activity, any logged-in user), `award` (owner-only, +5, logs who awarded it), `allBalances`/`transactions` (owner-only admin views), `deleteTransaction` (owner-only — removes a transaction and reverses its delta; **this is the correction path for a mis-click**, not an undo-toast timer), `redeem` (spends the caller's own points — `employeeName` always comes from the session, never client-supplied, so nobody can redeem on someone else's behalf), `listRewards`/`saveReward`/`deleteReward` (catalog CRUD, owner-only to write), `markFulfilled` (owner-only, toggles a redemption's fulfilled flag). Balance updates are a plain read-then-upsert in the handler, not a stored procedure — this app has no real write concurrency to speak of (a single owner clicking a button), matching its existing pragmatic style (e.g. `serverAuth.js`'s O(n) PIN scan).
+- **New Supabase tables — SQL below, not yet run by the user as of this handoff** (same "hand SQL to the user" pattern as `employees`/`sessions`): `employee_points` (running balance per name), `points_transactions` (append-only ledger — award/redeem/adjustment, `reward_name` snapshotted so history stays readable even if a reward is later renamed/deleted), `points_rewards` (owner-managed catalog — `stock` nullable means unlimited). RLS enabled with **no policies** on all three — locks the public anon key out entirely, only reachable via the service-role key, same posture as `employees`/`sessions`.
+  ```sql
+  create table employee_points (
+    employee_name text primary key,
+    balance integer not null default 0,
+    updated_at timestamptz not null default now()
+  );
+  alter table employee_points enable row level security;
+
+  create table points_transactions (
+    id bigserial primary key,
+    employee_name text not null,
+    delta integer not null,
+    type text not null check (type in ('award','redeem','adjustment')),
+    reward_id bigint,
+    reward_name text,
+    awarded_by text,
+    fulfilled boolean not null default false,
+    created_at timestamptz not null default now()
+  );
+  alter table points_transactions enable row level security;
+
+  create table points_rewards (
+    id bigserial primary key,
+    name text not null,
+    description text,
+    cost integer not null,
+    stock integer,
+    active boolean not null default true,
+    created_at timestamptz not null default now()
+  );
+  alter table points_rewards enable row level security;
+  ```
+- **New "Tillie's Nest" tab**, visible to every logged-in role (unlike Setup, which stays owner-only) — everyone needs to reach it to spend their own points. `TilliesNestTab` in `App.js`: "Your Points" balance + recent activity, a shop grid of active rewards with a `window.confirm`-gated Redeem button (disabled with a reason if the balance's too low or it's out of stock). Owner sees three more sections further down the same tab: **Manage Rewards** (inline add/edit/delete catalog list), **Redemption Queue** (pending redemptions with a "Mark fulfilled ✓" button — the to-do list of what to physically hand out), and **Everyone's Balances** (every `employee_points` row, doubling as an implicit leaderboard, each expandable to that person's transactions with a "✕ remove" to correct a mis-click).
+- **Tilly wiring**: `buildAIContext` (`src/App.js`) gained a `points` param — the logged-in user's own balance always, plus (owner only) total points currently outstanding company-wide, top 3 balances, and count of pending unfulfilled redemptions. Fetched in a new dedicated `useEffect` in `App.js` (separate from the big central `Promise.all` load block, since points goes through `api/points.js` not `loadScoped`/`db.js`).
+- **Not confirmed as of this handoff**: whether the user has run the 3 `CREATE TABLE` statements above. **Next session: ask, and if not, walk through running them** (same as the roster-upload SQL earlier this session) — nothing in this feature will actually persist until they exist. Once confirmed, worth a quick smoke test: award a real person 5 points from the Employees tab, confirm it shows in Tillie's Nest, add a cheap test reward and redeem it, confirm the redemption shows in the owner's queue.
 
 ## Housekeeping — Waxing the City project set up as a sibling folder (2026-07-27)
 Not Supercuts work. The user has a second, unrelated project (a "Waxing the City" site, same stack: React/Vercel/Supabase) that a different Claude session had been building via the Claude app. This session helped move that work over to Claude Code:
@@ -51,9 +94,9 @@ Right after going live, the user reported stylist_report/history/goals data disa
 - **Fix** (commit after the login-system launch commit): `loadScoped(key, token)`/`loadScopedByPrefix(prefix, token)` now take the token explicitly from `currentUser.token` (App.js) instead of re-reading `localStorage` — matches how `rosterList`/`rosterUpload`/`rosterResetPin` already worked. `setSession()` now returns whether the write actually succeeded; `LoginScreen`'s `onLoggedIn` passes that through to a new `handleLoggedIn` in `App.js`, which shows a toast ("you'll need to sign in again next time") when it didn't, instead of failing silently.
 - **Not fixed / still true**: if a browser's localStorage is genuinely full, that browser still won't remember a login across a refresh (harmless now — just means signing in again next visit — but no longer causes data loss). The underlying cause (base64 images/PDFs from Homepage News accumulating in localStorage, per the existing "Known limitations" note further down) is unchanged; worth real attention if this keeps coming up for the user's own browser or anyone else's.
 
-## Still open — confirm the real employee roster actually uploaded
-As of this handoff, it's unconfirmed whether the `employees` table has anything in it beyond the seeded Owner row. The sequence of blockers hit this session, in order: uploaded the wrong file → Master Salon List upload attempt failed on a phone-uniqueness constraint → user confirmed the tradeoffs and got SQL to drop it → next attempt failed on a phone NOT-NULL constraint → user got SQL to drop that too → in between, an unrelated bug caused the upload to deactivate the user's own Owner account (fixed, see above). **Next session: ask whether both SQL statements were run and the upload succeeded** — if not, that's the immediate next step, not a re-derivation of the whole roster-building problem (that part is done, see above).
-- Once a roster is confirmed live, the real verification pass from the original plan is still worth doing — sign up as a real DL and a real Manager (private/incognito window) and confirm each only sees their own store(s) across Stores/Employees/DL/Reviews/Weekly and via Tilly; confirm removing someone from a re-uploaded roster cuts off their access without needing them to sign out first.
+## Still open — real per-role verification pass (DL/Manager scoping)
+The roster upload is confirmed successful: user checked Supabase directly (`SELECT role, count(*) ... FROM employees GROUP BY role`) and real DL/Manager/Employee rows are populated, not just the seeded Owner row. Both pending SQL statements (drop phone unique constraint, drop phone NOT NULL) were run. The sequence of blockers from the upload work itself (wrong file → phone-uniqueness failure → phone NOT-NULL failure → the self-lockout bug, all described above) is now fully resolved — no need to revisit that.
+- **Not yet done**: the real verification pass from the original plan — sign up as a real DL and a real Manager (private/incognito window, using their real employee code + phone from the roster) and confirm each only sees their own store(s) across Stores/Employees/DL/Reviews/Weekly and via Tilly; confirm removing someone from a re-uploaded roster cuts off their access without needing them to sign out first.
 - **Known residual data-quality issue, not fixed automatically**: the Master Salon List workbook itself lists two different phone numbers, in different tabs, for at least 4 people (Katie Ingram, Megan Friday, Shawna Bate, Tricia Hislop/Hilsop) — the user picked which number was correct for each during CSV-building, but the automated Master List parser has no way to know that preference and will just use whatever the file says. If either of these people can't sign up, check their phone in Setup > Employee Access and fix it inline (the new per-row edit feature) rather than assuming the roster data is broken.
 - `EmployeeAccessRoster.csv` (`C:\Users\evanr\Downloads`, not in this repo) is fully filled in and still works as a fallback upload if the Master List path has problems, but the user has moved to uploading the Master List workbook directly.
 
@@ -142,7 +185,7 @@ User asked feasibility questions only this session (explicitly said not to imple
 - Deploys automatically via Vercel on push to `main`. Two Vercel projects exist for this repo (`supercuts-analytics` and `supercuts-analytics-llxh`) — the status-check poll above reports both; both need to be green.
 
 ## What's next
-Immediate: confirm whether the Master Salon List upload actually succeeded (see "Still open" above) — if not, walk through the two pending SQL statements and retry; if so, do the DL/Manager scoping verification pass.
+Immediate: confirm whether the 3 points/rewards `CREATE TABLE` statements (see "What shipped this session — Employee points" above) have been run in Supabase — if not, walk through them, then do the smoke test described there. Also still open: the DL/Manager scoping verification pass (see "Still open" above) — sign up as a real DL and a real Manager and confirm each only sees their own store(s).
 
 After that: the employee points/rewards system described below (points + shop + Twilio texting) — note the **login/identity piece it would have needed is now built** (real employee records with phone numbers, real sessions, real roles) — re-read that section with this in mind next time it comes up, its "doesn't exist today" framing is now stale. User was engaged on it and willing to pay for Twilio, but hadn't given a go-ahead to implement, and the shared-device-vs-personal-phone question is still open. Confirm that before starting.
 
