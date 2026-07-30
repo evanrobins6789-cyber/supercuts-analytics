@@ -3078,6 +3078,26 @@ const REVIEW_SORT_OPTIONS = [
   { key: 'noNotes', label: 'No Notes' },
 ];
 
+// Restricts which reviews count toward every total/card/list in the tab to
+// those posted within [start, end] (inclusive) — separate from the sales-side
+// DateRangeBar/dateRange used elsewhere, since reviews are their own dataset
+// with their own postedAt dates, not tied to the Sales-Accrual/Attendance
+// history those tabs filter against.
+function ReviewDateRangeBar({ start, end, onChange }) {
+  return (
+    <div className="date-range-bar">
+      <span className="date-range-label">Date range:</span>
+      <input type="date" className="date-range-input" value={start || ''} onChange={e => onChange(e.target.value || null, end)} />
+      <span className="date-range-to">to</span>
+      <input type="date" className="date-range-input" value={end || ''} onChange={e => onChange(start, e.target.value || null)} />
+      {(start || end) && (
+        <button className="btn-ghost date-range-clear" onClick={() => onChange(null, null)}>Clear — show all reviews</button>
+      )}
+      {(start && end) && <span className="date-range-note">Showing only reviews posted between these dates.</span>}
+    </div>
+  );
+}
+
 function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery, reviewNotes, onAddReviewNote, goldCombs, onToggleGoldComb, canAward, onAward }) {
   const [viewMode, setViewMode] = useState('flat'); // 'flat' | 'dl'
   const [category, setCategory] = useState(null);
@@ -3087,6 +3107,7 @@ function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery,
   const [sortBy, setSortBy] = useState('reviews');
   const [mentionedOnly, setMentionedOnly] = useState(false);
   const [pinListView, setPinListView] = useState(false);
+  const [reviewDateRange, setReviewDateRange] = useState({ start: null, end: null });
 
   const selectCategory = key => { setCategory(prev => prev === key ? null : key); setSentiment(null); };
   const selectSentiment = key => { setSentiment(prev => prev === key ? null : key); setCategory(null); };
@@ -3104,7 +3125,17 @@ function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery,
     return <div className="empty-state"><p className="empty-title">No reviews uploaded yet</p><p>Go to the Setup tab's Upload section and add the reviews export.</p></div>;
   }
 
-  const allReviews = reviews.reviews;
+  const allReviews = useMemo(() => {
+    const list = reviews.reviews;
+    if (!reviewDateRange.start && !reviewDateRange.end) return list;
+    return list.filter(r => {
+      const d = (r.postedAt || '').slice(0, 10);
+      if (!d) return false;
+      if (reviewDateRange.start && d < reviewDateRange.start) return false;
+      if (reviewDateRange.end && d > reviewDateRange.end) return false;
+      return true;
+    });
+  }, [reviews, reviewDateRange]);
   const totalCount = allReviews.length;
   const overallAvg = totalCount ? allReviews.reduce((s, r) => s + r.rating, 0) / totalCount : 0;
   const positive = allReviews.filter(isPositiveReview);
@@ -3337,6 +3368,10 @@ function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery,
 
   return (
     <div className="tab-content">
+      <ReviewDateRangeBar
+        start={reviewDateRange.start} end={reviewDateRange.end}
+        onChange={(s, e) => setReviewDateRange({ start: s, end: e })}
+      />
       <div className="summary-grid">
         <div className="summary-tile"><p className="summary-tile-label">Total Reviews</p><p className="summary-tile-value">{totalCount}</p></div>
         <div className="summary-tile"><p className="summary-tile-label">Overall Average</p><p className={`summary-tile-value ${ratingClass(overallAvg)}`}>{overallAvg.toFixed(2)}★</p></div>
