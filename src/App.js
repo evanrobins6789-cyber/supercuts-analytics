@@ -5132,6 +5132,19 @@ export default function App() {
         const withEmployees = dailyRecords.filter(r => r.employees && Object.keys(r.employees).length).length;
         console.log(`[history load] ${dailyChunks.length} chunk(s) from Supabase: ${dailyChunks.map(c => c.key).join(', ') || 'none'}`);
         console.log(`[history load] ${dailyRecords.length} store-day record(s) merged, ${withEmployees} with employee-level detail, ${(dailyChunksRes.localOnlyKeys || []).length} local-only chunk(s) pending Supabase sync${(dailyChunksRes.localOnlyKeys || []).length ? `: ${dailyChunksRes.localOnlyKeys.join(', ')}` : ''}.`);
+        // Temporary diagnostic for a "SS shows 0 everywhere" report — pinpoints
+        // whether signatureS is (a) missing from records entirely (old data,
+        // or the field never made it through parsing/save), (b) present but
+        // genuinely zero (no Signature Service items in the uploaded range),
+        // or (c) present and nonzero somewhere, meaning the issue is really
+        // about which date range a tab is querying, not the underlying data.
+        const hasField = dailyRecords.filter(r => r.signatureS != null);
+        const nonZero = dailyRecords.filter(r => (r.signatureS || 0) > 0);
+        console.log(`[history load] signatureS diagnostic: ${hasField.length}/${dailyRecords.length} records have the signatureS field at all, ${nonZero.length} are > 0.`);
+        if (nonZero.length) {
+          const sample = [...nonZero].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+          console.log('[history load] most recent nonzero signatureS records:', sample.map(r => ({ code: r.code, date: r.date, signatureS: r.signatureS, signatureSCount: r.signatureSCount })));
+        }
       }
 
       const mergedWeekly = {};
