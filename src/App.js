@@ -1636,6 +1636,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
 function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers, canAward, onAward }) {
   const [sortBy, setSortBy] = useState('tsth');
   const [expanded, setExpanded] = useState({});
+  const [focused, setFocused] = useState(null);
   // No live weekly Stylist Report and no explicit date range picked — fall
   // back to week-to-date from Sales-Accrual/Attendance history instead of
   // requiring a live report to exist at all.
@@ -1684,6 +1685,12 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
         </select>
       </div>
 
+      {focused && (
+        <p className="section-hint">
+          Focused on <strong>{focused}</strong> — everyone else is blurred. <button className="btn-ghost" onClick={() => setFocused(null)}>Clear focus</button>
+        </p>
+      )}
+
       <div className="dl-list">
         {sorted.map(s => {
           const hasEmployeeData = s.employees.length > 0;
@@ -1718,6 +1725,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
                     showStoreCol={false}
                     footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                     footerLabel="Store total / weighted avg"
+                    focused={focused} onFocus={setFocused}
                     canAward={canAward} onAward={onAward}
                   />
                 </div>
@@ -1865,7 +1873,7 @@ function EmployeesTab({ report, history, weeklyHistory, dateRange, onDateRangeCh
 
       {focused && (
         <p className="section-hint">
-          Focused on <strong>{focused}</strong> — everyone else is dimmed. <button className="btn-ghost" onClick={() => setFocused(null)}>Clear focus</button>
+          Focused on <strong>{focused}</strong> — everyone else is blurred. <button className="btn-ghost" onClick={() => setFocused(null)}>Clear focus</button>
         </p>
       )}
       <EmployeeTable rows={sorted} showStoreCol focused={focused} onFocus={setFocused} canAward={canAward} onAward={onAward} />
@@ -1887,6 +1895,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
   const [expanded, setExpanded] = useState({});
   const [expandedLeader, setExpandedLeader] = useState({});
+  const [focused, setFocused] = useState(null);
   const usingDefaultRange = isReportStale(report) && !(dateRange?.start && dateRange?.end);
   const effectiveRange = usingDefaultRange ? getCurrentWeekRange() : dateRange;
   const isHistorical = !!(effectiveRange?.start && effectiveRange?.end);
@@ -1978,6 +1987,12 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
         </select>
       </div>
 
+      {focused && (
+        <p className="section-hint">
+          Focused on <strong>{focused}</strong> — everyone else is blurred. <button className="btn-ghost" onClick={() => setFocused(null)}>Clear focus</button>
+        </p>
+      )}
+
       {viewMode === 'dl' && (
         <div className="dl-list">
           {filteredGroups.map(g => {
@@ -2044,6 +2059,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                                       showStoreCol={false}
                                       footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                                       footerLabel="Store total / weighted avg"
+                                      focused={focused} onFocus={setFocused}
                                       canAward={canAward} onAward={onAward}
                                     />
                                   </td>
@@ -2118,6 +2134,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                             showStoreCol={false}
                             footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                             footerLabel="Store total / weighted avg"
+                            focused={focused} onFocus={setFocused}
                             canAward={canAward} onAward={onAward}
                           />
                         </td>
@@ -2172,6 +2189,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
   const [expanded, setExpanded] = useState({});
   const [expandedStore, setExpandedStore] = useState({});
   const [showManagers, setShowManagers] = useState(false);
+  const [focused, setFocused] = useState(null);
   const usingDefaultRange = isReportStale(report) && !(dateRange.start && dateRange.end);
   const effectiveRange = usingDefaultRange ? getCurrentWeekRange() : dateRange;
   const isHistorical = !!(effectiveRange.start && effectiveRange.end);
@@ -2233,6 +2251,12 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
         <button className={`view-toggle-btn ${!showManagers ? 'active' : ''}`} onClick={() => setShowManagers(false)}>Full Stats</button>
         <button className={`view-toggle-btn ${showManagers ? 'active' : ''}`} onClick={() => setShowManagers(true)}>👔 Managers</button>
       </div>
+
+      {!showManagers && focused && (
+        <p className="section-hint">
+          Focused on <strong>{focused}</strong> — everyone else is blurred. <button className="btn-ghost" onClick={() => setFocused(null)}>Clear focus</button>
+        </p>
+      )}
 
       {!filteredGroups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No matches for "{query}".</p>}
 
@@ -2431,6 +2455,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                                         showStoreCol={false}
                                         footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                                         footerLabel="Store total / weighted avg"
+                                        focused={focused} onFocus={setFocused}
                                         canAward={canAward} onAward={onAward}
                                       />
                                     </td>
