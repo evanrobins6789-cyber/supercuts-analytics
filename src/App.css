@@ -177,8 +177,10 @@
    showing one person's metrics on a shared screen without exposing
    everyone else's) ──────────────────────────────────────────────────── */
 .ledger-row-clickable { cursor: pointer; }
-.ledger-table--focus-mode tbody tr { filter: blur(5px); opacity: 0.65; transition: filter 0.15s ease, opacity 0.15s ease; }
-.ledger-table--focus-mode tbody tr:hover { filter: blur(2px); opacity: 0.85; }
+.ledger-table--focus-mode tbody tr,
+.ledger-table--focus-mode tfoot tr { filter: blur(5px); opacity: 0.65; transition: filter 0.15s ease, opacity 0.15s ease; }
+.ledger-table--focus-mode tbody tr:hover,
+.ledger-table--focus-mode tfoot tr:hover { filter: blur(2px); opacity: 0.85; }
 .ledger-table--focus-mode tbody tr.ledger-row-focused { filter: none; opacity: 1; background: rgba(194,59,59,0.09); font-weight: 600; }
 .ledger-table--focus-mode tbody tr.ledger-row-focused:hover { filter: none; opacity: 1; }
 .store-row-clickable:hover { background: rgba(194,59,59,0.08); }
