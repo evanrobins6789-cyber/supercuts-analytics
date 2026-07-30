@@ -600,6 +600,16 @@ function getCurrentWeekRange() {
   return { start: isoWeekStart(todayISO), end: todayISO };
 }
 
+// The most recently *completed* Monday–Sunday week (unlike getCurrentWeekRange,
+// which is week-to-date and looks sparse early in the week) — addDaysISO/
+// isoWeekStart are defined further down but hoisted, same as above.
+function getLastFullWeekRange() {
+  const thisWeekStart = isoWeekStart(new Date().toISOString().slice(0, 10));
+  const end = addDaysISO(thisWeekStart, -1);
+  const start = addDaysISO(end, -6);
+  return { start, end };
+}
+
 // A live `report` object never expires on its own — it's whatever Stylist
 // Report was last uploaded, however long ago, and Supabase just keeps
 // serving it. A weekly report is only ever meant to represent about a
@@ -1365,12 +1375,17 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
     const dates = Object.keys(history || {}).map(k => history[k].date).filter(Boolean);
     return dates.length ? dates.sort().slice(-1)[0] : null;
   }, [reportUsable, history]);
+  // Only matters once there's no live report to show instead — picks which
+  // historical window the Top 10 charts pull from. 'week' is the most
+  // recently *completed* Mon–Sun week (not week-to-date, which looks sparse
+  // early in the week); 'mtd' is month-to-date.
+  const [top10Period, setTop10Period] = useState('week'); // 'week' | 'mtd'
+  const top10Range = top10Period === 'mtd' ? getCurrentMonthRange() : getLastFullWeekRange();
   const storeRows = useMemo(() => {
     if (reportUsable) return report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals }));
-    const { start, end } = getCurrentWeekRange();
-    const totals = getRangeTotals(history, weeklyHistory, start, end);
+    const totals = getRangeTotals(history, weeklyHistory, top10Range.start, top10Range.end);
     return Object.entries(totals).map(([code, t]) => ({ name: STORE_CODE_TO_NAME[code] || `Store ${code}`, code, ...historyTotalsToReportShape(t) }));
-  }, [reportUsable, report, history, weeklyHistory]);
+  }, [reportUsable, report, history, weeklyHistory, top10Range.start, top10Range.end]);
   // Same shape as storeRows but flattened to one row per employee — mirrors
   // EmployeesTab's own report.allEmployees / historical-flatten split. Whichever
   // report/history this user's role already got scoped to server-side (see
@@ -1379,14 +1394,13 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
   // as every other tab — nothing extra to gate on the frontend.
   const employeeRows = useMemo(() => {
     if (reportUsable) return report.allEmployees;
-    const { start, end } = getCurrentWeekRange();
-    const totals = getRangeTotals(history, weeklyHistory, start, end);
+    const totals = getRangeTotals(history, weeklyHistory, top10Range.start, top10Range.end);
     return Object.entries(totals).flatMap(([code, t]) => {
       const shape = historyTotalsToReportShape(t);
       const storeName = STORE_CODE_TO_NAME[code] || `Store ${code}`;
       return shape.employees.map(e => ({ ...e, store: storeName }));
     });
-  }, [reportUsable, report, history, weeklyHistory]);
+  }, [reportUsable, report, history, weeklyHistory, top10Range.start, top10Range.end]);
   const [top10Mode, setTop10Mode] = useState('store'); // 'store' | 'employee'
   const top10Rows = top10Mode === 'employee' ? employeeRows : storeRows;
   const top10Metrics = top10Mode === 'employee' ? EMPLOYEE_METRICS : STORE_METRICS;
@@ -1431,6 +1445,15 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
                 <button className={`view-toggle-btn ${top10Mode === 'employee' ? 'active' : ''}`} onClick={() => setTop10Mode('employee')}>Employees</button>
               </div>
             </div>
+            {!reportUsable && (
+              <div className="ledger-head-row">
+                <div className="view-toggle">
+                  <button className={`view-toggle-btn ${top10Period === 'week' ? 'active' : ''}`} onClick={() => setTop10Period('week')}>Past 7 Days</button>
+                  <button className={`view-toggle-btn ${top10Period === 'mtd' ? 'active' : ''}`} onClick={() => setTop10Period('mtd')}>Month to Date</button>
+                </div>
+                <p className="section-hint" style={{ margin: 0 }}>{fmtDateLong(top10Range.start)}–{fmtDateLong(top10Range.end)}</p>
+              </div>
+            )}
             {historicalAsOf && <p className="section-hint">Data current through {fmtDateLong(historicalAsOf)} (Sales-Accrual/Attendance — no current Stylist Report on file).</p>}
             {top10Rows.length ? (
               <div className="homepage-top10-grid">
