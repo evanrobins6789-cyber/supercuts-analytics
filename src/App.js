@@ -1371,6 +1371,25 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
     const totals = getRangeTotals(history, weeklyHistory, start, end);
     return Object.entries(totals).map(([code, t]) => ({ name: STORE_CODE_TO_NAME[code] || `Store ${code}`, code, ...historyTotalsToReportShape(t) }));
   }, [reportUsable, report, history, weeklyHistory]);
+  // Same shape as storeRows but flattened to one row per employee — mirrors
+  // EmployeesTab's own report.allEmployees / historical-flatten split. Whichever
+  // report/history this user's role already got scoped to server-side (see
+  // api/scoped-data.js) is what these are built from, so a District Leader's
+  // Top 10 here is automatically limited to their own stores/employees, same
+  // as every other tab — nothing extra to gate on the frontend.
+  const employeeRows = useMemo(() => {
+    if (reportUsable) return report.allEmployees;
+    const { start, end } = getCurrentWeekRange();
+    const totals = getRangeTotals(history, weeklyHistory, start, end);
+    return Object.entries(totals).flatMap(([code, t]) => {
+      const shape = historyTotalsToReportShape(t);
+      const storeName = STORE_CODE_TO_NAME[code] || `Store ${code}`;
+      return shape.employees.map(e => ({ ...e, store: storeName }));
+    });
+  }, [reportUsable, report, history, weeklyHistory]);
+  const [top10Mode, setTop10Mode] = useState('store'); // 'store' | 'employee'
+  const top10Rows = top10Mode === 'employee' ? employeeRows : storeRows;
+  const top10Metrics = top10Mode === 'employee' ? EMPLOYEE_METRICS : STORE_METRICS;
   const [lightboxImage, setLightboxImage] = useState(null);
   const { activeKey: bitmojiKey, img: bitmojiImg } = useBitmojiCycler(HOMEPAGE_BITMOJI_SLOTS);
 
@@ -1405,14 +1424,20 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
           </div>
 
           <div className="homepage-section">
-            <p className="section-label">🏆 Top 10 Leaderboards</p>
+            <div className="ledger-head-row">
+              <p className="section-label">🏆 Top 10 Leaderboards</p>
+              <div className="view-toggle">
+                <button className={`view-toggle-btn ${top10Mode === 'store' ? 'active' : ''}`} onClick={() => setTop10Mode('store')}>Stores</button>
+                <button className={`view-toggle-btn ${top10Mode === 'employee' ? 'active' : ''}`} onClick={() => setTop10Mode('employee')}>Employees</button>
+              </div>
+            </div>
             {historicalAsOf && <p className="section-hint">Data current through {fmtDateLong(historicalAsOf)} (Sales-Accrual/Attendance — no current Stylist Report on file).</p>}
-            {storeRows.length ? (
+            {top10Rows.length ? (
               <div className="homepage-top10-grid">
                 {TOP_TEN_METRICS.map(m => (
                   <TopTenChart
-                    key={m.key} title={m.label} emoji={m.emoji} rows={storeRows} metricKey={m.key}
-                    formatter={STORE_METRICS.find(sm => sm.key === m.key).fmt} color={m.color}
+                    key={`${top10Mode}-${m.key}`} title={m.label} emoji={m.emoji} rows={top10Rows} metricKey={m.key}
+                    formatter={top10Metrics.find(sm => sm.key === m.key).fmt} color={m.color}
                   />
                 ))}
               </div>
