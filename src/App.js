@@ -253,6 +253,10 @@ const fmtCompact$ = n => {
   if (abs >= 1000) return `$${(n / 1000).toFixed(1)}K`;
   return `$${Math.round(n)}`;
 };
+// Signature S shows as "count|$amount" everywhere it's a per-row/per-total
+// figure (e.g. "8|$412") so a count and a dollar total are both visible at a
+// glance without a second column.
+const fmtSS = (count, amount) => `${fmtInt(count)}|${fmt$(amount)}`;
 
 // ─── Date display — named months everywhere, instead of raw ISO numbers ────
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -291,7 +295,7 @@ const STORE_METRICS = [
   { key: 'rpc', label: 'RPC', fmt: fmtNum },
   { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
   { key: 'cph', label: 'CPH', fmt: n => fmtNum(n, 2) },
-  { key: 'signatureS', label: 'Signature S', fmt: fmt$ },
+  { key: 'signatureS', label: 'SS', fmt: (v, row) => fmtSS(row?.signatureSCount, v) },
 ];
 
 // Employee-level metrics shown on Employees and within each Stores card.
@@ -305,7 +309,7 @@ const EMPLOYEE_METRICS = [
   { key: 'tsth', label: 'TSTH', fmt: fmtRate },
   { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
   { key: 'cph', label: 'CPH', fmt: n => fmtNum(n, 2) },
-  { key: 'signatureS', label: 'Signature S', fmt: fmt$ },
+  { key: 'signatureS', label: 'SS', fmt: (v, row) => fmtSS(row?.signatureSCount, v) },
 ];
 
 function sortByMetric(rows, key, order = 'desc') {
@@ -377,6 +381,7 @@ function rollupRows(rows) {
   const totalRetail = sum('retail');
   const totalHaircuts = sum('haircuts');
   const totalSignatureS = sum('signatureS');
+  const totalSignatureSCount = sum('signatureSCount');
   return {
     sales: totalSales,
     totalHours,
@@ -384,6 +389,7 @@ function rollupRows(rows) {
     retail: totalRetail,
     haircuts: totalHaircuts,
     signatureS: totalSignatureS,
+    signatureSCount: totalSignatureSCount,
     tsth: totalHours > 0 ? totalSales / totalHours : null,
     cpc: totalHaircuts > 0 ? totalColor / totalHaircuts : null,
     rpc: totalHaircuts > 0 ? totalRetail / totalHaircuts : null,
@@ -424,7 +430,7 @@ function groupStoresByLeader(storeRows) {
 // an uploaded weekly report if its whole range sits inside the query range;
 // any day already covered by SOME weekly report is skipped from the daily
 // (Sales-Accrual/Attendance) bucket either way, so nothing is ever counted twice.
-const EMPTY_RANGE_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0 };
+const EMPTY_RANGE_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0 };
 function addRangeInto(target, src) {
   target.service += src.service || 0;
   target.retail += src.retail || 0;
@@ -433,6 +439,7 @@ function addRangeInto(target, src) {
   target.giftCards += src.giftCards || 0;
   target.haircuts += src.haircuts || 0;
   target.signatureS += src.signatureS || 0;
+  target.signatureSCount += src.signatureSCount || 0;
 }
 function expandDateRangeDays(start, end) {
   const dates = [];
@@ -453,7 +460,7 @@ function expandDateRangeDays(start, end) {
 // recomputing tsth/cpc/rpc from those sums — never averaging ratios.
 function mergeEmployeesInto(targetMap, employees) {
   employees.forEach(e => {
-    if (!targetMap[e.name]) targetMap[e.name] = { name: e.name, sales: 0, colorSales: 0, retail: 0, haircuts: 0, totalHours: 0, signatureS: 0 };
+    if (!targetMap[e.name]) targetMap[e.name] = { name: e.name, sales: 0, colorSales: 0, retail: 0, haircuts: 0, totalHours: 0, signatureS: 0, signatureSCount: 0 };
     const t = targetMap[e.name];
     t.sales += e.sales || 0;
     t.colorSales += e.colorSales || 0;
@@ -461,6 +468,7 @@ function mergeEmployeesInto(targetMap, employees) {
     t.haircuts += e.haircuts || 0;
     t.totalHours += e.totalHours || 0;
     t.signatureS += e.signatureS || 0;
+    t.signatureSCount += e.signatureSCount || 0;
   });
 }
 function finalizeEmployee(e) {
@@ -496,7 +504,28 @@ function getRangeTotals(history, weeklyHistory, startISO, endISO) {
   });
   Object.values(history || {}).forEach(r => {
     if (r.date < startISO || r.date > endISO) return;
-    if (covered.has(r.date)) return;
+    if (covered.has(r.date)) {
+      // A weekly Stylist Report upload covers this day for every OTHER
+      // field (it's the more authoritative source, hence `covered`
+      // skipping the daily record entirely below) — but the Stylist Report
+      // has no item-level detail, so it never carries Signature S at all.
+      // Pulling just signatureS/signatureSCount from the daily
+      // Sales-Accrual record here can't double-count anything, since the
+      // weekly source's contribution to those two fields is always zero.
+      if (r.signatureS || r.signatureSCount) {
+        addTo(r.code, { signatureS: r.signatureS, signatureSCount: r.signatureSCount });
+      }
+      if (r.employees && Object.keys(r.employees).length) {
+        const sigOnly = Object.entries(r.employees)
+          .filter(([, v]) => v.signatureS || v.signatureSCount)
+          .map(([name, v]) => ({ name, signatureS: v.signatureS, signatureSCount: v.signatureSCount }));
+        if (sigOnly.length) {
+          if (!employeesByStore[r.code]) employeesByStore[r.code] = {};
+          mergeEmployeesInto(employeesByStore[r.code], sigOnly);
+        }
+      }
+      return;
+    }
     addTo(r.code, r);
     if (r.employees && Object.keys(r.employees).length) {
       if (!employeesByStore[r.code]) employeesByStore[r.code] = {};
@@ -528,6 +557,7 @@ function historyTotalsToReportShape(t) {
     retail: t?.retail || 0,
     giftCards: t?.giftCards || 0,
     signatureS: t?.signatureS || 0,
+    signatureSCount: t?.signatureSCount || 0,
     haircuts: haircuts || null,
     tsth: hours > 0 ? service / hours : null,
     cpc: haircuts > 0 ? (t.color || 0) / haircuts : null,
@@ -609,7 +639,7 @@ function Leaderboard({ rows, metric, formatter, title, count = 8, order = 'desc'
           <div className="leaderboard-body">
             <div className="leaderboard-row-head">
               <span className="leaderboard-name">{s.name}</span>
-              <span className="leaderboard-value">{formatter(s[metric])}</span>
+              <span className="leaderboard-value">{formatter(s[metric], s)}</span>
             </div>
             <div className="leaderboard-bar-track">
               <div className="leaderboard-bar-fill" style={{ width: `${Math.max(4, (Math.abs(s[metric] || 0) / maxVal) * 100)}%` }} />
@@ -1459,7 +1489,7 @@ function OverviewTab({ report, selected, onSelect, query, onQuery }) {
             onClick={() => onSelect(m.key)}
           >
             <p className="summary-tile-label">{m.label}</p>
-            <p className="summary-tile-value">{m.fmt(t[m.key])}</p>
+            <p className="summary-tile-value">{m.fmt(t[m.key], t)}</p>
           </button>
         ))}
       </div>
@@ -1542,7 +1572,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
                   {s.rpc != null && <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(s.rpc)}</span></div>}
                   <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(s.haircuts)}</span></div>
                   {s.cph != null && <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(s.cph)}</span></div>}
-                  <div className="dl-stat"><span className="dl-stat-label">Signature S</span><span className="dl-stat-value">{fmt$(s.signatureS)}</span></div>
+                  <div className="dl-stat"><span className="dl-stat-label">SS</span><span className="dl-stat-value">{fmtSS(s.signatureSCount, s.signatureS)}</span></div>
                 </div>
               </button>
               {isOpen && hasEmployeeData && (
@@ -1550,7 +1580,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
                   <EmployeeTable
                     rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                     showStoreCol={false}
-                    footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS }}
+                    footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                     footerLabel="Store total / weighted avg"
                     canAward={canAward} onAward={onAward}
                   />
@@ -1617,7 +1647,7 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
               </td>
               {showStoreCol && <td className="ledger-store-col">{e.store}</td>}
               {EMPLOYEE_METRICS.map(m => (
-                <td key={m.key} className={m.key === 'tsth' ? `ledger-rate ${tsthClass(e[m.key])}` : ''}>{m.fmt(e[m.key])}</td>
+                <td key={m.key} className={m.key === 'tsth' ? `ledger-rate ${tsthClass(e[m.key])}` : ''}>{m.fmt(e[m.key], e)}</td>
               ))}
             </tr>
           ))}
@@ -1628,7 +1658,7 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
               <td className="ledger-name-col">{footerLabel}</td>
               {showStoreCol && <td className="ledger-store-col"></td>}
               {EMPLOYEE_METRICS.map(m => (
-                <td key={m.key} className={m.key === 'tsth' ? `ledger-rate ${tsthClass(footer[m.key])}` : ''}>{m.fmt(footer[m.key])}</td>
+                <td key={m.key} className={m.key === 'tsth' ? `ledger-rate ${tsthClass(footer[m.key])}` : ''}>{m.fmt(footer[m.key], footer)}</td>
               ))}
             </tr>
           </tfoot>
@@ -1853,7 +1883,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                                     <EmployeeTable
                                       rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                                       showStoreCol={false}
-                                      footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS }}
+                                      footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                                       footerLabel="Store total / weighted avg"
                                       canAward={canAward} onAward={onAward}
                                     />
@@ -1927,7 +1957,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                           <EmployeeTable
                             rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                             showStoreCol={false}
-                            footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS }}
+                            footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                             footerLabel="Store total / weighted avg"
                             canAward={canAward} onAward={onAward}
                           />
@@ -2070,7 +2100,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                       <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(t.rpc)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(t.haircuts)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(t.cph)}</span></div>
-                      <div className="dl-stat"><span className="dl-stat-label">Signature S</span><span className="dl-stat-value">{fmt$(t.signatureS)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">SS</span><span className="dl-stat-value">{fmtSS(t.signatureSCount, t.signatureS)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{groupGoal > 0 ? fmt$(groupGoal) : '—'}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupActual} goal={groupGoal} milestone={groupMilestone} /></div>
                     </div>
@@ -2081,34 +2111,56 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                         <tr>
                           <th className="ledger-name-col">Store</th><th className="ledger-name-col">Manager</th>
                           <th>Sales</th><th>TSTH</th><th>Total Hours</th><th>Color Sales</th>
-                          <th>CPC</th><th>Retail</th><th>RPC</th><th>Cuts</th><th>CPH</th><th>Signature S</th>
+                          <th>CPC</th><th>Retail</th><th>RPC</th><th>Cuts</th><th>CPH</th><th>SS</th>
                           <th>Goal</th><th>Milestone</th><th>Progress</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {sortByMetric(g.stores, 'sales', 'desc').map(s => (
-                          <tr key={s.code}>
-                            <td className="ledger-name-col">{s.name}</td>
-                            <td className="ledger-name-col">{managers?.[s.code] || <span className="empty-note">not set</span>}</td>
-                            <td>{fmt$(s.sales)}</td>
-                            <td className={`ledger-rate ${tsthClass(s.tsth)}`}>{fmtRate(s.tsth)}</td>
-                            <td>{fmtNum(s.totalHours, 0)}</td>
-                            <td>{fmt$(s.colorSales)}</td>
-                            <td>{fmtNum(s.cpc)}</td>
-                            <td>{fmt$(s.retail)}</td>
-                            <td>{fmtNum(s.rpc)}</td>
-                            <td>{fmtInt(s.haircuts)}</td>
-                            <td>{fmtNum(s.cph)}</td>
-                            <td>{fmt$(s.signatureS)}</td>
-                            <td>{milestoneGoals?.[s.code]?.goal != null ? fmt$(milestoneGoals[s.code].goal) : '—'}</td>
-                            <td>{milestoneGoals?.[s.code]?.milestone != null ? fmt$(milestoneGoals[s.code].milestone) : '—'}</td>
-                            <td><MilestoneThermometer actual={monthToDateSalesByCode[s.code]} goal={milestoneGoals?.[s.code]?.goal} milestone={milestoneGoals?.[s.code]?.milestone} /></td>
-                          </tr>
-                        ))}
+                        {/* Each row shows the MANAGER's own individual numbers (looked
+                            up by name within that store's employees), not the whole
+                            store's rollup — this view exists specifically to see how
+                            the manager personally is doing, distinct from Full Stats'
+                            store-level rows. */}
+                        {sortByMetric(g.stores, 'sales', 'desc').map(s => {
+                          const managerName = managers?.[s.code];
+                          const managerEmp = managerName
+                            ? s.employees.find(e => normalizeName(e.name) === normalizeName(managerName))
+                            : null;
+                          if (!managerEmp) {
+                            return (
+                              <tr key={s.code}>
+                                <td className="ledger-name-col">{s.name}</td>
+                                <td className="ledger-name-col">{managerName || <span className="empty-note">not set</span>}</td>
+                                <td colSpan={13} className="empty-note">
+                                  {managerName ? `No individual data found for ${managerName} in this period` : '—'}
+                                </td>
+                              </tr>
+                            );
+                          }
+                          return (
+                            <tr key={s.code}>
+                              <td className="ledger-name-col">{s.name}</td>
+                              <td className="ledger-name-col">{managerName}</td>
+                              <td>{fmt$(managerEmp.sales)}</td>
+                              <td className={`ledger-rate ${tsthClass(managerEmp.tsth)}`}>{fmtRate(managerEmp.tsth)}</td>
+                              <td>{fmtNum(managerEmp.totalHours, 0)}</td>
+                              <td>{fmt$(managerEmp.colorSales)}</td>
+                              <td>{fmtNum(managerEmp.cpc)}</td>
+                              <td>{fmt$(managerEmp.retail)}</td>
+                              <td>{fmtNum(managerEmp.rpc)}</td>
+                              <td>{fmtInt(managerEmp.haircuts)}</td>
+                              <td>{fmtNum(managerEmp.cph)}</td>
+                              <td>{fmtSS(managerEmp.signatureSCount, managerEmp.signatureS)}</td>
+                              <td>{milestoneGoals?.[s.code]?.goal != null ? fmt$(milestoneGoals[s.code].goal) : '—'}</td>
+                              <td>{milestoneGoals?.[s.code]?.milestone != null ? fmt$(milestoneGoals[s.code].milestone) : '—'}</td>
+                              <td><MilestoneThermometer actual={monthToDateSalesByCode[s.code]} goal={milestoneGoals?.[s.code]?.goal} milestone={milestoneGoals?.[s.code]?.milestone} /></td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                       <tfoot>
                         <tr className="ledger-avg-row">
-                          <td className="ledger-name-col">{g.leaderName} total / weighted avg</td>
+                          <td className="ledger-name-col">{g.leaderName} total / weighted avg (whole stores)</td>
                           <td className="ledger-name-col"></td>
                           <td>{fmt$(t.sales)}</td>
                           <td className={`ledger-rate ${tsthClass(t.tsth)}`}>{fmtRate(t.tsth)}</td>
@@ -2119,7 +2171,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                           <td>{fmtNum(t.rpc)}</td>
                           <td>{fmtInt(t.haircuts)}</td>
                           <td>{fmtNum(t.cph)}</td>
-                          <td>{fmt$(t.signatureS)}</td>
+                          <td>{fmtSS(t.signatureSCount, t.signatureS)}</td>
                           <td>{groupGoal > 0 ? fmt$(groupGoal) : '—'}</td>
                           <td>{groupMilestone > 0 ? fmt$(groupMilestone) : '—'}</td>
                           <td><MilestoneThermometer actual={groupActual} goal={groupGoal} milestone={groupMilestone} /></td>
@@ -2162,7 +2214,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                       <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(t.rpc)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(t.haircuts)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(t.cph)}</span></div>
-                      <div className="dl-stat"><span className="dl-stat-label">Signature S</span><span className="dl-stat-value">{fmt$(t.signatureS)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">SS</span><span className="dl-stat-value">{fmtSS(t.signatureSCount, t.signatureS)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{groupGoal > 0 ? fmt$(groupGoal) : '—'}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupActual} goal={groupGoal} milestone={groupMilestone} /></div>
                     </div>
@@ -2179,7 +2231,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                             <th>RPC</th>
                             <th>Cuts</th>
                             <th>CPH</th>
-                            <th>Signature S</th>
+                            <th>SS</th>
                             <th>Goal</th>
                             <th>Milestone</th>
                             <th>Progress</th>
@@ -2204,7 +2256,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                                   <td>{fmtNum(s.rpc)}</td>
                                   <td>{fmtInt(s.haircuts)}</td>
                                   <td>{fmtNum(s.cph)}</td>
-                                  <td>{fmt$(s.signatureS)}</td>
+                                  <td>{fmtSS(s.signatureSCount, s.signatureS)}</td>
                                   <td>{milestoneGoals?.[s.code]?.goal != null ? fmt$(milestoneGoals[s.code].goal) : '—'}</td>
                                   <td>{milestoneGoals?.[s.code]?.milestone != null ? fmt$(milestoneGoals[s.code].milestone) : '—'}</td>
                                   <td><MilestoneThermometer actual={monthToDateSalesByCode[s.code]} goal={milestoneGoals?.[s.code]?.goal} milestone={milestoneGoals?.[s.code]?.milestone} /></td>
@@ -2215,7 +2267,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                                       <EmployeeTable
                                         rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                                         showStoreCol={false}
-                                        footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS }}
+                                        footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                                         footerLabel="Store total / weighted avg"
                                         canAward={canAward} onAward={onAward}
                                       />
@@ -2919,6 +2971,7 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
   const [expandedLeader, setExpandedLeader] = useState({});
   const [sortBy, setSortBy] = useState('reviews');
   const [mentionedOnly, setMentionedOnly] = useState(false);
+  const [pinListView, setPinListView] = useState(false);
 
   const selectCategory = key => { setCategory(prev => prev === key ? null : key); setSentiment(null); };
   const selectSentiment = key => { setSentiment(prev => prev === key ? null : key); setCategory(null); };
@@ -2984,6 +3037,36 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
     const q = query.trim().toLowerCase();
     return storeRows.filter(s => s.name.toLowerCase().includes(q));
   }, [storeRows, query]);
+
+  // Quick-reference "who got mentioned, how many times" — built for handing
+  // out pins (one per mention), so it needs a per-employee count, not just
+  // the per-store mention count `storeRows.matchCount` already tracks.
+  // Respects the same category/sentiment narrowing as everywhere else in
+  // this tab, so "pin list for negative reviews mentioning Cleanliness" works
+  // too, not just the unfiltered "mentioned only" case.
+  const pinListRows = useMemo(() => {
+    const sentimentMatcher = category
+      ? r => isNegativeReview(r) && reviewMatchesCategory(r.message, category)
+      : sentiment === 'pos' ? isPositiveReview
+      : sentiment === 'neg' ? isNegativeReview
+      : null;
+    return filteredStores
+      .map(s => {
+        const employeesForStore = report?.stores.find(st => st.code === s.code)?.employees || null;
+        const counts = new Map();
+        s.reviews
+          .filter(r => !sentimentMatcher || sentimentMatcher(r))
+          .forEach(r => {
+            const name = detectEmployeeMention(r.message, employeesForStore);
+            if (name) counts.set(name, (counts.get(name) || 0) + 1);
+          });
+        const employees = Array.from(counts.entries())
+          .map(([name, count]) => ({ name, count }))
+          .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+        return { code: s.code, name: s.name, employees };
+      })
+      .filter(s => s.employees.length > 0);
+  }, [filteredStores, category, sentiment, report]);
 
   const sortStores = arr => {
     const a2 = [...arr];
@@ -3156,33 +3239,80 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
       {category && <button className="btn-ghost btn-clear-filter" onClick={() => setCategory(null)}>Clear "{activeCat.label}" filter</button>}
 
       <div className="view-toggle" style={{ alignSelf: 'flex-start' }}>
-        <button className={`view-toggle-btn ${mentionedOnly ? 'active' : ''}`} onClick={() => setMentionedOnly(v => !v)}>
+        <button
+          className={`view-toggle-btn ${mentionedOnly ? 'active' : ''}`}
+          onClick={() => setMentionedOnly(v => {
+            const next = !v;
+            if (!next) setPinListView(false); // no reason to stay in Pin List once mentions aren't filtered
+            return next;
+          })}
+        >
           {mentionedOnly ? '✓ ' : ''}Only reviews mentioning an employee by name
         </button>
+        {mentionedOnly && (
+          <button className={`view-toggle-btn ${pinListView ? 'active' : ''}`} onClick={() => setPinListView(v => !v)}>
+            📌 {pinListView ? '✓ ' : ''}Pin List (store → employee → mention count)
+          </button>
+        )}
       </div>
 
-      <SearchBox value={query} onChange={onQuery} placeholder="Search stores…" />
-      <div className="ledger-head-row">
-        <div className="view-toggle">
-          <button className={`view-toggle-btn ${viewMode === 'flat' ? 'active' : ''}`} onClick={() => setViewMode('flat')}>List Stores</button>
-          <button className={`view-toggle-btn ${viewMode === 'dl' ? 'active' : ''}`} onClick={() => setViewMode('dl')}>By DL</button>
-        </div>
-        <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
-          {REVIEW_SORT_OPTIONS.map(o => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
-        </select>
-      </div>
+      {mentionedOnly && pinListView ? (
+        <>
+          <p className="section-hint">Quick reference for handing out pins — one mention, one pin. Respects the sentiment/category filters above.</p>
+          <SearchBox value={query} onChange={onQuery} placeholder="Search stores…" />
+          <div className="dl-list">
+            {pinListRows.map(s => (
+              <div key={s.code} className="dl-card">
+                <div className="dl-card-head" style={{ cursor: 'default' }}>
+                  <div className="dl-card-name-wrap">
+                    <span className="dl-card-name">{s.name}</span>
+                    <span className="dl-card-count">{s.employees.reduce((sum, e) => sum + e.count, 0)} mention{s.employees.reduce((sum, e) => sum + e.count, 0) !== 1 ? 's' : ''}</span>
+                  </div>
+                </div>
+                <div className="ledger-scroll dl-store-table">
+                  <table className="ledger-table">
+                    <thead><tr><th className="ledger-name-col">Employee</th><th>Mentions</th></tr></thead>
+                    <tbody>
+                      {s.employees.map(e => (
+                        <tr key={e.name}>
+                          <td className="ledger-name-col">{e.name}</td>
+                          <td>{e.count}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+            {!pinListRows.length && <p className="empty-note" style={{ textAlign: 'center' }}>No mentions match.</p>}
+          </div>
+        </>
+      ) : (
+        <>
+          <SearchBox value={query} onChange={onQuery} placeholder="Search stores…" />
+          <div className="ledger-head-row">
+            <div className="view-toggle">
+              <button className={`view-toggle-btn ${viewMode === 'flat' ? 'active' : ''}`} onClick={() => setViewMode('flat')}>List Stores</button>
+              <button className={`view-toggle-btn ${viewMode === 'dl' ? 'active' : ''}`} onClick={() => setViewMode('dl')}>By DL</button>
+            </div>
+            <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+              {REVIEW_SORT_OPTIONS.map(o => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
+            </select>
+          </div>
 
-      {viewMode === 'flat' && (
-        <div className="dl-list">
-          {sortStores(filteredStores).map(renderStoreCard)}
-          {!filteredStores.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match.</p>}
-        </div>
-      )}
-      {viewMode === 'dl' && (
-        <div className="dl-list">
-          {sortedGroups.map(renderLeaderCard)}
-          {!sortedGroups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match.</p>}
-        </div>
+          {viewMode === 'flat' && (
+            <div className="dl-list">
+              {sortStores(filteredStores).map(renderStoreCard)}
+              {!filteredStores.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match.</p>}
+            </div>
+          )}
+          {viewMode === 'dl' && (
+            <div className="dl-list">
+              {sortedGroups.map(renderLeaderCard)}
+              {!sortedGroups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match.</p>}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -3440,7 +3570,7 @@ function expandDateRange(start, end) {
   }
   return dates;
 }
-const EMPTY_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0 };
+const EMPTY_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0 };
 function addInto(target, src) {
   target.service += src.service || 0;
   target.retail += src.retail || 0;
@@ -3449,6 +3579,7 @@ function addInto(target, src) {
   target.giftCards += src.giftCards || 0;
   target.haircuts += src.haircuts || 0;
   target.signatureS += src.signatureS || 0;
+  target.signatureSCount += src.signatureSCount || 0;
 }
 
 // Builds one row per week — a real uploaded Stylist Report week where one
@@ -3456,13 +3587,35 @@ function addInto(target, src) {
 // Days already covered by an uploaded weekly report are excluded from the
 // daily bucketing, so the two sources can never double-count each other.
 function buildWeeklySnapshots(dailyHistory, weeklyHistory) {
-  const weeklyEntries = Object.values(weeklyHistory || {});
+  // Shallow-cloned so the Signature S patch-in below never mutates the
+  // original weeklyHistory state object (these `stores` sub-objects are
+  // otherwise the exact same references React holds in state).
+  const weeklyEntries = Object.values(weeklyHistory || {}).map(w => ({
+    startDate: w.startDate, endDate: w.endDate, source: 'weekly',
+    stores: Object.fromEntries(Object.entries(w.stores).map(([code, v]) => [code, { ...v }])),
+  }));
   const covered = new Set();
   weeklyEntries.forEach(w => expandDateRange(w.startDate, w.endDate).forEach(d => covered.add(d)));
 
   const dailyWeeks = new Map();
   Object.values(dailyHistory || {}).forEach(r => {
-    if (covered.has(r.date)) return;
+    if (covered.has(r.date)) {
+      // Same reasoning as getRangeTotals: a weekly Stylist Report upload
+      // never carries Signature S (no item-level detail), so a day that's
+      // "covered" by one still needs its daily Sales-Accrual signatureS
+      // patched into that week's entry — otherwise Signature S silently
+      // reads $0 for any week that also had a routine Stylist Report
+      // uploaded, which is the normal case every week.
+      if (r.signatureS) {
+        const w = weeklyEntries.find(w => r.date >= w.startDate && r.date <= w.endDate);
+        if (w) {
+          if (!w.stores[r.code]) w.stores[r.code] = { ...EMPTY_TOTALS };
+          w.stores[r.code].signatureS = (w.stores[r.code].signatureS || 0) + r.signatureS;
+          w.stores[r.code].signatureSCount = (w.stores[r.code].signatureSCount || 0) + (r.signatureSCount || 0);
+        }
+      }
+      return;
+    }
     const ws = isoWeekStart(r.date);
     if (!dailyWeeks.has(ws)) dailyWeeks.set(ws, { startDate: ws, endDate: addDaysISO(ws, 6), source: 'daily', stores: {} });
     const wk = dailyWeeks.get(ws);
@@ -3470,10 +3623,7 @@ function buildWeeklySnapshots(dailyHistory, weeklyHistory) {
     addInto(wk.stores[r.code], r);
   });
 
-  const weeks = [
-    ...weeklyEntries.map(w => ({ startDate: w.startDate, endDate: w.endDate, source: 'weekly', stores: w.stores })),
-    ...Array.from(dailyWeeks.values()),
-  ];
+  const weeks = [...weeklyEntries, ...Array.from(dailyWeeks.values())];
   weeks.sort((a, b) => a.startDate.localeCompare(b.startDate));
   return weeks;
 }
@@ -3526,7 +3676,7 @@ const WEEKLY_METRICS = [
   { key: 'color', label: 'Color Sales', fmt: fmt$ },
   { key: 'retail', label: 'Retail', fmt: fmt$ },
   { key: 'giftCards', label: 'Gift Cards', fmt: fmt$ },
-  { key: 'signatureS', label: 'Signature S', fmt: fmt$ },
+  { key: 'signatureS', label: 'SS', fmt: fmt$ },
   { key: 'hours', label: 'Total Hours', fmt: n => fmtNum(n, 0) },
   { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
   { key: 'cph', label: 'CPH (Cuts per Hour)', fmt: n => fmtNum(n, 2) },
@@ -3868,7 +4018,7 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
     months.forEach(m => {
       const t = periodTotals(m.stores);
       const cph = t.hours > 0 ? t.haircuts / t.hours : null;
-      lines.push(`${m.month}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Gift Cards $${Math.round(t.giftCards)}, Signature S $${Math.round(t.signatureS || 0)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}, CPH ${cph != null ? cph.toFixed(2) : 'n/a'}`);
+      lines.push(`${m.month}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Gift Cards $${Math.round(t.giftCards)}, SS ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}, CPH ${cph != null ? cph.toFixed(2) : 'n/a'}`);
     });
 
     // Per-store breakdown + top employees, computed once per month from the
@@ -3886,7 +4036,7 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
       lines.push(`${m.month}:`);
       Object.entries(monthlyTotals.get(m.month)).forEach(([code, t]) => {
         const name = STORE_CODE_TO_NAME[code] || `Store ${code}`;
-        lines.push(`  ${name}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Signature S $${Math.round(t.signatureS || 0)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}`);
+        lines.push(`  ${name}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, SS ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}`);
       });
     });
 

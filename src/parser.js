@@ -720,7 +720,7 @@ export async function parseSalesAccrualFile(file) {
   // no double-dipping between Sales and Retail.
   const hasExactTypes = col.itemType !== -1;
 
-  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color, giftCards, haircuts, signatureS, employees: {name: {sales, colorSales, haircuts, signatureS}} }
+  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color, giftCards, haircuts, signatureS, signatureSCount, employees: {name: {sales, colorSales, haircuts, signatureS, signatureSCount}} }
   for (let r = hdrRowIdx + 1; r < grid.length; r++) {
     const row = grid[r];
     if (!rowHasData(row)) continue;
@@ -738,11 +738,11 @@ export async function parseSalesAccrualFile(file) {
     const soldBy = col.soldBy !== -1 ? cellText(row[col.soldBy]) : '';
 
     const key = `${code}|${isoDate}`;
-    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, employees: {} });
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, employees: {} });
     const rec = daily.get(key);
     const employeeFor = name => {
       if (!name) return null;
-      if (!rec.employees[name]) rec.employees[name] = { sales: 0, colorSales: 0, haircuts: 0, retail: 0, signatureS: 0 };
+      if (!rec.employees[name]) rec.employees[name] = { sales: 0, colorSales: 0, haircuts: 0, retail: 0, signatureS: 0, signatureSCount: 0 };
       return rec.employees[name];
     };
     const addService = (name, isColor, isHaircut, isSignature) => {
@@ -751,7 +751,7 @@ export async function parseSalesAccrualFile(file) {
       emp.sales += amount;
       if (isColor) emp.colorSales += amount;
       if (isHaircut) emp.haircuts += qty;
-      if (isSignature) emp.signatureS += amount;
+      if (isSignature) { emp.signatureS += amount; emp.signatureSCount += qty; }
     };
     const addRetail = name => {
       const emp = employeeFor(name);
@@ -773,7 +773,7 @@ export async function parseSalesAccrualFile(file) {
         const isSignature = isSignatureServiceItem(itemName);
         if (isColor) rec.color += amount;
         if (isHaircut) rec.haircuts += qty;
-        if (isSignature) rec.signatureS += amount;
+        if (isSignature) { rec.signatureS += amount; rec.signatureSCount += qty; }
         addService(stylist, isColor, isHaircut, isSignature);
       }
     } else {
@@ -789,7 +789,7 @@ export async function parseSalesAccrualFile(file) {
         const isSignature = isSignatureServiceItem(itemName);
         if (isColor) rec.color += amount;
         if (isHaircut) rec.haircuts += qty;
-        if (isSignature) rec.signatureS += amount;
+        if (isSignature) { rec.signatureS += amount; rec.signatureSCount += qty; }
         addService(stylist, isColor, isHaircut, isSignature);
       }
     }
@@ -804,10 +804,12 @@ export async function parseSalesAccrualFile(file) {
     giftCards: Math.round(r.giftCards * 100) / 100,
     haircuts: Math.round(r.haircuts * 100) / 100,
     signatureS: Math.round(r.signatureS * 100) / 100,
+    signatureSCount: Math.round(r.signatureSCount * 100) / 100,
     employees: Object.entries(r.employees).map(([name, v]) => ({
       name, sales: Math.round(v.sales * 100) / 100, colorSales: Math.round(v.colorSales * 100) / 100,
       haircuts: Math.round(v.haircuts * 100) / 100, retail: Math.round(v.retail * 100) / 100,
       signatureS: Math.round(v.signatureS * 100) / 100,
+      signatureSCount: Math.round(v.signatureSCount * 100) / 100,
     })),
   }));
   return { records, fileName: file.name };
@@ -876,10 +878,10 @@ export function mergeSalesIntoHistory(history, salesRecords) {
   const next = { ...history };
   salesRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, employees: {} };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, signatureSCount: null, employees: {} };
     next[key] = {
-      ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards, haircuts: r.haircuts, signatureS: r.signatureS,
-      employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales', 'haircuts', 'retail', 'signatureS']),
+      ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards, haircuts: r.haircuts, signatureS: r.signatureS, signatureSCount: r.signatureSCount,
+      employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales', 'haircuts', 'retail', 'signatureS', 'signatureSCount']),
     };
   });
   return next;
@@ -888,7 +890,7 @@ export function mergeAttendanceIntoHistory(history, attendanceRecords) {
   const next = { ...history };
   attendanceRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, employees: {} };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, signatureSCount: null, employees: {} };
     next[key] = {
       ...existing, hours: r.hours,
       employees: mergeEmployeeFields(existing.employees, r.employees || [], ['totalHours']),
