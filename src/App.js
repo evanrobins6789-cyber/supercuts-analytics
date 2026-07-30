@@ -600,6 +600,23 @@ function getCurrentWeekRange() {
   return { start: isoWeekStart(todayISO), end: todayISO };
 }
 
+// A live `report` object never expires on its own — it's whatever Stylist
+// Report was last uploaded, however long ago, and Supabase just keeps
+// serving it. A weekly report is only ever meant to represent about a
+// week, so once its own end date is more than ~10 days stale, treat it as
+// absent and fall back to the historical (Sales-Accrual/Attendance) path
+// instead of silently showing an increasingly out-of-date snapshot forever
+// once someone stops uploading new ones. The live report format also never
+// carried Signature S at all (no item-level detail in that export), which
+// is what made a stale-but-still-"present" report look like SS was stuck
+// at $0 even once real Signature S data existed in history.
+const REPORT_STALE_AFTER_DAYS = 10;
+function isReportStale(report) {
+  if (!report || !report.endDateISO) return true;
+  const daysSince = (Date.now() - new Date(report.endDateISO + 'T00:00:00').getTime()) / 86400000;
+  return daysSince > REPORT_STALE_AFTER_DAYS;
+}
+
 function DateRangeBar({ start, end, onChange }) {
   const applyCurrentMonth = () => { const r = getCurrentMonthRange(); onChange(r.start, r.end); };
   return (
@@ -1478,7 +1495,7 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews }) {
 
 // ─── Overview tab ───────────────────────────────────────────────────────────
 function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery }) {
-  const usingDefaultRange = !report && !(dateRange?.start && dateRange?.end);
+  const usingDefaultRange = isReportStale(report) && !(dateRange?.start && dateRange?.end);
   const effectiveRange = usingDefaultRange ? getCurrentWeekRange() : dateRange;
   const isHistorical = !!(effectiveRange?.start && effectiveRange?.end);
   const metric = STORE_METRICS.find(m => m.key === selected) || STORE_METRICS[0];
@@ -1505,7 +1522,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
   return (
     <div className="tab-content">
       {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
-      {usingDefaultRange && <p className="section-hint">No live weekly report on file — showing week-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
+      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing week-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores…" />
       <p className="section-hint">Tap any metric to see the top 10 and bottom 10 stores for it.</p>
       <div className="summary-grid">
@@ -1536,7 +1553,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
   // No live weekly Stylist Report and no explicit date range picked — fall
   // back to week-to-date from Sales-Accrual/Attendance history instead of
   // requiring a live report to exist at all.
-  const usingDefaultRange = !report && !(dateRange.start && dateRange.end);
+  const usingDefaultRange = isReportStale(report) && !(dateRange.start && dateRange.end);
   const effectiveRange = usingDefaultRange ? getCurrentWeekRange() : dateRange;
   const isHistorical = !!(effectiveRange.start && effectiveRange.end);
 
@@ -1571,7 +1588,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
   return (
     <div className="tab-content">
       <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
-      {usingDefaultRange && <p className="section-hint">No live weekly report on file — showing week-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
+      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing week-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores or employees…" />
 
       <div className="ledger-head-row">
@@ -1705,7 +1722,7 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
 function EmployeesTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, query, onQuery, managers, canAward, onAward }) {
   const [sortBy, setSortBy] = useState('sales');
   const [focused, setFocused] = useState(null);
-  const usingDefaultRange = !report && !(dateRange?.start && dateRange?.end);
+  const usingDefaultRange = isReportStale(report) && !(dateRange?.start && dateRange?.end);
   const effectiveRange = usingDefaultRange ? getCurrentWeekRange() : dateRange;
   const isHistorical = !!(effectiveRange?.start && effectiveRange?.end);
 
@@ -1743,7 +1760,7 @@ function EmployeesTab({ report, history, weeklyHistory, dateRange, onDateRangeCh
   return (
     <div className="tab-content">
       {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
-      {usingDefaultRange && <p className="section-hint">No live weekly report on file — showing week-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
+      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing week-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
       <SearchBox value={query} onChange={onQuery} placeholder="Search employees or stores…" />
       <div className="ledger-head-row">
         <p className="section-label">{filtered.length} of {allEmployees.length} employees</p>
@@ -1784,7 +1801,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
   const [expanded, setExpanded] = useState({});
   const [expandedLeader, setExpandedLeader] = useState({});
-  const usingDefaultRange = !report && !(dateRange?.start && dateRange?.end);
+  const usingDefaultRange = isReportStale(report) && !(dateRange?.start && dateRange?.end);
   const effectiveRange = usingDefaultRange ? getCurrentWeekRange() : dateRange;
   const isHistorical = !!(effectiveRange?.start && effectiveRange?.end);
   const getGoal = code => (goalType && goals?.[code]?.[goalType] != null ? goals[code][goalType] : null);
@@ -1857,7 +1874,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   return (
     <div className="tab-content">
       {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
-      {usingDefaultRange && <p className="section-hint">No live weekly report on file — showing week-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
+      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing week-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
       <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
 
       <div className="view-toggle">
@@ -2069,7 +2086,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
   const [expanded, setExpanded] = useState({});
   const [expandedStore, setExpandedStore] = useState({});
   const [showManagers, setShowManagers] = useState(false);
-  const usingDefaultRange = !report && !(dateRange.start && dateRange.end);
+  const usingDefaultRange = isReportStale(report) && !(dateRange.start && dateRange.end);
   const effectiveRange = usingDefaultRange ? getCurrentWeekRange() : dateRange;
   const isHistorical = !!(effectiveRange.start && effectiveRange.end);
 
@@ -2123,7 +2140,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
   return (
     <div className="tab-content">
       <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
-      {usingDefaultRange && <p className="section-hint">No live weekly report on file — showing week-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
+      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing week-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
       <SearchBox value={query} onChange={onQuery} placeholder="Search DLs or stores…" />
 
       <div className="view-toggle">
