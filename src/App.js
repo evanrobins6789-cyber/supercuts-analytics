@@ -4444,6 +4444,7 @@ function EmployeeAccessSetupTab({ token }) {
   const [msg, setMsg] = useState(null); // { type: 'ok'|'error', text, rowErrors? }
   const [drafts, setDrafts] = useState({}); // { id: { name?, phone?, employeeCode?, storeCodes? } } — in-progress edits
   const [savingId, setSavingId] = useState(null);
+  const [query, setQuery] = useState('');
 
   const refresh = useCallback(() => {
     setLoadingList(true);
@@ -4503,6 +4504,16 @@ function EmployeeAccessSetupTab({ token }) {
     handleSave(id, field, drafts[id][field]);
   };
 
+  const q = query.trim().toLowerCase();
+  const filteredEmployees = q
+    ? employees.filter(e => (
+        e.name.toLowerCase().includes(q) ||
+        (e.phone || '').includes(q) ||
+        (e.employeeCode || '').toLowerCase().includes(q) ||
+        (e.storeCodes || []).some(c => c.toLowerCase().includes(q))
+      ))
+    : employees;
+
   return (
     <div className="tab-content">
       <p className="section-hint">
@@ -4538,6 +4549,9 @@ function EmployeeAccessSetupTab({ token }) {
           )}
         </div>
       )}
+      {!loadingList && !!employees.length && (
+        <SearchBox value={query} onChange={setQuery} placeholder="Search name, phone, employee code, or store code…" />
+      )}
       {loadingList ? <span className="spinner small" /> : (
         <div className="ledger-scroll">
           <table className="ledger-table">
@@ -4553,13 +4567,13 @@ function EmployeeAccessSetupTab({ token }) {
               </tr>
             </thead>
             <tbody>
-              {employees.map(e => {
+              {filteredEmployees.map(e => {
                 const needsInfo = !e.phone || (e.employeeCode || '').startsWith('PENDING-');
                 return (
                   <tr key={e.id}>
                     <td className="ledger-name-col">
                       <input
-                        className="goal-input" style={{ width: '100%' }} value={getVal(e.id, 'name', e.name)}
+                        className="goal-input" style={{ width: '100%', minWidth: 220 }} value={getVal(e.id, 'name', e.name)}
                         onChange={ev => handleChange(e.id, 'name', ev.target.value)}
                         onBlur={() => handleBlurSave(e.id, 'name')}
                       />
@@ -4606,6 +4620,7 @@ function EmployeeAccessSetupTab({ token }) {
         </div>
       )}
       {!loadingList && !employees.length && <p className="empty-note">No one uploaded yet.</p>}
+      {!loadingList && !!employees.length && !filteredEmployees.length && <p className="empty-note">No one matches your search.</p>}
     </div>
   );
 }
