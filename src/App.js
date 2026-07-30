@@ -617,6 +617,29 @@ function isReportStale(report) {
   return daysSince > REPORT_STALE_AFTER_DAYS;
 }
 
+// Employee-name-mention matching (Reviews tab, Homepage shoutouts) and
+// "which store is this person at" lookups (60 Day Employee tab) all used to
+// read report.stores[].employees directly — fine while a live report existed,
+// but that roster goes stale exactly like everything else about `report`
+// once uploads stop. This gives the same {code: [{name}, ...]} shape sourced
+// from Sales-Accrual/Attendance instead, using a trailing window (not just
+// this week) since the point here is "who works here at all", not a
+// financial total — a wider window catches someone who didn't happen to
+// have a sale this specific week.
+const EMPLOYEE_ROSTER_LOOKBACK_DAYS = 90;
+function getEmployeesByStoreFromHistory(history, weeklyHistory) {
+  const end = new Date().toISOString().slice(0, 10);
+  const start = new Date(Date.now() - EMPLOYEE_ROSTER_LOOKBACK_DAYS * 86400000).toISOString().slice(0, 10);
+  const totals = getRangeTotals(history, weeklyHistory, start, end);
+  const map = {};
+  // Full finalized employee records (name + sales/color/retail/hours/etc,
+  // same shape report.allEmployees entries have) — mention-matching only
+  // ever reads .name, but the 60 Day Employee tab's fallback needs the
+  // real metrics too, so keep everything rather than stripping to name-only.
+  Object.entries(totals).forEach(([code, t]) => { map[code] = t.employees || []; });
+  return map;
+}
+
 function DateRangeBar({ start, end, onChange }) {
   const applyCurrentMonth = () => { const r = getCurrentMonthRange(); onChange(r.start, r.end); };
   return (
@@ -1265,19 +1288,22 @@ function matchCoreValueCategories(message) {
 // Cycles through 5-star reviews that name a stylist by name (via the same
 // detectEmployeeMention used on the Reviews tab) — a little "shoutouts" wall
 // for the front desk to leave running. 10s per review, pauses on hover.
-function ReviewSpotlightWidget({ report, reviews, bitmojiImg, bitmojiActive, canAward, onAward }) {
+function ReviewSpotlightWidget({ report, fallbackEmployeesByStore, reviews, bitmojiImg, bitmojiActive, canAward, onAward }) {
   const [paused, setPaused] = useState(false);
+  const reportUsable = report && !isReportStale(report);
   const spotlightReviews = useMemo(() => {
-    if (!reviews || !report) return [];
+    if (!reviews || (!reportUsable && !fallbackEmployeesByStore)) return [];
     return reviews.reviews
       .filter(r => r.rating === 5)
       .map(r => {
-        const employees = report.stores.find(st => st.code === r.code)?.employees || null;
+        const employees = reportUsable
+          ? (report.stores.find(st => st.code === r.code)?.employees || null)
+          : (fallbackEmployeesByStore?.[r.code] || null);
         const mention = detectEmployeeMention(r.message, employees);
         return mention ? { ...r, mention, categories: matchCoreValueCategories(r.message) } : null;
       })
       .filter(Boolean);
-  }, [reviews, report]);
+  }, [reviews, reportUsable, report, fallbackEmployeesByStore]);
   const [index] = useCarousel(spotlightReviews.length, 10000, paused);
   const current = spotlightReviews[index];
 
@@ -1330,10 +1356,21 @@ const HOMEPAGE_BITMOJI_SLOTS = [
   { key: 'corevalues', corner: 'bottom-right', pool: 'curious' },
 ];
 
-function HomepageTab({ report, news, events, reviews, onOpenNews, canAward, onAward }) {
+function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore, news, events, reviews, onOpenNews, canAward, onAward }) {
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
-  const storeRows = useMemo(() => report ? report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals })) : [], [report]);
+  const reportUsable = report && !isReportStale(report);
+  const historicalAsOf = useMemo(() => {
+    if (reportUsable) return null;
+    const dates = Object.keys(history || {}).map(k => history[k].date).filter(Boolean);
+    return dates.length ? dates.sort().slice(-1)[0] : null;
+  }, [reportUsable, history]);
+  const storeRows = useMemo(() => {
+    if (reportUsable) return report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals }));
+    const { start, end } = getCurrentWeekRange();
+    const totals = getRangeTotals(history, weeklyHistory, start, end);
+    return Object.entries(totals).map(([code, t]) => ({ name: STORE_CODE_TO_NAME[code] || `Store ${code}`, code, ...historyTotalsToReportShape(t) }));
+  }, [reportUsable, report, history, weeklyHistory]);
   const [lightboxImage, setLightboxImage] = useState(null);
   const { activeKey: bitmojiKey, img: bitmojiImg } = useBitmojiCycler(HOMEPAGE_BITMOJI_SLOTS);
 
@@ -1369,7 +1406,8 @@ function HomepageTab({ report, news, events, reviews, onOpenNews, canAward, onAw
 
           <div className="homepage-section">
             <p className="section-label">🏆 Top 10 Leaderboards</p>
-            {report ? (
+            {historicalAsOf && <p className="section-hint">Data current through {fmtDateLong(historicalAsOf)} (Sales-Accrual/Attendance — no current Stylist Report on file).</p>}
+            {storeRows.length ? (
               <div className="homepage-top10-grid">
                 {TOP_TEN_METRICS.map(m => (
                   <TopTenChart
@@ -1378,13 +1416,13 @@ function HomepageTab({ report, news, events, reviews, onOpenNews, canAward, onAw
                   />
                 ))}
               </div>
-            ) : <p className="empty-note">Upload a stylist report to see the Top 10 leaderboards.</p>}
+            ) : <p className="empty-note">Upload a stylist report, or run a Sales-Accrual/Attendance historical import, to see the Top 10 leaderboards.</p>}
             <BitmojiPeek img={bitmojiImg} active={bitmojiKey === 'top10'} corner="bottom-right" />
           </div>
         </div>
 
         <div className="homepage-sidebar">
-          <ReviewSpotlightWidget report={report} reviews={reviews} bitmojiImg={bitmojiImg} bitmojiActive={bitmojiKey === 'spotlight'} canAward={canAward} onAward={onAward} />
+          <ReviewSpotlightWidget report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} reviews={reviews} bitmojiImg={bitmojiImg} bitmojiActive={bitmojiKey === 'spotlight'} canAward={canAward} onAward={onAward} />
           <CoreValuesWidget bitmojiImg={bitmojiImg} bitmojiActive={bitmojiKey === 'corevalues'} />
         </div>
       </div>
@@ -2370,15 +2408,16 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
 // ─── 60 Day Employee tab ────────────────────────────────────────────────────
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function buildNewHireRows(report, employeeRoster) {
+function buildNewHireRows(report, employeeRoster, fallbackEmployeesByStore) {
   const now = Date.now();
-  const byName = new Map();
-  if (report) {
-    report.allEmployees.forEach(e => byName.set(normalizeName(e.name), e));
-  }
-  const codeToStore = new Map();
-  if (report) {
-    report.stores.forEach(s => codeToStore.set(s.code, s));
+  const byName = new Map(); // normalized name -> { store: storeName, metrics: employeeRecord }
+  if (report && !isReportStale(report)) {
+    report.allEmployees.forEach(e => byName.set(normalizeName(e.name), { store: e.store, metrics: e }));
+  } else {
+    Object.entries(fallbackEmployeesByStore || {}).forEach(([code, employees]) => {
+      const storeName = STORE_CODE_TO_NAME[code] || `Store ${code}`;
+      employees.forEach(e => byName.set(normalizeName(e.name), { store: storeName, metrics: e }));
+    });
   }
 
   const rows = [];
@@ -2391,9 +2430,9 @@ function buildNewHireRows(report, employeeRoster) {
     let storeName = null, leaderInfo = null, metrics = {};
     if (match) {
       storeName = match.store;
-      const storeObj = report.stores.find(s => s.name === match.store);
-      leaderInfo = storeObj ? getLeaderForStoreCode(storeObj.code) : null;
-      metrics = match;
+      const storeCode = getCodeForStoreName(match.store);
+      leaderInfo = storeCode ? getLeaderForStoreCode(storeCode) : null;
+      metrics = match.metrics;
     }
 
     rows.push({
@@ -2423,9 +2462,9 @@ const NEW_HIRE_SORT_OPTIONS = [
   { key: 'tsth', label: 'TSTH' },
 ];
 
-function NewHireTab({ report, employeeRoster, query, onQuery, canAward, onAward }) {
+function NewHireTab({ report, fallbackEmployeesByStore, employeeRoster, query, onQuery, canAward, onAward }) {
   const [sortBy, setSortBy] = useState('daysAgo');
-  const rows = useMemo(() => buildNewHireRows(report, employeeRoster), [report, employeeRoster]);
+  const rows = useMemo(() => buildNewHireRows(report, employeeRoster, fallbackEmployeesByStore), [report, employeeRoster, fallbackEmployeesByStore]);
   const filtered = useMemo(() => {
     if (!query.trim()) return rows;
     const q = query.trim().toLowerCase();
@@ -3039,7 +3078,7 @@ const REVIEW_SORT_OPTIONS = [
   { key: 'noNotes', label: 'No Notes' },
 ];
 
-function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewNote, goldCombs, onToggleGoldComb, canAward, onAward }) {
+function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery, reviewNotes, onAddReviewNote, goldCombs, onToggleGoldComb, canAward, onAward }) {
   const [viewMode, setViewMode] = useState('flat'); // 'flat' | 'dl'
   const [category, setCategory] = useState(null);
   const [sentiment, setSentiment] = useState(null); // null | 'pos' | 'neg'
@@ -3051,7 +3090,14 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
 
   const selectCategory = key => { setCategory(prev => prev === key ? null : key); setSentiment(null); };
   const selectSentiment = key => { setSentiment(prev => prev === key ? null : key); setCategory(null); };
-  const employeesForCode = code => report?.stores.find(st => st.code === code)?.employees || null;
+  // Prefer the live report's roster while it's still fresh (it has more than
+  // just names — sales figures, manager flags, etc. downstream); once it's
+  // stale, fall back to the name-only roster built from Sales-Accrual/
+  // Attendance history instead of matching against an ever-aging employee list.
+  const employeesForCode = code => {
+    if (report && !isReportStale(report)) return report.stores.find(st => st.code === code)?.employees || null;
+    return fallbackEmployeesByStore?.[code] || null;
+  };
   const reviewHasMention = r => !!detectEmployeeMention(r.message, employeesForCode(r.code));
 
   if (!reviews) {
@@ -3128,7 +3174,7 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
       : null;
     return filteredStores
       .map(s => {
-        const employeesForStore = report?.stores.find(st => st.code === s.code)?.employees || null;
+        const employeesForStore = employeesForCode(s.code);
         const counts = new Map();
         s.reviews
           .filter(r => !sentimentMatcher || sentimentMatcher(r))
@@ -3184,7 +3230,7 @@ function ReviewsTab({ report, reviews, query, onQuery, reviewNotes, onAddReviewN
   const activeCat = REVIEW_CATEGORIES.find(c => c.key === category);
 
   const renderReviewList = s => {
-    const employeesForStore = report?.stores.find(st => st.code === s.code)?.employees || null;
+    const employeesForStore = employeesForCode(s.code);
     let reviewList = [...s.reviews].sort((a, b) => b.postedAt.localeCompare(a.postedAt));
     if (category) reviewList = reviewList.filter(r => isNegativeReview(r) && reviewMatchesCategory(r.message, category));
     else if (sentiment === 'pos') reviewList = reviewList.filter(isPositiveReview);
@@ -3944,7 +3990,11 @@ function topEmployeeLine(employees, n = 5) {
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
-function buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points) {
+function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points) {
+  const employeesForCodeCtx = code => {
+    if (report && !isReportStale(report)) return report.stores.find(st => st.code === code)?.employees || null;
+    return fallbackEmployeesByStore?.[code] || null;
+  };
   const lines = [];
 
   // Static reference info, independent of any report/date — who manages
@@ -4019,7 +4069,11 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
     lines.push('');
   }
 
-  if (report) {
+  // `currentStoreRows`/`currentAllEmployees` are reused below by the
+  // Employee Start Dates cross-reference, whichever source fed them here.
+  let currentStoreRows = [];
+  let currentAllEmployees = [];
+  if (report && !isReportStale(report)) {
     const t = report.companyTotals;
     lines.push(`CURRENT REPORT PERIOD: ${report.dateRangeLabel || 'unknown'}`);
     lines.push(`Company totals — Sales: $${Math.round(t.sales)}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}, Cuts: ${Math.round(t.haircuts || 0)}, CPH: ${t.cph != null ? t.cph.toFixed(2) : 'n/a'}`);
@@ -4031,17 +4085,34 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
       const goalStr = goal ? ` | Color Goal: ${goal.colorGoal ?? 'none'}, Retail Goal: ${goal.retailGoal ?? 'none'}` : '';
       lines.push(`${s.name}: Sales $${Math.round(st.sales)}, TSTH $${st.tsth != null ? st.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(st.totalHours)}, Color $${Math.round(st.colorSales)}, Retail $${Math.round(st.retail)}, CPC ${st.cpc != null ? st.cpc.toFixed(2) : 'n/a'}, RPC ${st.rpc != null ? st.rpc.toFixed(2) : 'n/a'}, Cuts ${Math.round(st.haircuts || 0)}, CPH ${st.cph != null ? st.cph.toFixed(2) : 'n/a'}${goalStr}`);
     });
-    if (report.allEmployees?.length) {
-      const line = topEmployeeLine(report.allEmployees);
-      if (line) { lines.push(''); lines.push(`TOP EMPLOYEES THIS PERIOD (top 5 each, quick reference) — ${line}`); }
-      lines.push('');
-      lines.push('EVERY EMPLOYEE THIS PERIOD (Name @ Store: Sales, Color, Retail, Cuts, Hours, CPH):');
-      report.allEmployees.forEach(e => {
-        lines.push(`${e.name} @ ${e.store}: Sales $${Math.round(e.sales)}, Color $${Math.round(e.colorSales)}, Retail $${Math.round(e.retail)}, Cuts ${Math.round(e.haircuts || 0)}, Hours ${Math.round(e.totalHours)}, CPH ${e.cph != null ? e.cph.toFixed(2) : 'n/a'}`);
-      });
-    }
+    currentStoreRows = report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals }));
+    currentAllEmployees = report.allEmployees || [];
   } else {
-    lines.push('No current stylist report is loaded on the site right now.');
+    // No live report, or it's aged past REPORT_STALE_AFTER_DAYS — same
+    // week-to-date historical fallback the six main tabs use.
+    const { start, end } = getCurrentWeekRange();
+    const totals = getRangeTotals(history, weeklyHistory, start, end);
+    currentStoreRows = Object.entries(totals).map(([code, tt]) => ({ name: STORE_CODE_TO_NAME[code] || `Store ${code}`, code, ...historyTotalsToReportShape(tt) }));
+    currentAllEmployees = currentStoreRows.flatMap(s => (s.employees || []).map(e => ({ ...e, store: s.name })));
+    const t = rollupRows(currentStoreRows);
+    lines.push(`CURRENT REPORT PERIOD: ${fmtDateLong(start)} – ${fmtDateLong(end)} (week-to-date — no current Stylist Report on file, sourced from Sales-Accrual/Attendance instead)`);
+    lines.push(`Company totals — Sales: $${Math.round(t.sales)}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}, Cuts: ${Math.round(t.haircuts || 0)}, CPH: ${t.cph != null ? t.cph.toFixed(2) : 'n/a'}, SS: ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}`);
+    lines.push('');
+    lines.push('Per-store totals for the CURRENT period (Store: Sales, TSTH, Hours, Color, Retail, CPC, RPC, Cuts, CPH, goals if set):');
+    currentStoreRows.forEach(s => {
+      const goal = goals?.[s.code];
+      const goalStr = goal ? ` | Color Goal: ${goal.colorGoal ?? 'none'}, Retail Goal: ${goal.retailGoal ?? 'none'}` : '';
+      lines.push(`${s.name}: Sales $${Math.round(s.sales)}, TSTH $${s.tsth != null ? s.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(s.totalHours)}, Color $${Math.round(s.colorSales)}, Retail $${Math.round(s.retail)}, CPC ${s.cpc != null ? s.cpc.toFixed(2) : 'n/a'}, RPC ${s.rpc != null ? s.rpc.toFixed(2) : 'n/a'}, Cuts ${Math.round(s.haircuts || 0)}, CPH ${s.cph != null ? s.cph.toFixed(2) : 'n/a'}${goalStr}`);
+    });
+  }
+  if (currentAllEmployees.length) {
+    const line = topEmployeeLine(currentAllEmployees);
+    if (line) { lines.push(''); lines.push(`TOP EMPLOYEES THIS PERIOD (top 5 each, quick reference) — ${line}`); }
+    lines.push('');
+    lines.push('EVERY EMPLOYEE THIS PERIOD (Name @ Store: Sales, Color, Retail, Cuts, Hours, CPH):');
+    currentAllEmployees.forEach(e => {
+      lines.push(`${e.name} @ ${e.store}: Sales $${Math.round(e.sales)}, Color $${Math.round(e.colorSales)}, Retail $${Math.round(e.retail)}, Cuts ${Math.round(e.haircuts || 0)}, Hours ${Math.round(e.totalHours)}, CPH ${e.cph != null ? e.cph.toFixed(2) : 'n/a'}`);
+    });
   }
 
   // Store goals — independent of any report/period, since a goal is a
@@ -4060,20 +4131,21 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
   // "when did X start" works for anyone, not only people hired in the last
   // 60 days (that's just what the 60 Day Employee tab itself narrows to).
   // Enriched with Store/DL whenever the name matches someone in the current
-  // report, same matching the 60 Day Employee tab itself does.
+  // period (whichever source fed currentStoreRows/currentAllEmployees above),
+  // same matching the 60 Day Employee tab itself does.
   if (employeeRoster?.employees?.length) {
     lines.push('');
-    lines.push('EMPLOYEE START DATES (from the Employee Start Dates roster — "new hire" flags anyone hired in the last 60 days; Store/DL shown when the name matches someone in the CURRENT report):');
+    lines.push('EMPLOYEE START DATES (from the Employee Start Dates roster — "new hire" flags anyone hired in the last 60 days; Store/DL shown when the name matches someone in the CURRENT period):');
     const now = Date.now();
     const byName = new Map();
-    if (report) report.allEmployees.forEach(e => byName.set(normalizeName(e.name), e));
+    currentAllEmployees.forEach(e => byName.set(normalizeName(e.name), e));
     employeeRoster.employees.forEach(e => {
       const daysAgo = Math.floor((now - new Date(e.startDate).getTime()) / DAY_MS);
       const tag = daysAgo >= 0 && daysAgo <= 60 ? ' (new hire)' : '';
       const match = byName.get(normalizeName(e.name));
       let storeInfo = '';
       if (match) {
-        const storeObj = report.stores.find(s => s.name === match.store);
+        const storeObj = currentStoreRows.find(s => s.name === match.store);
         const leaderInfo = storeObj ? getLeaderForStoreCode(storeObj.code) : null;
         storeInfo = ` — ${match.store}${leaderInfo ? `, DL: ${leaderInfo.leaderName}` : ''}`;
       }
@@ -4242,8 +4314,7 @@ function buildAIContext(report, history, weeklyHistory, goals, reviews, employee
       lines.push(`GOLD COMB REVIEWS — staff have specifically acknowledged these ${combed.length} review(s) as awesome/worth celebrating:`);
       combed.forEach(r => {
         const { name } = resolveStoreName(r.code, r.rawLocation);
-        const employeesForStore = report?.stores.find(st => st.code === r.code)?.employees || null;
-        const mention = detectEmployeeMention(r.message, employeesForStore);
+        const mention = detectEmployeeMention(r.message, employeesForCodeCtx(r.code));
         lines.push(`${fmtDateLong(r.postedAt)} — ${name}, ${r.rating}★, ${r.userName || 'Anonymous'}${mention ? ` (mentions ${mention})` : ''}: "${r.message}"`);
       });
     }
@@ -4292,7 +4363,7 @@ function RobinNestIcon({ size = 28 }) {
   );
 }
 
-function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points }) {
+function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -4305,7 +4376,7 @@ function AIChatWidget({ report, history, weeklyHistory, goals, reviews, employee
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points);
+      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points);
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -5825,6 +5896,16 @@ export default function App() {
     showToast('Historical data cleared');
   };
 
+  // Shared fallback roster (name-only, per store code) for anything that
+  // still needs "who works here" once the live report goes stale — Reviews
+  // mention-matching, Homepage shoutouts, and the 60 Day Employee tab's
+  // store lookup. Computed once here rather than separately in each
+  // component, since it's the same underlying history/weeklyHistory data.
+  const fallbackEmployeesByStore = useMemo(
+    () => getEmployeesByStoreFromHistory(history, weeklyHistory),
+    [history, weeklyHistory]
+  );
+
   if (!currentUser) return <LoginScreen onLoggedIn={handleLoggedIn} />;
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
@@ -5864,7 +5945,7 @@ export default function App() {
       <main className="app-main">
         {needsReport && <div className="empty-state"><p className="empty-title">No data yet</p><p>Go to the Setup tab and either upload this week's Stylist Report, or run a Sales-Accrual/Attendance historical import.</p></div>}
         {tab === 'Homepage' && (
-          <HomepageTab report={report} news={news} events={events} reviews={reviews} onOpenNews={handleOpenNews} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
+          <HomepageTab report={report} history={history} weeklyHistory={weeklyHistory} fallbackEmployeesByStore={fallbackEmployeesByStore} news={news} events={events} reviews={reviews} onOpenNews={handleOpenNews} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
         )}
         {tab === 'News' && (
           <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} />
@@ -5902,11 +5983,11 @@ export default function App() {
           <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} milestoneGoals={milestoneGoals} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
         )}
         {tab === '60 Day Employee' && (
-          <NewHireTab report={report} employeeRoster={employeeRoster} query={queries['60 Day Employee']} onQuery={v => setQuery('60 Day Employee', v)} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
+          <NewHireTab report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} employeeRoster={employeeRoster} query={queries['60 Day Employee']} onQuery={v => setQuery('60 Day Employee', v)} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
         )}
         {tab === 'Reviews' && (
           <ReviewsTab
-            report={report} reviews={reviews} query={queries.Reviews} onQuery={v => setQuery('Reviews', v)}
+            report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} reviews={reviews} query={queries.Reviews} onQuery={v => setQuery('Reviews', v)}
             reviewNotes={reviewNotes} onAddReviewNote={handleAddReviewNote}
             goldCombs={goldCombs} onToggleGoldComb={handleToggleGoldComb}
             canAward={currentUser.role === 'owner'} onAward={handleAwardPoints}
@@ -5943,7 +6024,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget report={report} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} milestoneGoals={milestoneGoals} news={news} events={events} points={pointsSummary} />
+      <AIChatWidget report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} milestoneGoals={milestoneGoals} news={news} events={events} points={pointsSummary} />
     </div>
   );
 }
