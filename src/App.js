@@ -3613,15 +3613,16 @@ function historyMonthCoverage(history) {
     .sort((a, b) => a.month.localeCompare(b.month));
 }
 
-function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBatch, onClearHistory }) {
+function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBatch, onClearHistory, reviews, onImportReviewsBatch }) {
   const [processingSales, setProcessingSales] = useState(false);
   const [processingAttendance, setProcessingAttendance] = useState(false);
+  const [processingReviews, setProcessingReviews] = useState(false);
   const [log, setLog] = useState([]);
 
-  // try/catch here is defense-in-depth: onImportSalesBatch/onImportAttendanceBatch
-  // already catch their own errors, but if anything unexpected still throws,
-  // this guarantees the spinner clears and something is shown instead of the
-  // UI silently hanging with no feedback at all.
+  // try/catch here is defense-in-depth: onImportSalesBatch/onImportAttendanceBatch/
+  // onImportReviewsBatch already catch their own errors, but if anything unexpected
+  // still throws, this guarantees the spinner clears and something is shown instead
+  // of the UI silently hanging with no feedback at all.
   const handleSalesFiles = async fileList => {
     setProcessingSales(true);
     try {
@@ -3646,6 +3647,20 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
     }
   };
 
+  const handleReviewsFiles = async fileList => {
+    setProcessingReviews(true);
+    try {
+      const lines = await onImportReviewsBatch(fileList);
+      setLog(prev => [...lines, ...prev]);
+    } catch (err) {
+      setLog(prev => [`✗ Unexpected error: ${err.message}`, ...prev]);
+    } finally {
+      setProcessingReviews(false);
+    }
+  };
+
+  const reviewDates = reviews?.reviews?.length ? reviews.reviews.map(r => r.postedAt).filter(Boolean).sort() : [];
+
   const summary = historySummary(history);
   const storeBreakdown = summary ? historyByStore(history) : [];
   const unrecognized = storeBreakdown.filter(s => !s.name);
@@ -3655,9 +3670,11 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
   return (
     <div className="tab-content">
       <p className="section-hint">
-        One-time historical backfill. Upload as many Sales-Accrual and Attendance files as you have — each gets
-        boiled down to daily totals per store and added permanently to your history. Re-uploading a file you've
-        already done is safe; it just overwrites those exact days with the same numbers.
+        One-time historical backfill. Upload as many Sales-Accrual, Attendance, and Reviews files as you have —
+        each gets boiled down (Sales-Accrual/Attendance to daily totals per store, Reviews to individual review
+        rows) and added permanently to your history. Re-uploading a file you've already done is safe; Sales-Accrual/
+        Attendance just overwrite those exact days with the same numbers, and Reviews skips any row it's already seen
+        (same store, posted date, reviewer name, and rating) so re-uploading an overlapping month never double-counts.
       </p>
 
       <div className="history-upload-row">
@@ -3684,7 +3701,28 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
             <p className="upload-slot-hint">Select all your Attendance exports at once (Hours)</p>
           </div>
         </label>
+
+        <label className={`upload-slot history-upload-slot ${processingReviews ? 'upload-slot--filled' : ''}`}>
+          <input
+            type="file" accept=".xlsx,.xls,.csv" multiple style={{ display: 'none' }}
+            onChange={e => { const files = Array.from(e.target.files); if (files.length) handleReviewsFiles(files); e.target.value = ''; }}
+          />
+          <div className="upload-slot-icon">{processingReviews ? <span className="spinner small" /> : '📥'}</div>
+          <div className="upload-slot-body">
+            <p className="upload-slot-title">Reviews Files</p>
+            <p className="upload-slot-hint">Select all your Reviews exports at once — one per month is fine, overlapping rows are skipped</p>
+          </div>
+        </label>
       </div>
+
+      {reviews && (
+        <div className="summary-grid">
+          <div className="summary-tile"><p className="summary-tile-label">Reviews on File</p><p className="summary-tile-value">{reviews.reviews.length}</p></div>
+          {reviewDates.length > 0 && (
+            <div className="summary-tile"><p className="summary-tile-label">Review Date Range</p><p className="summary-tile-value" style={{ fontSize: 15 }}>{fmtDateLong(reviewDates[0])} → {fmtDateLong(reviewDates[reviewDates.length - 1])}</p></div>
+          )}
+        </div>
+      )}
 
       {summary && (
         <div className="summary-grid">
@@ -5230,6 +5268,8 @@ export default function App() {
   // two handlers so they never merge+save concurrently off the same base.
   const historyRef = useRef(history);
   useEffect(() => { historyRef.current = history; }, [history]);
+  const reviewsRef = useRef(reviews);
+  useEffect(() => { reviewsRef.current = reviews; }, [reviews]);
   const importChainRef = useRef(Promise.resolve());
   const [weeklyHistory, setWeeklyHistory] = useState({});
   const [dateRange, setDateRangeState] = useState({ start: null, end: null });
@@ -6011,6 +6051,45 @@ export default function App() {
     return queued;
   }, []);
 
+  // Unlike the ongoing single-file Setup > Upload reviews slot (which treats
+  // each export as the full current list and replaces it outright), a
+  // historical backfill is typically several month-limited exports that each
+  // only cover part of the range — so this merges instead, deduping via the
+  // same reviewKey() used everywhere else a review needs a stable identity.
+  // Queued through the same importChainRef as the sales/attendance batches so
+  // a reviews import started right after one of those can't read a stale
+  // snapshot mid-save.
+  const handleImportReviewsBatch = useCallback(fileList => {
+    const task = async () => {
+      let working = reviewsRef.current;
+      const lines = [];
+      for (const file of fileList) {
+        try {
+          const parsed = await parseReviews(file);
+          const existingKeys = new Set((working?.reviews || []).map(reviewKey));
+          const newOnes = parsed.reviews.filter(r => !existingKeys.has(reviewKey(r)));
+          working = { reviews: [...(working?.reviews || []), ...newOnes], fileName: working?.fileName || parsed.fileName };
+          lines.push(`✓ ${file.name} — ${parsed.reviews.length} reviews found, ${newOnes.length} new`);
+        } catch (err) {
+          lines.push(`✗ ${file.name} — ${err.message}`);
+        }
+      }
+      reviewsRef.current = working;
+      setReviews(working);
+      const result = await saveData('reviews', working);
+      if (isConfigured() && !result.ok) {
+        lines.push(`✗ Couldn't sync to Supabase (${result.error}) — this data is safe on this device (it'll auto-retry syncing next time you load the app), but won't show up on other devices until it does. Try the import again or reload the page to trigger a retry.`);
+        showToast(`Imported, but couldn't sync to Supabase (${result.error})`, 'error');
+      } else {
+        showToast(`Processed ${fileList.length} review file${fileList.length !== 1 ? 's' : ''} — ${working.reviews.length} reviews on file`);
+      }
+      return lines;
+    };
+    const queued = importChainRef.current.then(task, task);
+    importChainRef.current = queued.then(() => {}, () => {});
+    return queued;
+  }, []);
+
   const handleClearHistory = async () => {
     if (!window.confirm('Clear all historical data? This cannot be undone.')) return;
     await clearDataByPrefix('daily_history_');
@@ -6136,7 +6215,7 @@ export default function App() {
               onReorderNewsGroup: handleReorderNewsGroup, onSetNewsGroupColor: handleSetNewsGroupColor,
               onImageError: msg => showToast(msg, 'error'),
             }}
-            historyProps={{ history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory }}
+            historyProps={{ history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory, reviews, onImportReviewsBatch: handleImportReviewsBatch }}
             uploadProps={{
               report, uploading, onFile: handleFile, onClear: handleClearAll,
               employeeRoster, uploadingRoster, onRosterFile: handleRosterFile, onClearRoster: handleClearRoster,
