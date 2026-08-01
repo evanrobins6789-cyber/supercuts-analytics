@@ -40,12 +40,12 @@ async function postJson(url, body) {
   return { ok: true, ...json };
 }
 
-export function checkEligible({ employeeCode, phone }) {
-  return postJson('/api/auth', { action: 'checkEligible', employeeCode, phone });
+export function checkEligible({ phone }) {
+  return postJson('/api/auth', { action: 'checkEligible', phone });
 }
 
-export function signUp({ employeeCode, phone, pin }) {
-  return postJson('/api/auth', { action: 'signup', employeeCode, phone, pin });
+export function signUp({ phone, pin }) {
+  return postJson('/api/auth', { action: 'signup', phone, pin });
 }
 
 export function logIn({ pin }) {
@@ -86,6 +86,10 @@ export function rosterUpload(token, rows) {
 
 export function rosterResetPin(token, id) {
   return postJson('/api/roster', { action: 'resetPin', token, id });
+}
+
+export function rosterSetPin(token, id, pin) {
+  return postJson('/api/roster', { action: 'setPin', token, id, pin });
 }
 
 export function rosterUpdate(token, id, patch) {

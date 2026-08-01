@@ -3,24 +3,39 @@
 // username at login — Sign In is a bare PIN, so api/serverAuth.js's
 // findEmployeeByPin has to scan every registered employee's hashed PIN to
 // find a match (see the comment there). Sign up ("Create a Login") is
-// gated by an employee code + phone number that only exists because the
-// owner uploaded it via Setup > Employee Access (api/roster.js) — there's
-// no open registration — and is a two-step flow client-side: checkEligible
-// confirms the code/phone match before the person bothers picking a PIN,
-// then signup does the real work once the PIN is chosen.
+// gated by phone number alone — matched against the roster the owner
+// uploaded via Setup > Employee Access (api/roster.js), there's no open
+// registration — and is a two-step flow client-side: checkEligible confirms
+// the phone matches exactly one not-yet-registered account before the
+// person bothers picking a PIN, then signup does the real work once the PIN
+// is chosen.
+//
+// Phone numbers aren't guaranteed unique in this roster (a handful of real
+// people genuinely share a phone with someone else — see HANDOFF.md), so a
+// phone that matches more than one still-unregistered account is treated as
+// ambiguous and rejected with a message to contact the owner, rather than
+// guessing which person is signing up.
 
 import { createServiceClient, normalizePhone, generateToken, hashPin, findEmployeeByPin } from '../src/serverAuth.js';
 
 const PIN_PATTERN = /^[a-zA-Z0-9]{5,}$/;
+const AMBIGUOUS_PHONE_ERROR = 'More than one account on file shares this phone number — the owner will need to set your PIN directly in Employee Access.';
+const NOT_FOUND_ERROR = "That phone number doesn't match an active account on file. Check with the owner.";
+const ALREADY_REGISTERED_ERROR = 'This account already has a PIN — use Sign In instead.';
 
-async function findEligibleSignupRow(supabase, employeeCode, phone) {
-  const { data: employee } = await supabase
+// Returns the single eligible (active, not yet registered) employee row for
+// this phone, or throws a user-facing error if there's none or more than one.
+async function findEligibleSignupRow(supabase, phone) {
+  const { data: candidates, error } = await supabase
     .from('employees').select('*')
-    .eq('employee_code', String(employeeCode || '').trim())
     .eq('phone', normalizePhone(phone))
-    .eq('active', true)
-    .maybeSingle();
-  return employee;
+    .eq('active', true);
+  if (error) throw new Error(error.message);
+  if (!candidates || !candidates.length) throw Object.assign(new Error(NOT_FOUND_ERROR), { status: 404 });
+  const unregistered = candidates.filter(e => !e.pin_hash);
+  if (!unregistered.length) throw Object.assign(new Error(ALREADY_REGISTERED_ERROR), { status: 409 });
+  if (unregistered.length > 1) throw Object.assign(new Error(AMBIGUOUS_PHONE_ERROR), { status: 409 });
+  return unregistered[0];
 }
 
 export default async function handler(req, res) {
@@ -35,45 +50,29 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { action, employeeCode, phone, pin, token } = req.body || {};
+  const { action, phone, pin, token } = req.body || {};
 
   try {
     if (action === 'checkEligible') {
-      if (!employeeCode || !phone) {
-        res.status(400).json({ error: 'Employee code and phone number are both required.' });
+      if (!phone) {
+        res.status(400).json({ error: 'Phone number is required.' });
         return;
       }
-      const employee = await findEligibleSignupRow(supabase, employeeCode, phone);
-      if (!employee) {
-        res.status(404).json({ error: "That employee code and phone number don't match an active account on file. Check with the owner." });
-        return;
-      }
-      if (employee.pin_hash) {
-        res.status(409).json({ error: 'This account already has a PIN — use Sign In instead.' });
-        return;
-      }
+      await findEligibleSignupRow(supabase, phone);
       res.status(200).json({ ok: true });
       return;
     }
 
     if (action === 'signup') {
-      if (!employeeCode || !phone || !pin) {
-        res.status(400).json({ error: 'Employee code, phone number, and a PIN are all required.' });
+      if (!phone || !pin) {
+        res.status(400).json({ error: 'Phone number and a PIN are both required.' });
         return;
       }
       if (!PIN_PATTERN.test(pin)) {
         res.status(400).json({ error: 'PIN must be at least 5 letters and/or numbers.' });
         return;
       }
-      const employee = await findEligibleSignupRow(supabase, employeeCode, phone);
-      if (!employee) {
-        res.status(404).json({ error: "That employee code and phone number don't match an active account on file. Check with the owner." });
-        return;
-      }
-      if (employee.pin_hash) {
-        res.status(409).json({ error: 'This account already has a PIN — use Sign In instead.' });
-        return;
-      }
+      const employee = await findEligibleSignupRow(supabase, phone);
       // There's no username, so two people can't be told apart by anything
       // but the PIN itself — it has to be unique across everyone, checked
       // the same way login finds an account (scan + compare).
@@ -117,6 +116,6 @@ export default async function handler(req, res) {
 
     res.status(400).json({ error: `Unknown action "${action}".` });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 }

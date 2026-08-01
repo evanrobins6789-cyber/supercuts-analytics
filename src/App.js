@@ -9,7 +9,7 @@ import {
 } from './parser';
 import {
   getSession, setSession, clearSession, checkEligible, signUp, logIn, logOut,
-  loadScoped, loadScopedByPrefix, rosterList, rosterUpload, rosterResetPin, rosterUpdate,
+  loadScoped, loadScopedByPrefix, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate,
   pointsBalance, pointsAward, pointsAllBalances, pointsTransactions, pointsDeleteTransaction,
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled,
 } from './auth';
@@ -26,15 +26,18 @@ const PIN_PATTERN = /^[a-zA-Z0-9]{5,}$/;
 
 // Global PIN-only login, no username — opening the site offers a choice
 // (Sign In / Create a Login), Sign In is just a PIN, and Create a Login is a
-// two-step wizard: employee code + phone (checked against the roster the
-// owner uploaded) first, then a PIN is set. Because there's no username at
-// login time, the PIN itself is what api/auth.js uses to find the account
+// two-step wizard: phone number (checked against the roster the owner
+// uploaded) first, then a PIN is set. Because there's no username at login
+// time, the PIN itself is what api/auth.js uses to find the account
 // (scanning every registered employee's hashed PIN) — see HANDOFF.md for
-// the trade-off that comes with that.
+// the trade-off that comes with that. Phone alone has to resolve to exactly
+// one not-yet-registered account — api/auth.js rejects a phone shared by
+// more than one such account (a handful of real people share a phone with
+// someone else) rather than guessing, and sends them to the owner, who can
+// set their PIN directly in Setup > Employee Access.
 function LoginScreen({ onLoggedIn }) {
   const [mode, setMode] = useState('choice'); // 'choice' | 'signin' | 'create1' | 'create2'
   const [phone, setPhone] = useState('');
-  const [employeeCode, setEmployeeCode] = useState('');
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [signinPin, setSigninPin] = useState('');
@@ -56,7 +59,7 @@ function LoginScreen({ onLoggedIn }) {
   const submitStep1 = async () => {
     setErr('');
     setBusy(true);
-    const result = await checkEligible({ employeeCode, phone });
+    const result = await checkEligible({ phone });
     setBusy(false);
     if (!result.ok) { setErr(result.error); return; }
     goTo('create2');
@@ -67,7 +70,7 @@ function LoginScreen({ onLoggedIn }) {
     if (!PIN_PATTERN.test(pin)) { setErr('PIN must be at least 5 letters and/or numbers.'); return; }
     if (pin !== confirmPin) { setErr("PINs don't match."); return; }
     setBusy(true);
-    const result = await signUp({ employeeCode, phone, pin });
+    const result = await signUp({ phone, pin });
     setBusy(false);
     if (!result.ok) { setErr(result.error); return; }
     const session = { token: result.token, name: result.name, role: result.role };
@@ -107,10 +110,9 @@ function LoginScreen({ onLoggedIn }) {
           {mode === 'create1' && (
             <>
               <p className="password-gate-title">🔒 Create a Login</p>
-              <p className="password-gate-hint">Enter the employee code and phone number you were given.</p>
-              <input className="text-input" placeholder="Employee code" value={employeeCode} autoFocus onChange={e => setEmployeeCode(e.target.value)} />
+              <p className="password-gate-hint">Enter the phone number you were given.</p>
               <input
-                className="text-input" type="tel" placeholder="Phone number" value={phone}
+                className="text-input" type="tel" placeholder="Phone number" value={phone} autoFocus
                 onChange={e => setPhone(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') submitStep1(); }}
               />
@@ -4631,6 +4633,21 @@ function EmployeeAccessSetupTab({ token }) {
     else { setMsg({ type: 'ok', text: 'PIN cleared — they can create a new one.' }); refresh(); }
   };
 
+  // Sets someone's PIN directly to a value the owner chooses, instead of
+  // just clearing it and waiting for them to pick their own via "Create a
+  // Login" (that's still what Reset PIN does). PINs stay one-way hashed —
+  // this can't show an existing PIN back, only overwrite it with a new one.
+  const handleSetPin = async (id, name) => {
+    const pin = window.prompt(`Set a new PIN for ${name} (at least 5 letters and/or numbers):`);
+    if (pin === null) return;
+    if (!PIN_PATTERN.test(pin)) { setMsg({ type: 'error', text: 'PIN must be at least 5 letters and/or numbers.' }); return; }
+    setSavingId(id);
+    const res = await rosterSetPin(token, id, pin);
+    setSavingId(null);
+    if (!res.ok) setMsg({ type: 'error', text: res.error });
+    else { setMsg({ type: 'ok', text: `PIN set for ${name}.` }); refresh(); }
+  };
+
   const getVal = (id, field, fallback) => (drafts[id]?.[field] !== undefined ? drafts[id][field] : fallback);
   const handleChange = (id, field, value) => setDrafts(prev => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
 
@@ -4667,6 +4684,9 @@ function EmployeeAccessSetupTab({ token }) {
         Role is Owner, District Leader, Manager, or Employee. Store Codes only matters for District Leader (multiple codes, separated by commas or spaces) and Manager (one code) — leave it blank for Owner/Employee.
         Employee Code and Phone Number can be left blank if you don't have them yet — that person still gets added to the table below (with a placeholder code) so you can fill them in directly, right in this table, once you find out.
         Every upload replaces the current list — anyone whose Employee Code isn't in the new file loses access immediately, even if they're already logged in.
+      </p>
+      <p className="section-hint">
+        "Create a Login" only asks for a phone number now — not the employee code — so it has to match exactly one active, not-yet-registered person here. If a phone is shared by more than one person, they'll be told to check with you; use <b>Set PIN</b>/<b>Change PIN</b> below to give that person a PIN directly instead.
       </p>
       <p className="section-hint">
         Or upload the Master Salon List workbook directly — it pulls every stylist (Emp ID + phone), District Leader/Area Supervisor (with their store group), and store Manager straight out of that file's own "Emplopyee List", "Exec Team, DL & Salons", and "DLs and Managers" tabs. Admin Team and Education Team rows are skipped on purpose (they aren't stylists, DLs, or managers). This also replaces the current list, same as above.
@@ -4756,6 +4776,7 @@ function EmployeeAccessSetupTab({ token }) {
                     </td>
                     <td className="ledger-text-col">
                       {savingId === e.id && <span className="spinner small" />}
+                      <button className="btn-ghost" onClick={() => handleSetPin(e.id, e.name)}>{e.registered ? 'Change PIN' : 'Set PIN'}</button>
                       {e.registered && <button className="btn-ghost btn-danger" onClick={() => handleReset(e.id)}>Reset PIN</button>}
                     </td>
                   </tr>

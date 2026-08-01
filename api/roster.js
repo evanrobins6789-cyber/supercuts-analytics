@@ -6,9 +6,10 @@
 // every other upload in this app) — this endpoint receives plain rows, not
 // a raw file.
 
-import { createServiceClient, requireSession } from '../src/serverAuth.js';
+import { createServiceClient, requireSession, hashPin, findEmployeeByPin } from '../src/serverAuth.js';
 
 const VALID_ROLES = ['owner', 'district_leader', 'manager', 'employee'];
+const PIN_PATTERN = /^[a-zA-Z0-9]{5,}$/;
 
 // Stable per-name placeholder so re-uploading the SAME still-incomplete row
 // twice doesn't create a duplicate — it always resolves to the same code,
@@ -44,7 +45,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { action, token, rows, id, name, employeeCode, phone, role, storeCodes } = req.body || {};
+  const { action, token, rows, id, name, employeeCode, phone, role, storeCodes, pin } = req.body || {};
   const { employee, error: sessionError } = await requireSession(supabase, token);
   if (!employee) {
     res.status(401).json({ error: sessionError });
@@ -148,6 +149,32 @@ export default async function handler(req, res) {
         return;
       }
       const { error } = await supabase.from('employees').update({ pin_hash: null }).eq('id', id);
+      if (error) throw new Error(error.message);
+      res.status(200).json({ ok: true });
+      return;
+    }
+
+    // Lets the owner set (or overwrite) any employee's PIN directly to a
+    // chosen value — unlike resetPin, this doesn't require the person to go
+    // through "Create a Login" themselves afterward. PINs stay one-way
+    // hashed same as everywhere else (see src/serverAuth.js) — this doesn't
+    // let the owner *view* anyone's existing PIN, only set a new one.
+    if (action === 'setPin') {
+      if (!id || !pin) {
+        res.status(400).json({ error: 'Missing employee id or PIN.' });
+        return;
+      }
+      if (!PIN_PATTERN.test(pin)) {
+        res.status(400).json({ error: 'PIN must be at least 5 letters and/or numbers.' });
+        return;
+      }
+      const clash = await findEmployeeByPin(supabase, pin);
+      if (clash && clash.id !== id) {
+        res.status(409).json({ error: 'That PIN is already in use by someone else — please choose a different one.' });
+        return;
+      }
+      const pinHash = await hashPin(pin);
+      const { error } = await supabase.from('employees').update({ pin_hash: pinHash }).eq('id', id);
       if (error) throw new Error(error.message);
       res.status(200).json({ ok: true });
       return;
