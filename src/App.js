@@ -1635,7 +1635,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
 }
 
 // ─── Stores tab ─────────────────────────────────────────────────────────────
-function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers, canAward, onAward }) {
+function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers, canAward, onAward, isOwner }) {
   const [sortBy, setSortBy] = useState('tsth');
   const [expanded, setExpanded] = useState({});
   const [focused, setFocused] = useState(null);
@@ -1739,23 +1739,27 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
 
       {!sorted.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
 
-      <div className="ledger-scroll">
-        <table className="ledger-table">
-          <tfoot>
-            <tr className="ledger-avg-row">
-              <td className="ledger-name-col">Company (weighted)</td>
-              <td>{fmt$(t.sales)}</td>
-              <td className={`ledger-rate ${tsthClass(t.tsth)}`}>{fmtRate(t.tsth)}</td>
-              <td>{fmtNum(t.totalHours, 0)}</td>
-              <td>{fmt$(t.colorSales)}</td>
-              <td>{fmtNum(t.cpc)}</td>
-              <td>{fmt$(t.retail)}</td>
-              <td>{fmtNum(t.rpc)}</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-      <p className="ledger-footnote">Company row is a true weighted total (e.g. TSTH = total sales ÷ total hours) — ratio metrics are never simply summed or averaged.</p>
+      {isOwner && (
+        <>
+          <div className="ledger-scroll">
+            <table className="ledger-table">
+              <tfoot>
+                <tr className="ledger-avg-row">
+                  <td className="ledger-name-col">Company (weighted)</td>
+                  <td>{fmt$(t.sales)}</td>
+                  <td className={`ledger-rate ${tsthClass(t.tsth)}`}>{fmtRate(t.tsth)}</td>
+                  <td>{fmtNum(t.totalHours, 0)}</td>
+                  <td>{fmt$(t.colorSales)}</td>
+                  <td>{fmtNum(t.cpc)}</td>
+                  <td>{fmt$(t.retail)}</td>
+                  <td>{fmtNum(t.rpc)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <p className="ledger-footnote">Company row is a true weighted total (e.g. TSTH = total sales ÷ total hours) — ratio metrics are never simply summed or averaged.</p>
+        </>
+      )}
     </div>
   );
 }
@@ -1892,7 +1896,7 @@ function getPrevMonthRange() {
 }
 
 // ─── Single-focus store tabs (Retail, Color Sales) — grouped by DL ─────────
-function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers, canAward, onAward }) {
+function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers, canAward, onAward, isOwner }) {
   const [sortBy, setSortBy] = useState(metricA.key);
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
   const [expanded, setExpanded] = useState({});
@@ -2146,22 +2150,24 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                 );
               })}
             </tbody>
-            <tfoot>
-              <tr className="ledger-avg-row">
-                <td className="ledger-name-col">Company (weighted)</td>
-                <td>{metricA.fmt(t[metricA.key])}</td>
-                <td>{metricB.fmt(t[metricB.key])}</td>
-                {showPrevMonthColor && <td>{fmt$(prevMonthColSum(sortedFlat))}</td>}
-                {showGoals && (
-                  <>
-                    <td>{companyGoalTotal > 0 ? fmt$(companyGoalTotal) : '—'}</td>
-                    <td className={companyGoalTotal > 0 ? vsGoalClass(t[metricA.key] - companyGoalTotal) : ''}>
-                      {companyGoalTotal > 0 ? `${t[metricA.key] - companyGoalTotal >= 0 ? '+' : ''}${fmt$(t[metricA.key] - companyGoalTotal)}` : '—'}
-                    </td>
-                  </>
-                )}
-              </tr>
-            </tfoot>
+            {isOwner && (
+              <tfoot>
+                <tr className="ledger-avg-row">
+                  <td className="ledger-name-col">Company (weighted)</td>
+                  <td>{metricA.fmt(t[metricA.key])}</td>
+                  <td>{metricB.fmt(t[metricB.key])}</td>
+                  {showPrevMonthColor && <td>{fmt$(prevMonthColSum(sortedFlat))}</td>}
+                  {showGoals && (
+                    <>
+                      <td>{companyGoalTotal > 0 ? fmt$(companyGoalTotal) : '—'}</td>
+                      <td className={companyGoalTotal > 0 ? vsGoalClass(t[metricA.key] - companyGoalTotal) : ''}>
+                        {companyGoalTotal > 0 ? `${t[metricA.key] - companyGoalTotal >= 0 ? '+' : ''}${fmt$(t[metricA.key] - companyGoalTotal)}` : '—'}
+                      </td>
+                    </>
+                  )}
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
       )}
@@ -2169,7 +2175,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
       {viewMode === 'dl' && !filteredGroups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
       {viewMode === 'flat' && !sortedFlat.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
 
-      {viewMode === 'dl' && (
+      {viewMode === 'dl' && isOwner && (
         <div className="ledger-scroll">
           <table className="ledger-table">
             <tfoot>
@@ -6150,7 +6156,7 @@ export default function App() {
         <div className="header-left">
           <HeaderLogo />
           <div>
-            <h1 className="app-title">Supercuts Metrics</h1>
+            <h1 className="app-title">SUPERCUTS</h1>
             <p className="app-subtitle">{label || 'Weekly performance across every location'}</p>
           </div>
         </div>
@@ -6177,7 +6183,7 @@ export default function App() {
           <OverviewTab report={report} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} />
         )}
         {!needsReport && tab === 'Stores' && (report || hasHistoricalData) && (
-          <StoresTab report={report} query={queries.Stores} onQuery={v => setQuery('Stores', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
+          <StoresTab report={report} query={queries.Stores} onQuery={v => setQuery('Stores', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'} />
         )}
         {!needsReport && tab === 'Employees' && (report || hasHistoricalData) && (
           <EmployeesTab report={report} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
@@ -6188,7 +6194,7 @@ export default function App() {
             title="Retail" metricA={{ key: 'retail', label: 'Retail', fmt: fmt$ }} metricB={{ key: 'rpc', label: 'RPC', fmt: fmtNum }}
             goalType="retailGoal" goals={goals}
             history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
-            managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints}
+            managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
           />
         )}
         {!needsReport && tab === 'Color Sales' && (report || hasHistoricalData) && (
@@ -6197,7 +6203,7 @@ export default function App() {
             title="Color Sales" metricA={{ key: 'colorSales', label: 'Color Sales', fmt: fmt$ }} metricB={{ key: 'cpc', label: 'CPC', fmt: fmtNum }}
             goalType="colorGoal" goals={goals}
             history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
-            canAward={currentUser.role === 'owner'} onAward={handleAwardPoints}
+            canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
             showPrevMonthColor
             managers={managers}
           />
