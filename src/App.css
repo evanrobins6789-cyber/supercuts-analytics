@@ -24,6 +24,7 @@
   padding: 22px 20px 16px; background: var(--navy); color: #fff;
 }
 .header-left { display: flex; align-items: center; gap: 12px; }
+.header-logo-img { height: 34px; width: auto; display: block; }
 .app-title {
   font-family: 'Barlow Condensed', sans-serif;
   font-weight: 700; font-size: 30px; letter-spacing: 0.01em; text-transform: uppercase;
@@ -103,6 +104,8 @@
   max-width: 320px; margin: 60px auto; text-align: center; background: var(--card);
   border: 1px solid var(--line); border-radius: 14px; padding: 32px 24px; box-shadow: var(--shadow);
 }
+.login-wordmark { display: block; height: 26px; width: auto; margin: 0 auto 18px; }
+.login-robin-badge { display: block; height: 64px; width: auto; margin: 0 auto 14px; }
 .password-gate-title { font-family: 'Barlow Condensed', sans-serif; font-size: 22px; font-weight: 600; color: var(--navy); margin-bottom: 6px; }
 .password-gate-hint { font-size: 12.5px; color: var(--ink-soft); margin-bottom: 16px; }
 .password-input {
@@ -427,6 +430,7 @@
   box-shadow: 0 4px 14px rgba(0,0,0,0.25); z-index: 1000; display: flex; align-items: center; justify-content: center;
 }
 .ai-chat-fab-close { font-size: 26px; color: var(--red); font-weight: 700; }
+.ai-chat-fab-robin { width: 52px; height: 52px; object-fit: contain; border-radius: 50%; }
 .ai-chat-fab:hover { transform: scale(1.05); }
 .ai-chat-panel {
   position: fixed; bottom: 106px; right: 24px; width: 420px; max-width: calc(100vw - 32px); max-height: 72vh;

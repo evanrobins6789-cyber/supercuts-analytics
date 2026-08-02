@@ -16,6 +16,9 @@ import {
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
 import { BITMOJI_POOLS } from './bitmoji';
+import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
+import supercutsWordmarkBlue from './assets/branding/supercuts-wordmark-blue.png';
+import gcRobinBadge from './assets/branding/gc-robin-badge.png';
 import './App.css';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip);
@@ -81,8 +84,10 @@ function LoginScreen({ onLoggedIn }) {
     <div className="app">
       <div className="login-screen">
         <div className="password-gate login-card">
+          <img src={supercutsWordmarkBlue} alt="Supercuts" className="login-wordmark" />
           {mode === 'choice' && (
             <>
+              <img src={gcRobinBadge} alt="" className="login-robin-badge" />
               <p className="password-gate-title">🔒 Supercuts Metrics</p>
               <p className="password-gate-hint">Sign in with your PIN, or create a login if this is your first time.</p>
               <button className="btn-primary" onClick={() => goTo('signin')}>Sign In</button>
@@ -4477,46 +4482,6 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   return lines.join('\n');
 }
 
-// Small badge for the header, next to the title — a scissors mark in the
-// app's own navy/red/gold palette (ties into "Supercuts" and the Cuts metric).
-function HeaderLogo({ size = 36 }) {
-  return (
-    <svg viewBox="0 0 40 40" width={size} height={size} xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <circle cx="20" cy="20" r="19" fill="#C23B3B" stroke="#C9A227" strokeWidth="1.5" />
-      <g stroke="#fff" strokeWidth="2.1" strokeLinecap="round" fill="none">
-        <line x1="14" y1="14" x2="26" y2="26" />
-        <line x1="26" y1="14" x2="14" y2="26" />
-      </g>
-      <circle cx="13" cy="13" r="2.6" fill="none" stroke="#fff" strokeWidth="1.8" />
-      <circle cx="13" cy="27" r="2.6" fill="none" stroke="#fff" strokeWidth="1.8" />
-    </svg>
-  );
-}
-
-function RobinNestIcon({ size = 28 }) {
-  return (
-    <svg viewBox="0 0 40 40" width={size} height={size} xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id="robinBody" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#6B8CA3" />
-          <stop offset="100%" stopColor="#3F5A6E" />
-        </linearGradient>
-      </defs>
-      <ellipse cx="20" cy="31" rx="16" ry="5.5" fill="#B5722F" />
-      <path d="M5 30.5 Q20 25 35 30.5" stroke="#8A5423" strokeWidth="1.6" fill="none" strokeLinecap="round" />
-      <path d="M7 28 Q20 23.5 33 28" stroke="#8A5423" strokeWidth="1.6" fill="none" strokeLinecap="round" />
-      <path d="M9.5 25.8 Q20 22 30.5 25.8" stroke="#8A5423" strokeWidth="1.4" fill="none" strokeLinecap="round" />
-      <path d="M8 21 Q3 22.5 4 26 Q8.5 24.5 11 21.5 Z" fill="#3F5A6E" />
-      <ellipse cx="20.5" cy="20" rx="9.5" ry="8.5" fill="url(#robinBody)" />
-      <ellipse cx="20" cy="24" rx="6.2" ry="5.2" fill="#D9714B" />
-      <circle cx="21" cy="11.5" r="6.2" fill="url(#robinBody)" />
-      <circle cx="23" cy="10.5" r="1.7" fill="#fff" />
-      <circle cx="23.4" cy="10.5" r="0.9" fill="#1A1A1A" />
-      <path d="M27 11.8 L31 12.8 L27 14 Z" fill="#E8A33D" />
-    </svg>
-  );
-}
-
 function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
@@ -4548,7 +4513,7 @@ function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory
   return (
     <>
       <button className="ai-chat-fab" onClick={() => setOpen(o => !o)} aria-label="Chat with Tilly">
-        {open ? <span className="ai-chat-fab-close">✕</span> : <RobinNestIcon size={38} />}
+        {open ? <span className="ai-chat-fab-close">✕</span> : <img src={gcRobinBadge} alt="" className="ai-chat-fab-robin" />}
       </button>
       {open && (
         <div className="ai-chat-panel">
@@ -6154,9 +6119,8 @@ export default function App() {
 
       <header className="app-header">
         <div className="header-left">
-          <HeaderLogo />
+          <img src={supercutsWordmarkWhite} alt="Supercuts" className="header-logo-img" />
           <div>
-            <h1 className="app-title">SUPERCUTS</h1>
             <p className="app-subtitle">{label || 'Weekly performance across every location'}</p>
           </div>
         </div>
