@@ -700,18 +700,24 @@
   display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px;
   background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
 }
-.homepage-cal-cell { background: var(--card); min-height: 116px; padding: 8px; display: flex; flex-direction: column; gap: 3px; }
+/* A fixed height (not min-height) is deliberate — every cell in the grid
+   must be identical regardless of how many events land on that day, or
+   different weeks end up different heights (whichever row has the busiest
+   day stretches, every other row doesn't). overflow: hidden + the
+   slice(0,3)/"+N more" in EventsCalendar below keep a packed day from
+   pushing past this fixed box instead of growing it. */
+.homepage-cal-cell { background: var(--card); height: 128px; padding: 8px; display: flex; flex-direction: column; gap: 3px; overflow: hidden; }
 .homepage-cal-cell--empty { background: var(--paper); }
 .homepage-cal-cell--today { box-shadow: inset 0 0 0 2px var(--red); }
-.homepage-cal-daynum { font-family: 'IBM Plex Mono', monospace; font-size: 14px; color: var(--ink-soft); }
+.homepage-cal-daynum { font-family: 'IBM Plex Mono', monospace; font-size: 14px; color: var(--ink-soft); flex: none; }
 .homepage-cal-cell--today .homepage-cal-daynum { color: var(--red-deep); font-weight: 700; }
 .homepage-cal-pill {
   font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600; color: #fff; background: var(--navy-2);
-  border-radius: 5px; padding: 3px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-radius: 5px; padding: 3px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none;
 }
-.homepage-cal-more { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--ink-soft); }
+.homepage-cal-more { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--ink-soft); flex: none; }
 @media (max-width: 640px) {
-  .homepage-cal-cell { min-height: 64px; }
+  .homepage-cal-cell { height: 68px; }
   .homepage-cal-pill, .homepage-cal-more { display: none; }
 }
 
