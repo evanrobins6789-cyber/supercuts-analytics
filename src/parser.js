@@ -804,7 +804,7 @@ export async function parseSalesAccrualFile(file) {
     const soldBy = col.soldBy !== -1 ? cellText(row[col.soldBy]) : '';
 
     const key = `${code}|${isoDate}`;
-    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, employees: {} });
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, employees: {}, products: {} });
     const rec = daily.get(key);
     const employeeFor = name => {
       if (!name) return null;
@@ -823,6 +823,18 @@ export async function parseSalesAccrualFile(file) {
       const emp = employeeFor(name);
       if (emp) emp.retail += amount;
     };
+    // Per-product breakdown for the Retail tab's "Products" view — only
+    // meaningful when this export has a real Item Type column (the "Product"
+    // rows this branch already isolates for the retail $ total); the older
+    // name-heuristic branch below has no equally reliable signal for which
+    // rows are genuinely one distinct product vs. a service line that merely
+    // looks retail-shaped, so it's deliberately left out of product tracking.
+    const addProduct = () => {
+      if (!itemName) return;
+      if (!rec.products[itemName]) rec.products[itemName] = { qty: 0, amount: 0 };
+      rec.products[itemName].qty += qty;
+      rec.products[itemName].amount += amount;
+    };
 
     if (hasExactTypes) {
       const itemType = cellText(row[col.itemType]).trim();
@@ -831,6 +843,7 @@ export async function parseSalesAccrualFile(file) {
       if (itemType === 'Product') {
         rec.retail += amount;
         addRetail(soldBy || stylist);
+        addProduct();
       } else {
         rec.service += amount;
         const category = col.itemCategory !== -1 ? cellText(row[col.itemCategory]) : '';
@@ -877,6 +890,9 @@ export async function parseSalesAccrualFile(file) {
       signatureS: Math.round(v.signatureS * 100) / 100,
       signatureSCount: Math.round(v.signatureSCount * 100) / 100,
     })),
+    products: Object.fromEntries(
+      Object.entries(r.products).map(([name, v]) => [name, { qty: Math.round(v.qty * 100) / 100, amount: Math.round(v.amount * 100) / 100 }])
+    ),
   }));
   return { records, fileName: file.name };
 }
@@ -944,9 +960,10 @@ export function mergeSalesIntoHistory(history, salesRecords) {
   const next = { ...history };
   salesRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, signatureSCount: null, employees: {} };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, signatureSCount: null, employees: {}, products: {} };
     next[key] = {
       ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards, haircuts: r.haircuts, signatureS: r.signatureS, signatureSCount: r.signatureSCount,
+      products: r.products || {},
       employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales', 'haircuts', 'retail', 'signatureS', 'signatureSCount']),
     };
   });

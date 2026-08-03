@@ -438,6 +438,12 @@ function groupStoresByLeader(storeRows) {
 // any day already covered by SOME weekly report is skipped from the daily
 // (Sales-Accrual/Attendance) bucket either way, so nothing is ever counted twice.
 const EMPTY_RANGE_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0 };
+// `products` is deliberately NOT part of the EMPTY_RANGE_TOTALS constant
+// above — that object gets shallow-copied (`{ ...EMPTY_RANGE_TOTALS }`) once
+// per store, and a nested object baked into a shared constant would hand
+// every store the SAME `products` reference, so one store's product totals
+// would silently bleed into every other store's. getRangeTotals below always
+// attaches a fresh `products: {}` per store instead.
 function addRangeInto(target, src) {
   target.service += src.service || 0;
   target.retail += src.retail || 0;
@@ -447,6 +453,13 @@ function addRangeInto(target, src) {
   target.haircuts += src.haircuts || 0;
   target.signatureS += src.signatureS || 0;
   target.signatureSCount += src.signatureSCount || 0;
+  if (src.products) {
+    Object.entries(src.products).forEach(([name, v]) => {
+      if (!target.products[name]) target.products[name] = { qty: 0, amount: 0 };
+      target.products[name].qty += v.qty || 0;
+      target.products[name].amount += v.amount || 0;
+    });
+  }
 }
 function expandDateRangeDays(start, end) {
   const dates = [];
@@ -495,7 +508,7 @@ function getRangeTotals(history, weeklyHistory, startISO, endISO) {
   const byStore = {};
   const employeesByStore = {};
   const addTo = (code, src) => {
-    if (!byStore[code]) byStore[code] = { ...EMPTY_RANGE_TOTALS };
+    if (!byStore[code]) byStore[code] = { ...EMPTY_RANGE_TOTALS, products: {} };
     addRangeInto(byStore[code], src);
   };
   weeklyEntries.forEach(w => {
@@ -515,12 +528,15 @@ function getRangeTotals(history, weeklyHistory, startISO, endISO) {
       // A weekly Stylist Report upload covers this day for every OTHER
       // field (it's the more authoritative source, hence `covered`
       // skipping the daily record entirely below) — but the Stylist Report
-      // has no item-level detail, so it never carries Signature S at all.
-      // Pulling just signatureS/signatureSCount from the daily
+      // has no item-level detail, so it never carries Signature S (or a
+      // product breakdown) at all. Pulling those straight from the daily
       // Sales-Accrual record here can't double-count anything, since the
-      // weekly source's contribution to those two fields is always zero.
+      // weekly source's contribution to them is always zero.
       if (r.signatureS || r.signatureSCount) {
         addTo(r.code, { signatureS: r.signatureS, signatureSCount: r.signatureSCount });
+      }
+      if (r.products && Object.keys(r.products).length) {
+        addTo(r.code, { products: r.products });
       }
       if (r.employees && Object.keys(r.employees).length) {
         const sigOnly = Object.entries(r.employees)
@@ -571,6 +587,7 @@ function historyTotalsToReportShape(t) {
     rpc: haircuts > 0 ? (t.retail || 0) / haircuts : null,
     cph: hours > 0 ? haircuts / hours : null,
     employees: t?.employees || [],
+    products: t?.products || {},
   };
 }
 
@@ -2064,9 +2081,9 @@ function getPrevMonthRange() {
 }
 
 // ─── Single-focus store tabs (Retail, Color Sales) — grouped by DL ─────────
-function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers, canAward, onAward, isOwner }) {
+function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers, canAward, onAward, isOwner, showProducts }) {
   const [sortBy, setSortBy] = useState(metricA.key);
-  const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
+  const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat' | 'products'
   const [expanded, setExpanded] = useState({});
   const [expandedLeader, setExpandedLeader] = useState({});
   const [focused, setFocused] = useState(null);
@@ -2112,6 +2129,43 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   const toggleStore = code => setExpanded(prev => ({ ...prev, [code]: !prev[code] }));
   const toggleLeader = name => setExpandedLeader(prev => ({ ...prev, [name]: !prev[name] }));
 
+  // Products view (Retail only, gated by `showProducts`) always derives from
+  // Sales-Accrual historical data directly, regardless of whether a live
+  // Stylist Report is currently active for the rest of this tab — same
+  // reasoning as Signature S elsewhere: the weekly report never carries
+  // item-level detail, so there's nothing else to prefer here.
+  const productRows = useMemo(() => {
+    if (!showProducts) return [];
+    const totals = getRangeTotals(history, weeklyHistory, effectiveRange.start, effectiveRange.end);
+    return Object.entries(totals).map(([code, t]) => ({ code, name: STORE_CODE_TO_NAME[code] || `Store ${code}`, products: t.products || {} }));
+  }, [showProducts, history, weeklyHistory, effectiveRange.start, effectiveRange.end]);
+  const productGroups = useMemo(() => (showProducts ? groupStoresByLeader(productRows) : []), [showProducts, productRows]);
+  const filteredProductGroups = useMemo(() => {
+    if (!query.trim()) return productGroups;
+    const q = query.trim().toLowerCase();
+    return productGroups
+      .map(g => {
+        const leaderMatches = g.leaderName.toLowerCase().includes(q);
+        const stores = leaderMatches ? g.stores : g.stores.filter(s => s.name.toLowerCase().includes(q));
+        return { ...g, stores };
+      })
+      .filter(g => g.stores.length > 0);
+  }, [productGroups, query]);
+  const mergeProducts = storesArr => {
+    const merged = {};
+    storesArr.forEach(s => {
+      Object.entries(s.products || {}).forEach(([name, v]) => {
+        if (!merged[name]) merged[name] = { qty: 0, amount: 0 };
+        merged[name].qty += v.qty || 0;
+        merged[name].amount += v.amount || 0;
+      });
+    });
+    return merged;
+  };
+  const productLeaderboardRows = productsMap => Object.entries(productsMap).map(([name, v]) => ({ name, amount: v.amount, qty: v.qty }));
+  const productFmt = (amount, row) => `${fmt$(amount)}${row?.qty ? ` · ${fmtInt(Math.round(row.qty))} sold` : ''}`;
+  const companyProducts = useMemo(() => mergeProducts(productRows), [productRows]);
+
   const filteredGroups = useMemo(() => {
     if (!query.trim()) return groups;
     const q = query.trim().toLowerCase();
@@ -2149,6 +2203,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
       <div className="view-toggle">
         <button className={`view-toggle-btn ${viewMode === 'dl' ? 'active' : ''}`} onClick={() => setViewMode('dl')}>Grouped by DL</button>
         <button className={`view-toggle-btn ${viewMode === 'flat' ? 'active' : ''}`} onClick={() => setViewMode('flat')}>All Stores</button>
+        {showProducts && <button className={`view-toggle-btn ${viewMode === 'products' ? 'active' : ''}`} onClick={() => setViewMode('products')}>Products</button>}
       </div>
 
       <div className="ledger-head-row">
@@ -2337,6 +2392,46 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
               </tfoot>
             )}
           </table>
+        </div>
+      )}
+
+      {viewMode === 'products' && (
+        <div className="product-view">
+          <Leaderboard rows={productLeaderboardRows(companyProducts)} metric="amount" formatter={productFmt} title="🏆 Top 10 Products — Company-Wide" count={10} order="desc" />
+          {!filteredProductGroups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
+          {filteredProductGroups.map(g => {
+            const isLeaderOpen = !!expandedLeader[g.leaderName];
+            const groupProducts = mergeProducts(g.stores);
+            return (
+              <div key={g.leaderName} className="dl-card">
+                <button className="dl-card-head" onClick={() => toggleLeader(g.leaderName)}>
+                  <div className="dl-card-name-wrap">
+                    <span className={`dl-chevron ${isLeaderOpen ? 'dl-chevron--open' : ''}`}>▸</span>
+                    <span className="dl-card-name">{g.leaderName}</span>
+                    <span className="dl-card-count">{g.role} · {g.stores.length} store{g.stores.length !== 1 ? 's' : ''}</span>
+                  </div>
+                </button>
+                {isLeaderOpen && (
+                  <div className="product-group-body">
+                    <Leaderboard rows={productLeaderboardRows(groupProducts)} metric="amount" formatter={productFmt} title={`Top 10 — ${g.leaderName}'s Group`} count={10} order="desc" />
+                    {g.stores.map(s => {
+                      const isStoreOpen = !!expanded[s.code];
+                      return (
+                        <div key={s.code} className="product-store-block">
+                          <button className="btn-ghost product-store-toggle" onClick={() => toggleStore(s.code)}>
+                            <span className={`mini-chevron ${isStoreOpen ? 'mini-chevron--open' : ''}`}>▸</span> {s.name}
+                          </button>
+                          {isStoreOpen && (
+                            <Leaderboard rows={productLeaderboardRows(s.products)} metric="amount" formatter={productFmt} title={`Top 10 — ${s.name}`} count={10} order="desc" />
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -4536,6 +4631,29 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       if (line) lines.push(`${m.month} — ${line}`);
     });
 
+    // Retail's own item-level breakdown (Item Type "Product" rows from the
+    // Sales-Accrual export) — company-wide top 5 by $ per month. Only ever
+    // populated by Sales-Accrual imports (the weekly Stylist Report has no
+    // item-level detail at all), same source/limitation as Signature S.
+    lines.push('');
+    lines.push('TOP PRODUCTS BY MONTH, COMPANY-WIDE (top 5 by $ sold — retail products only, from Sales-Accrual imports; a month missing here means no product-level data exists for that period):');
+    months.forEach(m => {
+      const totals = monthlyTotals.get(m.month);
+      const companyProducts = {};
+      Object.values(totals).forEach(t => {
+        Object.entries(t.products || {}).forEach(([name, v]) => {
+          if (!companyProducts[name]) companyProducts[name] = { qty: 0, amount: 0 };
+          companyProducts[name].qty += v.qty || 0;
+          companyProducts[name].amount += v.amount || 0;
+        });
+      });
+      const top5 = Object.entries(companyProducts).sort((a, b) => b[1].amount - a[1].amount).slice(0, 5);
+      if (top5.length) {
+        const line = top5.map(([name, v]) => `${name} ($${Math.round(v.amount)}, ${Math.round(v.qty)} sold)`).join('; ');
+        lines.push(`${m.month} — ${line}`);
+      }
+    });
+
     // Per-store, not just company-wide — needed for anything scoped to a
     // specific leader's stores ("who sold the most retail in Amber's
     // stores in November"): resolve the leader's stores from the DL roster
@@ -6531,6 +6649,7 @@ export default function App() {
             goalType="retailGoal" goals={goals}
             history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
             managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
+            showProducts
           />
         )}
         {!needsReport && tab === 'Color Sales' && (report || hasHistoricalData) && (

@@ -822,3 +822,13 @@
 .hsa-roster-remove { padding: 1px 7px; font-size: 11px; }
 .hsa-type-group { margin-bottom: 18px; }
 .hsa-type-group-count { font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 400; color: var(--ink-soft); }
+
+/* ─── Retail "Products" view ─────────────────────────────────────────────── */
+.product-view { display: flex; flex-direction: column; gap: 14px; }
+.product-group-body { padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+.product-store-block { border-top: 1px dashed var(--line); padding-top: 8px; }
+.product-store-toggle {
+  background: none; border: none; color: var(--navy); font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 600;
+  cursor: pointer; padding: 4px 0; display: flex; align-items: center; gap: 4px;
+}
+.product-store-toggle:hover { color: var(--red-deep); }
