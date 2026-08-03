@@ -4779,10 +4779,15 @@ function EmployeeAccessSetupTab({ token }) {
 // in Vercel's env vars and the user's private Apps Script project.
 function EmailReportsSetupTab() {
   const webhookUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/email-report` : 'https://YOUR-SITE.vercel.app/api/email-report';
-  const script = `// Google Apps Script — forwards labeled Gmail attachments to the site
-// so weekly reports upload themselves. Paste this whole file in at
+  const script = `// Google Apps Script — forwards labeled Gmail reports to the site so
+// weekly reports upload themselves. Paste this whole file in at
 // script.google.com as a new project, fill in SHARED_SECRET below, then
 // follow the numbered steps in Setup > Email Reports.
+//
+// Handles two shapes of report email: a real file attachment (e.g. the
+// Stylist Report export), or a "click here to download" link with no
+// attachment at all (e.g. a Rallio review export) — the link's file is
+// fetched directly instead, as long as it's a plain unauthenticated URL.
 
 const WEBHOOK_URL = '${webhookUrl}';
 const SHARED_SECRET = 'PASTE_YOUR_SECRET_HERE'; // must exactly match EMAIL_INGEST_SECRET in Vercel
@@ -4804,32 +4809,73 @@ function processLabel(labelName, type) {
   if (!label) return; // label doesn't exist in this Gmail account — skip it
   label.getThreads().forEach(thread => {
     thread.getMessages().forEach(message => {
-      if (message.isUnread() && message.getAttachments().length > 0) {
-        processMessage(message, type, labelName);
+      if (!message.isUnread()) return;
+      const attachments = message.getAttachments();
+      if (attachments.length > 0) {
+        processAttachment(message, attachments, type, labelName);
+      } else {
+        processLinkedFile(message, type, labelName);
       }
     });
   });
 }
 
-function processMessage(message, type, labelName) {
-  const attachments = message.getAttachments();
+// The normal case — a real file attached to the email.
+function processAttachment(message, attachments, type, labelName) {
   const attachment = attachments.find(a => /\\.(xlsx|xls|csv)$/i.test(a.getName())) || attachments[0];
   try {
     const contentBase64 = Utilities.base64Encode(attachment.getBytes());
-    const response = UrlFetchApp.fetch(WEBHOOK_URL, {
-      method: 'post',
-      contentType: 'application/json',
-      payload: JSON.stringify({ secret: SHARED_SECRET, type, fileName: attachment.getName(), contentBase64 }),
-      muteHttpExceptions: true,
-    });
-    const status = response.getResponseCode();
-    if (status >= 200 && status < 300) {
-      message.markRead();
-    } else {
-      notifyFailure(labelName, attachment.getName(), \`HTTP \${status}: \${response.getContentText()}\`);
-    }
+    sendToWebhook(message, type, labelName, attachment.getName(), contentBase64);
   } catch (err) {
     notifyFailure(labelName, attachment.getName(), err.message);
+  }
+}
+
+// Some report emails don't attach a file at all — they link to one hosted
+// elsewhere. Pull the first csv/xlsx/xls link out of the email's HTML body
+// and fetch it directly. Prefers an amazonaws.com (S3) link since that's
+// the known-good pattern for a Rallio review export, but falls back to any
+// matching link so a differently-hosted export still has a chance to work.
+const FILE_LINK_PATTERNS = [
+  /href="([^"]*amazonaws\\.com[^"]+\\.(?:csv|xlsx|xls)(?:\\?[^"]*)?)"/i,
+  /href="([^"]+\\.(?:csv|xlsx|xls)(?:\\?[^"]*)?)"/i,
+];
+function findFileLink(body) {
+  for (const re of FILE_LINK_PATTERNS) {
+    const m = body.match(re);
+    if (m) return m[1].replace(/&amp;/g, '&');
+  }
+  return null;
+}
+function processLinkedFile(message, type, labelName) {
+  const url = findFileLink(message.getBody());
+  if (!url) return; // no attachment and no recognizable link — nothing to grab, will retry next run
+  const fileName = (url.split('/').pop() || 'email-download').split('?')[0];
+  try {
+    const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    if (response.getResponseCode() >= 300) {
+      notifyFailure(labelName, fileName, \`Could not download the linked file (HTTP \${response.getResponseCode()}). It may require a login the script can't provide.\`);
+      return;
+    }
+    const contentBase64 = Utilities.base64Encode(response.getBlob().getBytes());
+    sendToWebhook(message, type, labelName, fileName, contentBase64);
+  } catch (err) {
+    notifyFailure(labelName, fileName, err.message);
+  }
+}
+
+function sendToWebhook(message, type, labelName, fileName, contentBase64) {
+  const response = UrlFetchApp.fetch(WEBHOOK_URL, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ secret: SHARED_SECRET, type, fileName, contentBase64 }),
+    muteHttpExceptions: true,
+  });
+  const status = response.getResponseCode();
+  if (status >= 200 && status < 300) {
+    message.markRead();
+  } else {
+    notifyFailure(labelName, fileName, \`HTTP \${status}: \${response.getContentText()}\`);
   }
 }
 
@@ -4845,7 +4891,7 @@ function notifyFailure(labelName, fileName, detail) {
     <div className="setup-section">
       <div className="setup-sql-card">
         <p className="chart-title">Auto-upload reports from a Gmail email</p>
-        <p className="step-body">Wires a Gmail label to this site: when a labeled email with an attachment arrives, a small script — running on a timer inside your own Google account, nothing new to host — uploads it automatically, the same way the Upload tab does it by hand.</p>
+        <p className="step-body">Wires a Gmail label to this site: when a labeled email arrives, a small script — running on a timer inside your own Google account, nothing new to host — uploads it automatically, the same way the Upload tab does it by hand. Works whether the report comes as a real file attachment, or as a "click here to download" link with no attachment (like a Rallio review export) — the script fetches the linked file directly as long as the link doesn't require logging in first.</p>
       </div>
       <div className="setup-step">
         <div className="step-num">1</div>
