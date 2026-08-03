@@ -41,7 +41,7 @@ export const STORE_CODE_TO_NAME = {
   "8844": "Wynnewood",
   "81416": "Fairfax",
   "89080": "Parkesburg",
-  "82262": "Valley View",
+  "82262": "Naamans",
   "80185": "Frazer",
   "82179": "Malvern",
   "80661": "Bordentown",
@@ -72,7 +72,7 @@ const ALIASES = {
   'king of prussia': '80108',  // roster calls this "KOP"
   'kop': '80108',
   'broadcasting': '82993',     // roster calls this "Broadcasting Sq"
-  'naamans': '82262',          // stylist report calls this "Valley View"
+  'valley view': '82262',      // old name — stylist report may still call this "Valley View"
   'morrell plaza': '80684',    // Master Salon List calls this "Morrell"
   'sinking springs': '80014',  // Master Salon List calls this "Sinking Spring" (singular)
 };
