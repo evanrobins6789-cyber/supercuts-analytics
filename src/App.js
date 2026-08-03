@@ -1245,8 +1245,8 @@ function EventsCalendar({ events, todayISO }) {
           return (
             <div key={i} className={`homepage-cal-cell ${iso === todayISO ? 'homepage-cal-cell--today' : ''}`}>
               <span className="homepage-cal-daynum">{day}</span>
-              {dayEvents.slice(0, 2).map(ev => <span key={ev.id} className="homepage-cal-pill" style={ev.color ? { background: ev.color } : undefined} title={ev.title}>{ev.title}</span>)}
-              {dayEvents.length > 2 && <span className="homepage-cal-more">+{dayEvents.length - 2} more</span>}
+              {dayEvents.slice(0, 3).map(ev => <span key={ev.id} className="homepage-cal-pill" style={ev.color ? { background: ev.color } : undefined} title={ev.title}>{ev.title}</span>)}
+              {dayEvents.length > 3 && <span className="homepage-cal-more">+{dayEvents.length - 3} more</span>}
             </div>
           );
         })}
@@ -1534,19 +1534,30 @@ function HsaSignUpForm({ onSubmit, defaultName }) {
   const [name, setName] = useState(defaultName || '');
   const [store, setStore] = useState('');
   const storeNames = useMemo(() => [...new Set(Object.values(STORE_CODE_TO_NAME))].sort(), []);
+  // DL is derived from the store, not a fourth thing to type — the app
+  // already has an authoritative store → DL mapping (LEADER_ROSTER_SECTIONS)
+  // used everywhere else, so letting someone free-type their own DL name
+  // would just invite typos/mismatches against the store they picked.
+  const dl = useMemo(() => {
+    if (!store) return '';
+    const code = getCodeForStoreName(store);
+    const info = code ? getLeaderForStoreCode(code) : null;
+    return info ? info.leaderName : 'Unassigned';
+  }, [store]);
   const submit = e => {
     e.preventDefault();
-    if (!name.trim()) return;
-    onSubmit(name, store);
+    if (!name.trim() || !store) return;
+    onSubmit(name, store, dl);
   };
   return (
     <form className="hsa-signup-form" onSubmit={submit}>
       <input className="text-input" placeholder="Your name" value={name} onChange={e => setName(e.target.value)} autoFocus />
-      <select className="sort-select" value={store} onChange={e => setStore(e.target.value)}>
-        <option value="">Store (optional)</option>
+      <select className="sort-select" value={store} onChange={e => setStore(e.target.value)} required>
+        <option value="">Store…</option>
         {storeNames.map(n => <option key={n} value={n}>{n}</option>)}
       </select>
-      <button type="submit" className="btn-primary" disabled={!name.trim()}>Confirm</button>
+      <span className="hsa-dl-preview">{store ? `DL: ${dl}` : ''}</span>
+      <button type="submit" className="btn-primary" disabled={!name.trim() || !store}>Confirm</button>
     </form>
   );
 }
@@ -1570,7 +1581,7 @@ function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemo
       {signingUp && (
         <HsaSignUpForm
           defaultName={currentUserName}
-          onSubmit={(name, store) => { onSignUp(cls, name, store); setSigningUp(false); }}
+          onSubmit={(name, store, dl) => { onSignUp(cls, name, store, dl); setSigningUp(false); }}
         />
       )}
       <div className="hsa-roster">
@@ -1579,7 +1590,7 @@ function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemo
           <ul className="hsa-roster-list">
             {signups.map(s => (
               <li key={s.id}>
-                {s.name}{s.store ? ` (${s.store})` : ''}
+                {s.name}{s.store ? ` — ${s.store}` : ''}{s.dl ? ` (DL: ${s.dl})` : ''}
                 {isOwner && <button className="btn-ghost btn-danger hsa-roster-remove" onClick={() => onRemoveSignup(s.id)}>✕</button>}
               </li>
             ))}
@@ -1593,6 +1604,7 @@ function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemo
 function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup }) {
   const [query, setQuery] = useState('');
   const [showPast, setShowPast] = useState(false);
+  const [groupByType, setGroupByType] = useState(false);
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const classes = useMemo(() => {
@@ -1604,6 +1616,28 @@ function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup }) {
       .sort((a, b) => a.date.localeCompare(b.date) || a.eventType.localeCompare(b.eventType));
   }, [events, query, showPast, todayISO]);
 
+  // Grouped by class type (the "Event" column — HSA, HSA Cert, Manager
+  // Training, Fade Class, etc.), groups in alphabetical order, classes
+  // within a group staying date-sorted from the `classes` memo above.
+  const groups = useMemo(() => {
+    if (!groupByType) return null;
+    const byType = new Map();
+    classes.forEach(cls => {
+      if (!byType.has(cls.eventType)) byType.set(cls.eventType, []);
+      byType.get(cls.eventType).push(cls);
+    });
+    return [...byType.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [classes, groupByType]);
+
+  const renderCard = cls => (
+    <HsaClassCard
+      key={cls.id} cls={cls}
+      signups={hsaSignups.filter(s => s.classId === cls.id)}
+      isOwner={currentUser.role === 'owner'} currentUserName={currentUser.name}
+      onSignUp={onSignUp} onRemoveSignup={onRemoveSignup}
+    />
+  );
+
   return (
     <div className="tab-content">
       <p className="section-hint">Hair Stylist Academy — sign up for a class below. Everyone can see who's already signed up. Classes are uploaded by the owner in Setup &gt; HSA.</p>
@@ -1612,19 +1646,21 @@ function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup }) {
         <button className={`view-toggle-btn ${!showPast ? 'active' : ''}`} onClick={() => setShowPast(false)}>Upcoming</button>
         <button className={`view-toggle-btn ${showPast ? 'active' : ''}`} onClick={() => setShowPast(true)}>All (incl. past)</button>
       </div>
+      <div className="view-toggle">
+        <button className={`view-toggle-btn ${!groupByType ? 'active' : ''}`} onClick={() => setGroupByType(false)}>By Date</button>
+        <button className={`view-toggle-btn ${groupByType ? 'active' : ''}`} onClick={() => setGroupByType(true)}>By Class Type</button>
+      </div>
       {!classes.length ? (
         <p className="empty-note">{showPast ? 'No classes match your search.' : 'No upcoming classes on file — check back once a new schedule is uploaded.'}</p>
+      ) : groupByType ? (
+        groups.map(([eventType, groupClasses]) => (
+          <div key={eventType} className="hsa-type-group">
+            <p className="section-label">{eventType} <span className="hsa-type-group-count">({groupClasses.length})</span></p>
+            <div className="hsa-class-list">{groupClasses.map(renderCard)}</div>
+          </div>
+        ))
       ) : (
-        <div className="hsa-class-list">
-          {classes.map(cls => (
-            <HsaClassCard
-              key={cls.id} cls={cls}
-              signups={hsaSignups.filter(s => s.classId === cls.id)}
-              isOwner={currentUser.role === 'owner'} currentUserName={currentUser.name}
-              onSignUp={onSignUp} onRemoveSignup={onRemoveSignup}
-            />
-          ))}
-        </div>
+        <div className="hsa-class-list">{classes.map(renderCard)}</div>
       )}
     </div>
   );
@@ -4320,7 +4356,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     const todayISO = new Date().toISOString().slice(0, 10);
     lines.push('HSA CLASS SIGN-UPS (upcoming classes only, sorted by date):');
     hsaClasses.filter(c => c.date >= todayISO).sort((a, b) => a.date.localeCompare(b.date)).forEach(c => {
-      const names = (hsaSignups || []).filter(s => s.classId === c.id).map(s => s.store ? `${s.name} (${s.store})` : s.name);
+      const names = (hsaSignups || []).filter(s => s.classId === c.id).map(s => `${s.name}${s.store ? ` (${s.store}${s.dl ? `, DL: ${s.dl}` : ''})` : ''}`);
       lines.push(`${c.date} — ${c.eventType}${c.location ? ` @ ${c.location}` : ''}${c.time ? ` (${c.time})` : ''}: ${names.length ? names.join(', ') : 'no one signed up yet'}`);
     });
     lines.push('');
@@ -5067,7 +5103,7 @@ function doPost(e) {
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
     sheet.appendRow([
       new Date(), body.date || '', body.event || '', body.location || '', body.time || '',
-      body.name || '', body.store || '', body.signedUpBy || '',
+      body.name || '', body.store || '', body.dl || '', body.signedUpBy || '',
     ]);
     return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
@@ -5096,7 +5132,7 @@ function doPost(e) {
       </div>
       <div className="setup-step">
         <div className="step-num">1</div>
-        <div><p className="step-title">Create the Sheet</p><p className="step-body">Make a new Google Sheet. Add a header row: <code>Timestamp | Date | Event | Location | Time | Name | Store | Signed Up By</code>.</p></div>
+        <div><p className="step-title">Create the Sheet</p><p className="step-body">Make a new Google Sheet. Add a header row: <code>Timestamp | Date | Event | Location | Time | Name | Store | DL | Signed Up By</code>.</p></div>
       </div>
       <div className="setup-step">
         <div className="step-num">2</div>
@@ -6117,8 +6153,8 @@ export default function App() {
   // already are (non-sensitive, direct anon-key path) — the Google Sheets
   // export (hsaSheetSync) is a secondary, best-effort mirror on top, never
   // something a failure here should roll back or alarm the user about.
-  const handleHsaSignUp = useCallback((classInfo, name, store) => {
-    const entry = { id: genId(), classId: classInfo.id, name: name.trim(), store: store || '', signedUpAt: new Date().toISOString() };
+  const handleHsaSignUp = useCallback((classInfo, name, store, dl) => {
+    const entry = { id: genId(), classId: classInfo.id, name: name.trim(), store: store || '', dl: dl || '', signedUpAt: new Date().toISOString() };
     setHsaSignups(prev => {
       const next = [...prev, entry];
       saveData('hsa_signups', next).then(result => {
@@ -6128,7 +6164,7 @@ export default function App() {
     });
     hsaSheetSync(currentUser?.token, {
       date: classInfo.date, event: classInfo.eventType, location: classInfo.location, time: classInfo.time,
-      name: entry.name, store: entry.store,
+      name: entry.name, store: entry.store, dl: entry.dl,
     }).catch(() => {}); // best-effort — a broken Sheets export shouldn't disrupt the in-app sign-up above
   }, [currentUser]);
 

@@ -681,36 +681,37 @@
 .news-group-manager-actions { display: flex; align-items: center; gap: 2px; flex: none; }
 
 /* Month calendar */
-.homepage-calendar { display: flex; flex-direction: column; gap: 8px; }
-.homepage-calendar-head { display: flex; align-items: center; justify-content: center; gap: 14px; }
-.homepage-calendar-month { font-family: 'Barlow Condensed', sans-serif; font-size: 17px; font-weight: 600; color: var(--navy); min-width: 150px; text-align: center; }
+.homepage-calendar { display: flex; flex-direction: column; gap: 10px; }
+.homepage-calendar-head { display: flex; align-items: center; justify-content: center; gap: 18px; }
+.homepage-calendar-month { font-family: 'Barlow Condensed', sans-serif; font-size: 24px; font-weight: 600; color: var(--navy); min-width: 210px; text-align: center; }
 .homepage-cal-nav {
-  background: none; border: 1px solid var(--line); color: var(--navy); width: 26px; height: 26px; border-radius: 50%;
-  cursor: pointer; font-size: 15px; line-height: 1; display: flex; align-items: center; justify-content: center;
+  background: none; border: 1px solid var(--line); color: var(--navy); width: 36px; height: 36px; border-radius: 50%;
+  cursor: pointer; font-size: 19px; line-height: 1; display: flex; align-items: center; justify-content: center;
 }
 .homepage-cal-nav:hover { border-color: var(--red); color: var(--red-deep); }
 .homepage-cal-nav:disabled { opacity: 0.35; cursor: not-allowed; }
 .homepage-cal-nav:disabled:hover { border-color: var(--line); color: var(--navy); }
 .homepage-calendar-weekdays {
   display: grid; grid-template-columns: repeat(7, 1fr); text-align: center;
-  font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: var(--ink-soft); text-transform: uppercase;
+  font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink-soft); text-transform: uppercase;
+  padding: 4px 0;
 }
 .homepage-calendar-grid {
   display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px;
   background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
 }
-.homepage-cal-cell { background: var(--card); min-height: 64px; padding: 5px; display: flex; flex-direction: column; gap: 2px; }
+.homepage-cal-cell { background: var(--card); min-height: 116px; padding: 8px; display: flex; flex-direction: column; gap: 3px; }
 .homepage-cal-cell--empty { background: var(--paper); }
 .homepage-cal-cell--today { box-shadow: inset 0 0 0 2px var(--red); }
-.homepage-cal-daynum { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); }
+.homepage-cal-daynum { font-family: 'IBM Plex Mono', monospace; font-size: 14px; color: var(--ink-soft); }
 .homepage-cal-cell--today .homepage-cal-daynum { color: var(--red-deep); font-weight: 700; }
 .homepage-cal-pill {
-  font-family: 'Inter', sans-serif; font-size: 9.5px; font-weight: 600; color: #fff; background: var(--navy-2);
-  border-radius: 4px; padding: 1px 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600; color: #fff; background: var(--navy-2);
+  border-radius: 5px; padding: 3px 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.homepage-cal-more { font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: var(--ink-soft); }
+.homepage-cal-more { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--ink-soft); }
 @media (max-width: 640px) {
-  .homepage-cal-cell { min-height: 44px; }
+  .homepage-cal-cell { min-height: 64px; }
   .homepage-cal-pill, .homepage-cal-more { display: none; }
 }
 
@@ -806,8 +807,11 @@
 .hsa-class-meta { font-size: 12.5px; color: var(--ink-soft); margin: 2px 0 0; }
 .hsa-signup-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; background: var(--paper); border: 1px dashed var(--line); border-radius: 10px; padding: 10px; }
 .hsa-signup-form .text-input { margin: 0; flex: 1; min-width: 140px; }
+.hsa-dl-preview { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--ink-soft); white-space: nowrap; }
 .hsa-roster { border-top: 1px solid var(--line); padding-top: 8px; }
 .hsa-roster-label { font-size: 11.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.03em; margin: 0 0 6px; }
 .hsa-roster-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .hsa-roster-list li { font-size: 13px; color: var(--navy); display: flex; align-items: center; gap: 8px; }
 .hsa-roster-remove { padding: 1px 7px; font-size: 11px; }
+.hsa-type-group { margin-bottom: 18px; }
+.hsa-type-group-count { font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 400; color: var(--ink-soft); }
