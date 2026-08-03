@@ -820,9 +820,15 @@ function TopTenChart({ title, emoji, rows, metricKey, formatter, color }) {
   const chartRef = useRef(null);
   const ranked = useMemo(() => sortByMetric(rows, metricKey, 'desc').filter(r => r[metricKey] != null).slice(0, 10), [rows, metricKey]);
   const medal = i => (i === 0 ? '🥇 ' : i === 1 ? '🥈 ' : i === 2 ? '🥉 ' : '');
+  // Employee rows carry a `store` field (store rows don't) — same person's
+  // name can legitimately appear more than once in an Employees ranking (a
+  // District Leader or multi-store manager who also shows up as a stylist
+  // at more than one of their own stores), so the store name is appended
+  // whenever it's there to tell those rows apart.
+  const rowLabel = r => (r.store ? `${r.name} (${r.store})` : r.name);
 
   const data = useMemo(() => ({
-    labels: ranked.map((r, i) => `${medal(i)}${r.name}`),
+    labels: ranked.map((r, i) => `${medal(i)}${rowLabel(r)}`),
     datasets: [{ data: ranked.map(r => r[metricKey] || 0), backgroundColor: color, borderRadius: 4, barThickness: 18, maxBarThickness: 20 }],
   }), [ranked, metricKey, color]);
 
@@ -861,7 +867,7 @@ function TopTenChart({ title, emoji, rows, metricKey, formatter, color }) {
         titleFont: { family: 'Inter', size: 12, weight: '600' }, bodyFont: { family: 'IBM Plex Mono', size: 12 },
         padding: 10, cornerRadius: 8, displayColors: false,
         callbacks: {
-          title: items => ranked[items[0].dataIndex]?.name || '',
+          title: items => { const r = ranked[items[0].dataIndex]; return r ? rowLabel(r) : ''; },
           label: item => formatter(item.raw),
         },
       },
