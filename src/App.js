@@ -1191,6 +1191,16 @@ const CAL_WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
 // Plain month-grid calendar — Sun-start, prev/next nav, a colored pill per
 // event landing on that day (capped at 2 visible + an overflow count).
+// Full name + description on hover — the pill itself truncates with an
+// ellipsis once several events land on one day, so this (a native title
+// attribute, shown as the browser's own tooltip) is the only place the
+// untruncated text and any extra detail (HSA's location/time, or a
+// hand-authored event's description) actually gets read.
+function pillTooltip(ev) {
+  const head = ev.location ? `${ev.title} — ${ev.location}` : ev.title;
+  return ev.description ? `${head}\n${ev.description}` : head;
+}
+
 function EventsCalendar({ events, todayISO }) {
   const [cal, setCal] = useState(() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; });
   const monthLabel = fmtMonthLong(`${cal.y}-${String(cal.m + 1).padStart(2, '0')}`);
@@ -1245,7 +1255,7 @@ function EventsCalendar({ events, todayISO }) {
           return (
             <div key={i} className={`homepage-cal-cell ${iso === todayISO ? 'homepage-cal-cell--today' : ''}`}>
               <span className="homepage-cal-daynum">{day}</span>
-              {dayEvents.slice(0, 3).map(ev => <span key={ev.id} className="homepage-cal-pill" style={ev.color ? { background: ev.color } : undefined} title={ev.title}>{ev.title}</span>)}
+              {dayEvents.slice(0, 3).map(ev => <span key={ev.id} className="homepage-cal-pill" style={ev.color ? { background: ev.color } : undefined} title={pillTooltip(ev)}>{ev.title}</span>)}
               {dayEvents.length > 3 && <span className="homepage-cal-more">+{dayEvents.length - 3} more</span>}
             </div>
           );
@@ -1532,9 +1542,10 @@ function NewsPostModal({ post, onClose }) {
 // mis-entered sign-up.
 function HsaSignUpForm({ onSubmit, defaultName }) {
   const [name, setName] = useState(defaultName || '');
+  const [phone, setPhone] = useState('');
   const [store, setStore] = useState('');
   const storeNames = useMemo(() => [...new Set(Object.values(STORE_CODE_TO_NAME))].sort(), []);
-  // DL is derived from the store, not a fourth thing to type — the app
+  // DL is derived from the store, not a fifth thing to type — the app
   // already has an authoritative store → DL mapping (LEADER_ROSTER_SECTIONS)
   // used everywhere else, so letting someone free-type their own DL name
   // would just invite typos/mismatches against the store they picked.
@@ -1544,20 +1555,23 @@ function HsaSignUpForm({ onSubmit, defaultName }) {
     const info = code ? getLeaderForStoreCode(code) : null;
     return info ? info.leaderName : 'Unassigned';
   }, [store]);
+  const valid = name.trim() && phone.trim() && store;
   const submit = e => {
     e.preventDefault();
-    if (!name.trim() || !store) return;
-    onSubmit(name, store, dl);
+    if (!valid) return;
+    onSubmit(name, phone, store, dl);
   };
   return (
     <form className="hsa-signup-form" onSubmit={submit}>
       <input className="text-input" placeholder="Your name" value={name} onChange={e => setName(e.target.value)} autoFocus />
+      <input className="text-input" type="tel" placeholder="Phone number" value={phone} onChange={e => setPhone(e.target.value)} />
       <select className="sort-select" value={store} onChange={e => setStore(e.target.value)} required>
         <option value="">Store…</option>
         {storeNames.map(n => <option key={n} value={n}>{n}</option>)}
       </select>
       <span className="hsa-dl-preview">{store ? `DL: ${dl}` : ''}</span>
-      <button type="submit" className="btn-primary" disabled={!name.trim() || !store}>Confirm</button>
+      <button type="submit" className="btn-primary" disabled={!valid}>Confirm</button>
+      <p className="hsa-signup-privacy-note">Your phone number is kept private — only the owner can see it.</p>
     </form>
   );
 }
@@ -1581,7 +1595,7 @@ function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemo
       {signingUp && (
         <HsaSignUpForm
           defaultName={currentUserName}
-          onSubmit={(name, store, dl) => { onSignUp(cls, name, store, dl); setSigningUp(false); }}
+          onSubmit={(name, phone, store, dl) => { onSignUp(cls, name, phone, store, dl); setSigningUp(false); }}
         />
       )}
       <div className="hsa-roster">
@@ -1590,7 +1604,7 @@ function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemo
           <ul className="hsa-roster-list">
             {signups.map(s => (
               <li key={s.id}>
-                {s.name}{s.store ? ` — ${s.store}` : ''}{s.dl ? ` (DL: ${s.dl})` : ''}
+                {s.name}{s.store ? ` — ${s.store}` : ''}{s.dl ? ` (DL: ${s.dl})` : ''}{isOwner && s.phone ? ` · 📞 ${s.phone}` : ''}
                 {isOwner && <button className="btn-ghost btn-danger hsa-roster-remove" onClick={() => onRemoveSignup(s.id)}>✕</button>}
               </li>
             ))}
@@ -5103,7 +5117,7 @@ function doPost(e) {
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
     sheet.appendRow([
       new Date(), body.date || '', body.event || '', body.location || '', body.time || '',
-      body.name || '', body.store || '', body.dl || '', body.signedUpBy || '',
+      body.name || '', body.phone || '', body.store || '', body.dl || '', body.signedUpBy || '',
     ]);
     return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
@@ -5132,7 +5146,7 @@ function doPost(e) {
       </div>
       <div className="setup-step">
         <div className="step-num">1</div>
-        <div><p className="step-title">Create the Sheet</p><p className="step-body">Make a new Google Sheet. Add a header row: <code>Timestamp | Date | Event | Location | Time | Name | Store | DL | Signed Up By</code>.</p></div>
+        <div><p className="step-title">Create the Sheet</p><p className="step-body">Make a new Google Sheet. Add a header row: <code>Timestamp | Date | Event | Location | Time | Name | Phone | Store | DL | Signed Up By</code>.</p></div>
       </div>
       <div className="setup-step">
         <div className="step-num">2</div>
@@ -6153,8 +6167,8 @@ export default function App() {
   // already are (non-sensitive, direct anon-key path) — the Google Sheets
   // export (hsaSheetSync) is a secondary, best-effort mirror on top, never
   // something a failure here should roll back or alarm the user about.
-  const handleHsaSignUp = useCallback((classInfo, name, store, dl) => {
-    const entry = { id: genId(), classId: classInfo.id, name: name.trim(), store: store || '', dl: dl || '', signedUpAt: new Date().toISOString() };
+  const handleHsaSignUp = useCallback((classInfo, name, phone, store, dl) => {
+    const entry = { id: genId(), classId: classInfo.id, name: name.trim(), phone: phone.trim(), store: store || '', dl: dl || '', signedUpAt: new Date().toISOString() };
     setHsaSignups(prev => {
       const next = [...prev, entry];
       saveData('hsa_signups', next).then(result => {
@@ -6164,7 +6178,7 @@ export default function App() {
     });
     hsaSheetSync(currentUser?.token, {
       date: classInfo.date, event: classInfo.eventType, location: classInfo.location, time: classInfo.time,
-      name: entry.name, store: entry.store, dl: entry.dl,
+      name: entry.name, phone: entry.phone, store: entry.store, dl: entry.dl,
     }).catch(() => {}); // best-effort — a broken Sheets export shouldn't disrupt the in-app sign-up above
   }, [currentUser]);
 

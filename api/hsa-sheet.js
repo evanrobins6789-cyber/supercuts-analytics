@@ -31,7 +31,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { token, date, event, location, time, name, store, dl } = req.body || {};
+  const { token, date, event, location, time, name, phone, store, dl } = req.body || {};
   const { employee, error: sessionError } = await requireSession(supabase, token);
   if (!employee) {
     res.status(401).json({ error: sessionError });
@@ -57,7 +57,7 @@ export default async function handler(req, res) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         secret, date, event, location, time,
-        name: String(name).trim(), store: store || '', dl: dl || '', signedUpBy: employee.name,
+        name: String(name).trim(), phone: phone || '', store: store || '', dl: dl || '', signedUpBy: employee.name,
         signedUpAt: new Date().toISOString(),
       }),
     });
