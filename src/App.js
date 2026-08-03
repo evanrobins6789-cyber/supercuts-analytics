@@ -607,6 +607,11 @@ function ensureReportCph(report) {
   return report;
 }
 
+// Default "current period" once there's no live weekly Stylist Report upload
+// to anchor on — month-to-date (the 1st through today), fed by
+// Sales-Accrual/Attendance historical imports instead. Used by every main
+// tab's `usingDefaultRange` fallback, and by Tilly's mirrored context, so
+// opening a tab never requires manually picking a date range first.
 function getCurrentMonthRange() {
   const now = new Date();
   const first = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -614,19 +619,12 @@ function getCurrentMonthRange() {
   return { start: toISO(first), end: toISO(now) };
 }
 
-// Default "current period" once there's no live weekly Stylist Report
-// upload to anchor on — week-to-date (Monday through today), fed by
-// Sales-Accrual/Attendance historical imports instead. isoWeekStart is
-// defined further down in this file but hoisted, same as every other
-// plain function declaration.
-function getCurrentWeekRange() {
-  const todayISO = new Date().toISOString().slice(0, 10);
-  return { start: isoWeekStart(todayISO), end: todayISO };
-}
-
-// The most recently *completed* Monday–Sunday week (unlike getCurrentWeekRange,
-// which is week-to-date and looks sparse early in the week) — addDaysISO/
-// isoWeekStart are defined further down but hoisted, same as above.
+// The most recently *completed* Monday–Sunday week — used only by the
+// Homepage Top 10 leaderboard's "Past 7 Days" toggle (as an alternative to
+// its own "Month to Date" option), independent of the month-to-date default
+// every other tab falls back to. addDaysISO/isoWeekStart are defined further
+// down in this file but hoisted, same as every other plain function
+// declaration.
 function getLastFullWeekRange() {
   const thisWeekStart = isoWeekStart(new Date().toISOString().slice(0, 10));
   const end = addDaysISO(thisWeekStart, -1);
@@ -1419,7 +1417,7 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
   // historical window the Top 10 charts pull from. 'week' is the most
   // recently *completed* Mon–Sun week (not week-to-date, which looks sparse
   // early in the week); 'mtd' is month-to-date.
-  const [top10Period, setTop10Period] = useState('week'); // 'week' | 'mtd'
+  const [top10Period, setTop10Period] = useState('mtd'); // 'week' | 'mtd' — defaults to Month to Date so it matches every other tab's default, no click needed
   const top10Range = top10Period === 'mtd' ? getCurrentMonthRange() : getLastFullWeekRange();
   const storeRows = useMemo(() => {
     if (reportUsable) return report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals }));
@@ -1621,7 +1619,7 @@ function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemo
           <ul className="hsa-roster-list">
             {signups.map(s => (
               <li key={s.id}>
-                {s.name}{s.store ? ` — ${s.store}` : ''}{s.dl ? ` (DL: ${s.dl})` : ''}{isOwner && s.phone ? ` · 📞 ${s.phone}` : ''}
+                <strong>{s.name}</strong>{s.store ? ` — ${s.store}` : ''}{s.dl ? ` (DL: ${s.dl})` : ''}{isOwner && s.phone ? ` · 📞 ${s.phone}` : ''}
                 {isOwner && <button className="btn-ghost btn-danger hsa-roster-remove" onClick={() => onRemoveSignup(s.id)}>✕</button>}
               </li>
             ))}
@@ -1769,7 +1767,7 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews }) {
 // ─── Overview tab ───────────────────────────────────────────────────────────
 function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery }) {
   const usingDefaultRange = isReportStale(report) && !(dateRange?.start && dateRange?.end);
-  const effectiveRange = usingDefaultRange ? getCurrentWeekRange() : dateRange;
+  const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const isHistorical = !!(effectiveRange?.start && effectiveRange?.end);
   const metric = STORE_METRICS.find(m => m.key === selected) || STORE_METRICS[0];
 
@@ -1795,7 +1793,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
   return (
     <div className="tab-content">
       {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
-      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing week-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
+      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores…" />
       <p className="section-hint">Tap any metric to see the top 10 and bottom 10 stores for it.</p>
       <div className="summary-grid">
@@ -1825,10 +1823,10 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
   const [expanded, setExpanded] = useState({});
   const [focused, setFocused] = useState(null);
   // No live weekly Stylist Report and no explicit date range picked — fall
-  // back to week-to-date from Sales-Accrual/Attendance history instead of
+  // back to month-to-date from Sales-Accrual/Attendance history instead of
   // requiring a live report to exist at all.
   const usingDefaultRange = isReportStale(report) && !(dateRange.start && dateRange.end);
-  const effectiveRange = usingDefaultRange ? getCurrentWeekRange() : dateRange;
+  const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const isHistorical = !!(effectiveRange.start && effectiveRange.end);
 
   const storeRows = useMemo(() => {
@@ -1862,7 +1860,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
   return (
     <div className="tab-content">
       <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
-      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing week-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
+      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores or employees…" />
 
       <div className="ledger-head-row">
@@ -2008,7 +2006,7 @@ function EmployeesTab({ report, history, weeklyHistory, dateRange, onDateRangeCh
   const [sortBy, setSortBy] = useState('sales');
   const [focused, setFocused] = useState(null);
   const usingDefaultRange = isReportStale(report) && !(dateRange?.start && dateRange?.end);
-  const effectiveRange = usingDefaultRange ? getCurrentWeekRange() : dateRange;
+  const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const isHistorical = !!(effectiveRange?.start && effectiveRange?.end);
 
   // No live report — flatten every store's historical per-employee rows into
@@ -2045,7 +2043,7 @@ function EmployeesTab({ report, history, weeklyHistory, dateRange, onDateRangeCh
   return (
     <div className="tab-content">
       {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
-      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing week-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
+      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
       <SearchBox value={query} onChange={onQuery} placeholder="Search employees or stores…" />
       <div className="ledger-head-row">
         <p className="section-label">{filtered.length} of {allEmployees.length} employees</p>
@@ -2088,7 +2086,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   const [expandedLeader, setExpandedLeader] = useState({});
   const [focused, setFocused] = useState(null);
   const usingDefaultRange = isReportStale(report) && !(dateRange?.start && dateRange?.end);
-  const effectiveRange = usingDefaultRange ? getCurrentWeekRange() : dateRange;
+  const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const isHistorical = !!(effectiveRange?.start && effectiveRange?.end);
   const getGoal = code => (goalType && goals?.[code]?.[goalType] != null ? goals[code][goalType] : null);
   const showGoals = !!goalType;
@@ -2197,7 +2195,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   return (
     <div className="tab-content">
       {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
-      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing week-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
+      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
       <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
 
       <div className="view-toggle">
@@ -2462,7 +2460,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
   const [showManagers, setShowManagers] = useState(false);
   const [focused, setFocused] = useState(null);
   const usingDefaultRange = isReportStale(report) && !(dateRange.start && dateRange.end);
-  const effectiveRange = usingDefaultRange ? getCurrentWeekRange() : dateRange;
+  const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const isHistorical = !!(effectiveRange.start && effectiveRange.end);
 
   // Milestone goals are monthly, so "actual" for the thermometer is always
@@ -2515,7 +2513,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
   return (
     <div className="tab-content">
       <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
-      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing week-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
+      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
       <SearchBox value={query} onChange={onQuery} placeholder="Search DLs or stores…" />
 
       <div className="view-toggle">
@@ -4215,7 +4213,7 @@ const WEEKLY_METRICS = [
   { key: 'color', label: 'Color Sales', fmt: fmt$ },
   { key: 'retail', label: 'Retail', fmt: fmt$ },
   { key: 'giftCards', label: 'Gift Cards', fmt: fmt$ },
-  { key: 'signatureS', label: 'SS', fmt: fmt$ },
+  { key: 'signatureS', label: 'SS', fmt: (v, row) => fmtSS(row?.signatureSCount, v) },
   { key: 'hours', label: 'Total Hours', fmt: n => fmtNum(n, 0) },
   { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
   { key: 'cph', label: 'CPH (Cuts per Hour)', fmt: n => fmtNum(n, 2) },
@@ -4261,11 +4259,18 @@ function buildYoYRows(periods, granularity, metricKey, currentYear, previousYear
     const monday = isoWeekToMonday(currentYear, b);
     return fmtDateRangeLong(monday, addDaysISO(monday, 6));
   };
+  // currentSignatureSCount/previousSignatureSCount ride along on every row
+  // regardless of which metric is selected (cheap — the totals object is
+  // already in hand) so the SS metric's formatter can combine them with the
+  // $ value the same way fmtSS does everywhere else in the app, instead of
+  // this tab being the one place SS shows up as a bare dollar figure.
   return buckets.map(b => ({
     bucket: b,
     label: labelFor(b),
     current: curMap.has(b) ? weeklyMetricValue(curMap.get(b), metricKey) : null,
     previous: prevMap.has(b) ? weeklyMetricValue(prevMap.get(b), metricKey) : null,
+    currentSignatureSCount: curMap.has(b) ? curMap.get(b).signatureSCount : null,
+    previousSignatureSCount: prevMap.has(b) ? prevMap.get(b).signatureSCount : null,
   }));
 }
 
@@ -4317,12 +4322,14 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
         <tbody>
           {rows.map(r => {
             const diff = (r.current != null && r.previous != null) ? r.current - r.previous : null;
+            const countDiff = (r.currentSignatureSCount != null && r.previousSignatureSCount != null)
+              ? r.currentSignatureSCount - r.previousSignatureSCount : null;
             return (
               <tr key={r.bucket}>
                 <td className="ledger-name-col">{r.label}</td>
-                <td>{r.current != null ? activeMetric.fmt(r.current) : '—'}</td>
-                <td>{r.previous != null ? activeMetric.fmt(r.previous) : '—'}</td>
-                <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${activeMetric.fmt(diff)}` : '—'}</td>
+                <td>{r.current != null ? activeMetric.fmt(r.current, { signatureSCount: r.currentSignatureSCount }) : '—'}</td>
+                <td>{r.previous != null ? activeMetric.fmt(r.previous, { signatureSCount: r.previousSignatureSCount }) : '—'}</td>
+                <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${activeMetric.fmt(diff, { signatureSCount: countDiff })}` : '—'}</td>
               </tr>
             );
           })}
@@ -4337,6 +4344,19 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
       <p className="section-hint">
         Year-over-year comparison — {currentYear} on the left, {previousYear} on the right, aligned by {granularity === 'week' ? 'week of the year' : 'calendar month'}.
       </p>
+      <p className="section-hint">Tap a metric to switch what the table below compares.</p>
+      <div className="summary-grid">
+        {WEEKLY_METRICS.map(m => (
+          <button
+            key={m.key}
+            className={`summary-tile ${metric === m.key ? 'summary-tile--active' : ''}`}
+            onClick={() => setMetric(m.key)}
+          >
+            <p className="summary-tile-label">{m.label}</p>
+          </button>
+        ))}
+      </div>
+
       <div className="ledger-head-row">
         <div className="view-toggle">
           <button className={`view-toggle-btn ${granularity === 'week' ? 'active' : ''}`} onClick={() => setGranularity('week')}>By Week</button>
@@ -4346,9 +4366,6 @@ function WeeklyTab({ dailyHistory, weeklyHistory }) {
           <button className={`view-toggle-btn ${grouping === 'total' ? 'active' : ''}`} onClick={() => setGrouping('total')}>Company Total</button>
           <button className={`view-toggle-btn ${grouping === 'dl' ? 'active' : ''}`} onClick={() => setGrouping('dl')}>By DL</button>
         </div>
-        <select className="sort-select" value={metric} onChange={e => setMetric(e.target.value)}>
-          {WEEKLY_METRICS.map(m => <option key={m.key} value={m.key}>{m.label}</option>)}
-        </select>
       </div>
 
       {grouping === 'total' && renderYoYTable(totalRows)}
@@ -4522,13 +4539,13 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     currentAllEmployees = report.allEmployees || [];
   } else {
     // No live report, or it's aged past REPORT_STALE_AFTER_DAYS — same
-    // week-to-date historical fallback the six main tabs use.
-    const { start, end } = getCurrentWeekRange();
+    // month-to-date historical fallback the six main tabs use.
+    const { start, end } = getCurrentMonthRange();
     const totals = getRangeTotals(history, weeklyHistory, start, end);
     currentStoreRows = Object.entries(totals).map(([code, tt]) => ({ name: STORE_CODE_TO_NAME[code] || `Store ${code}`, code, ...historyTotalsToReportShape(tt) }));
     currentAllEmployees = currentStoreRows.flatMap(s => (s.employees || []).map(e => ({ ...e, store: s.name })));
     const t = rollupRows(currentStoreRows);
-    lines.push(`CURRENT REPORT PERIOD: ${fmtDateLong(start)} – ${fmtDateLong(end)} (week-to-date — no current Stylist Report on file, sourced from Sales-Accrual/Attendance instead)`);
+    lines.push(`CURRENT REPORT PERIOD: ${fmtDateLong(start)} – ${fmtDateLong(end)} (month-to-date — no current Stylist Report on file, sourced from Sales-Accrual/Attendance instead)`);
     lines.push(`Company totals — Sales: $${Math.round(t.sales)}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}, Cuts: ${Math.round(t.haircuts || 0)}, CPH: ${t.cph != null ? t.cph.toFixed(2) : 'n/a'}, SS: ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}`);
     lines.push('');
     lines.push('Per-store totals for the CURRENT period (Store: Sales, TSTH, Hours, Color, Retail, CPC, RPC, Cuts, CPH, goals if set):');
@@ -6593,8 +6610,8 @@ export default function App() {
   const visibleTabs = TABS.filter(t => t !== 'Setup' || currentUser.role === 'owner');
   // A live weekly Stylist Report upload is no longer the only way to power
   // these tabs — Sales-Accrual + Attendance historical imports feed the
-  // exact same tables via each tab's own current-week fallback (see
-  // getCurrentWeekRange). Only actually block on "nothing at all yet".
+  // exact same tables via each tab's own current-month fallback (see
+  // getCurrentMonthRange). Only actually block on "nothing at all yet".
   const hasHistoricalData = Object.keys(history || {}).length > 0 || Object.keys(weeklyHistory || {}).length > 0;
   const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA';
 
