@@ -794,3 +794,20 @@
 .reward-card .btn-primary:disabled { background: var(--line); color: var(--ink-soft); cursor: not-allowed; }
 
 .ai-chat-send:disabled { opacity: 0.5; cursor: default; }
+
+/* ─── HSA tab ────────────────────────────────────────────────────────────── */
+.hsa-class-list { display: flex; flex-direction: column; gap: 12px; }
+.hsa-class-card {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px;
+}
+.hsa-class-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.hsa-class-title { font-family: 'Barlow Condensed', sans-serif; font-size: 18px; font-weight: 600; color: var(--navy); margin: 0; }
+.hsa-class-meta { font-size: 12.5px; color: var(--ink-soft); margin: 2px 0 0; }
+.hsa-signup-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; background: var(--paper); border: 1px dashed var(--line); border-radius: 10px; padding: 10px; }
+.hsa-signup-form .text-input { margin: 0; flex: 1; min-width: 140px; }
+.hsa-roster { border-top: 1px solid var(--line); padding-top: 8px; }
+.hsa-roster-label { font-size: 11.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.03em; margin: 0 0 6px; }
+.hsa-roster-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.hsa-roster-list li { font-size: 13px; color: var(--navy); display: flex; align-items: center; gap: 8px; }
+.hsa-roster-remove { padding: 1px 7px; font-size: 11px; }

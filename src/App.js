@@ -5,13 +5,13 @@ import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDat
 import {
   parseStylistReport, parseEmployeeStartDates, parseGoalFile, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
   parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory,
-  buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile, parseMasterSalonListFile,
+  buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile, parseMasterSalonListFile, parseHsaScheduleFile,
 } from './parser';
 import {
   getSession, setSession, clearSession, checkEligible, signUp, logIn, logOut,
   loadScoped, loadScopedByPrefix, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate,
   pointsBalance, pointsAward, pointsAllBalances, pointsTransactions, pointsDeleteTransaction,
-  pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled,
+  pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled, hsaSheetSync,
 } from './auth';
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
@@ -1519,6 +1519,113 @@ function NewsPostModal({ post, onClose }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── HSA tab ────────────────────────────────────────────────────────────────
+// Hair Stylist Academy — the class schedule uploaded via Setup > HSA (merged
+// into the same `events`/homepage_events the Homepage calendar reads, tagged
+// `source: 'hsa'`) shown here as a sign-up-able list. Anyone can sign up;
+// everyone sees the full roster for every class, live off the same
+// `hsaSignups` state everyone else's page loads. The owner can remove a
+// mis-entered sign-up.
+function HsaSignUpForm({ onSubmit, defaultName }) {
+  const [name, setName] = useState(defaultName || '');
+  const [store, setStore] = useState('');
+  const storeNames = useMemo(() => [...new Set(Object.values(STORE_CODE_TO_NAME))].sort(), []);
+  const submit = e => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    onSubmit(name, store);
+  };
+  return (
+    <form className="hsa-signup-form" onSubmit={submit}>
+      <input className="text-input" placeholder="Your name" value={name} onChange={e => setName(e.target.value)} autoFocus />
+      <select className="sort-select" value={store} onChange={e => setStore(e.target.value)}>
+        <option value="">Store (optional)</option>
+        {storeNames.map(n => <option key={n} value={n}>{n}</option>)}
+      </select>
+      <button type="submit" className="btn-primary" disabled={!name.trim()}>Confirm</button>
+    </form>
+  );
+}
+
+function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemoveSignup }) {
+  const [signingUp, setSigningUp] = useState(false);
+  const alreadyIn = currentUserName && signups.some(s => normalizeName(s.name) === normalizeName(currentUserName));
+  return (
+    <div className="hsa-class-card">
+      <div className="hsa-class-head">
+        <div>
+          <p className="hsa-class-title">{cls.eventType}</p>
+          <p className="hsa-class-meta">{fmtDateLong(cls.date)}{cls.location ? ` · ${cls.location}` : ''}{cls.time ? ` · ${cls.time}` : ''}</p>
+        </div>
+        {!signingUp && (
+          <button className="btn-primary btn-secondary" onClick={() => setSigningUp(true)}>
+            {alreadyIn ? "✋ Sign up someone else" : '✋ Sign Up'}
+          </button>
+        )}
+      </div>
+      {signingUp && (
+        <HsaSignUpForm
+          defaultName={currentUserName}
+          onSubmit={(name, store) => { onSignUp(cls, name, store); setSigningUp(false); }}
+        />
+      )}
+      <div className="hsa-roster">
+        <p className="hsa-roster-label">{signups.length ? `Signed up (${signups.length})` : 'No one signed up yet'}</p>
+        {signups.length > 0 && (
+          <ul className="hsa-roster-list">
+            {signups.map(s => (
+              <li key={s.id}>
+                {s.name}{s.store ? ` (${s.store})` : ''}
+                {isOwner && <button className="btn-ghost btn-danger hsa-roster-remove" onClick={() => onRemoveSignup(s.id)}>✕</button>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup }) {
+  const [query, setQuery] = useState('');
+  const [showPast, setShowPast] = useState(false);
+  const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  const classes = useMemo(() => {
+    const hsaEvents = events.filter(ev => ev.source === 'hsa');
+    const q = query.trim().toLowerCase();
+    return hsaEvents
+      .filter(ev => showPast || ev.date >= todayISO)
+      .filter(ev => !q || ev.eventType.toLowerCase().includes(q) || (ev.location || '').toLowerCase().includes(q))
+      .sort((a, b) => a.date.localeCompare(b.date) || a.eventType.localeCompare(b.eventType));
+  }, [events, query, showPast, todayISO]);
+
+  return (
+    <div className="tab-content">
+      <p className="section-hint">Hair Stylist Academy — sign up for a class below. Everyone can see who's already signed up. Classes are uploaded by the owner in Setup &gt; HSA.</p>
+      <SearchBox value={query} onChange={setQuery} placeholder="Search classes or locations…" />
+      <div className="view-toggle">
+        <button className={`view-toggle-btn ${!showPast ? 'active' : ''}`} onClick={() => setShowPast(false)}>Upcoming</button>
+        <button className={`view-toggle-btn ${showPast ? 'active' : ''}`} onClick={() => setShowPast(true)}>All (incl. past)</button>
+      </div>
+      {!classes.length ? (
+        <p className="empty-note">{showPast ? 'No classes match your search.' : 'No upcoming classes on file — check back once a new schedule is uploaded.'}</p>
+      ) : (
+        <div className="hsa-class-list">
+          {classes.map(cls => (
+            <HsaClassCard
+              key={cls.id} cls={cls}
+              signups={hsaSignups.filter(s => s.classId === cls.id)}
+              isOwner={currentUser.role === 'owner'} currentUserName={currentUser.name}
+              onSignUp={onSignUp} onRemoveSignup={onRemoveSignup}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -4155,7 +4262,7 @@ function topEmployeeLine(employees, n = 5) {
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
-function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points) {
+function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups) {
   const employeesForCodeCtx = code => {
     if (report && !isReportStale(report)) return report.stores.find(st => st.code === code)?.employees || null;
     return fallbackEmployeesByStore?.[code] || null;
@@ -4199,6 +4306,22 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     [...events].sort((a, b) => (a.date || '').localeCompare(b.date || '')).forEach(ev => {
       const dateLabel = ev.endDate ? `${ev.date} to ${ev.endDate}` : ev.date;
       lines.push(`${dateLabel}: ${ev.title}${ev.description ? ` — ${ev.description}` : ''}`);
+    });
+    lines.push('');
+  }
+
+  // HSA (Hair Stylist Academy) class schedule + who's signed up — the
+  // classes themselves are already in the events list above (tagged
+  // `source: 'hsa'`); this adds the roster so a question like "who signed
+  // up for the fade class" or "how many people are in HSA on the 5th" can
+  // be answered without re-deriving it from the raw sign-up list.
+  const hsaClasses = (events || []).filter(ev => ev.source === 'hsa');
+  if (hsaClasses.length) {
+    const todayISO = new Date().toISOString().slice(0, 10);
+    lines.push('HSA CLASS SIGN-UPS (upcoming classes only, sorted by date):');
+    hsaClasses.filter(c => c.date >= todayISO).sort((a, b) => a.date.localeCompare(b.date)).forEach(c => {
+      const names = (hsaSignups || []).filter(s => s.classId === c.id).map(s => s.store ? `${s.name} (${s.store})` : s.name);
+      lines.push(`${c.date} — ${c.eventType}${c.location ? ` @ ${c.location}` : ''}${c.time ? ` (${c.time})` : ''}: ${names.length ? names.join(', ') : 'no one signed up yet'}`);
     });
     lines.push('');
   }
@@ -4488,7 +4611,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   return lines.join('\n');
 }
 
-function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points }) {
+function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -4501,7 +4624,7 @@ function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points);
+      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups);
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4555,6 +4678,7 @@ const SETUP_SECTIONS = [
   { key: 'emailReports', label: 'Email Reports' },
   { key: 'employeeAccess', label: 'Employee Access' },
   { key: 'rewards', label: 'Rewards' },
+  { key: 'hsa', label: 'HSA' },
 ];
 
 // Owner-only roster of who can log in — Employee Name | Employee Code |
@@ -4919,9 +5043,82 @@ function notifyFailure(labelName, fileName, detail) {
   );
 }
 
+// Owner-only: upload the class/training schedule (Date | Event | location |
+// Time columns) that powers the HSA tab, plus the walkthrough for the
+// optional Google Sheets export of sign-ups. Uploading merges straight into
+// the Homepage events calendar (App.js tags each row `source: 'hsa'`) —
+// see parseHsaScheduleFromGrid in parser.js for the column matching and the
+// deterministic-id reasoning that keeps re-uploads from orphaning sign-ups.
+function HsaSetupTab({ classCount, uploading, onFile, onClear }) {
+  const script = `// Google Apps Script — bound to a Google Sheet, appends one row per HSA
+// sign-up. Create a new Sheet, then Extensions > Apps Script, paste this
+// in (replacing everything), fill in SHARED_SECRET, then deploy as
+// described in the numbered steps in Setup > HSA.
+
+const SHARED_SECRET = 'PASTE_YOUR_SECRET_HERE'; // must exactly match HSA_SHEET_SECRET in Vercel
+
+function doPost(e) {
+  try {
+    const body = JSON.parse(e.postData.contents);
+    if (body.secret !== SHARED_SECRET) {
+      return ContentService.createTextOutput(JSON.stringify({ ok: false, error: 'Invalid secret' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    sheet.appendRow([
+      new Date(), body.date || '', body.event || '', body.location || '', body.time || '',
+      body.name || '', body.store || '', body.signedUpBy || '',
+    ]);
+    return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}`;
+
+  return (
+    <div className="setup-section">
+      <div className="setup-sql-card">
+        <p className="chart-title">HSA class schedule</p>
+        <p className="step-body">Upload the class/training schedule (Date, Event, Location, Time columns) — every row is merged into the Homepage events calendar and becomes something people can sign up for on the HSA tab. Uploading again replaces the whole schedule; rows that are unchanged keep their existing sign-ups, since a class's identity is its date + event + location + time, not its position in the file.</p>
+      </div>
+      <UploadSlot
+        id="hsa-schedule-file" title="Class Schedule" hint="Upload the Date / Event / Location / Time export"
+        fileInfo={classCount ? { fileName: `${classCount} classes on the calendar`, sub: 'Re-upload anytime to add or update classes' } : null}
+        uploading={uploading}
+        onFile={onFile}
+      />
+      {classCount > 0 && <button className="btn-ghost btn-danger" onClick={onClear}>Clear class schedule</button>}
+
+      <div className="setup-sql-card">
+        <p className="chart-title">Optional: auto-export sign-ups to a Google Sheet</p>
+        <p className="step-body">Every sign-up on the HSA tab is already visible in the app itself — this is only if you also want a live copy in a spreadsheet. Same free, no-paid-service pattern as the Gmail report automation in Setup &gt; Email Reports: a small script you deploy yourself inside your own Google account.</p>
+      </div>
+      <div className="setup-step">
+        <div className="step-num">1</div>
+        <div><p className="step-title">Create the Sheet</p><p className="step-body">Make a new Google Sheet. Add a header row: <code>Timestamp | Date | Event | Location | Time | Name | Store | Signed Up By</code>.</p></div>
+      </div>
+      <div className="setup-step">
+        <div className="step-num">2</div>
+        <div><p className="step-title">Add the script</p><p className="step-body">In that Sheet: Extensions → Apps Script → paste in the code below (replacing everything) → paste a secret of your choosing into <code>SHARED_SECRET</code>.</p></div>
+      </div>
+      <pre className="setup-sql">{script}</pre>
+      <div className="setup-step">
+        <div className="step-num">3</div>
+        <div><p className="step-title">Deploy it as a Web App</p><p className="step-body">Deploy → New deployment → gear icon → type: <code>Web app</code> → Execute as: <code>Me</code> → Who has access: <code>Anyone</code> → Deploy. Click through the "unverified app" authorization the same way as the Gmail script. Copy the Web app URL it gives you.</p></div>
+      </div>
+      <div className="setup-step">
+        <div className="step-num">4</div>
+        <div><p className="step-title">Add both values in Vercel</p><p className="step-body">Vercel project → Settings → Environment Variables → add <code>HSA_SHEET_WEBHOOK_URL</code> (the Web app URL from step 3) and <code>HSA_SHEET_SECRET</code> (the exact same secret you pasted into the script) → redeploy.</p></div>
+      </div>
+      <p className="step-body">This export is best-effort — if it's not set up yet, or the two secrets stop matching, or the sheet URL changes, sign-ups still work and show up in the app; only the spreadsheet copy is skipped.</p>
+    </div>
+  );
+}
+
 const SETUP_PASSWORD = 'sc4310';
 
-function SetupTab({ configured, section, onSection, goalsProps, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps, employeeAccessProps, rewardsProps }) {
+function SetupTab({ configured, section, onSection, goalsProps, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps, employeeAccessProps, rewardsProps, hsaProps }) {
   const [unlocked, setUnlocked] = useState(false);
   const [pwInput, setPwInput] = useState('');
   const [pwError, setPwError] = useState(false);
@@ -4983,6 +5180,7 @@ function SetupTab({ configured, section, onSection, goalsProps, managersProps, m
       {section === 'emailReports' && <EmailReportsSetupTab />}
       {section === 'employeeAccess' && <EmployeeAccessSetupTab {...employeeAccessProps} />}
       {section === 'rewards' && <RewardsSetupTab {...rewardsProps} />}
+      {section === 'hsa' && <HsaSetupTab {...hsaProps} />}
 
       {section === 'guide' && <>
       <div className="setup-section">
@@ -5286,7 +5484,7 @@ function RewardsSetupTab({ token, showToast }) {
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Homepage', 'News', 'Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Weekly', "Tillie's Nest", 'Setup'];
+const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Weekly', "Tillie's Nest", 'Setup'];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
@@ -5301,6 +5499,8 @@ export default function App() {
   const [news, setNews] = useState([]);
   const [newsGroups, setNewsGroups] = useState([]); // [{name, color}], manager-curated order
   const [events, setEvents] = useState([]);
+  const [hsaSignups, setHsaSignups] = useState([]); // [{id, classId, name, store, signedUpAt}]
+  const [uploadingHsaSchedule, setUploadingHsaSchedule] = useState(false);
   const [history, setHistory] = useState({});
   // Sales-Accrual and Attendance historical imports are two independent
   // upload slots that can be fired off close together — both handlers would
@@ -5344,10 +5544,10 @@ export default function App() {
     const token = currentUser.token;
     Promise.all([
       loadScoped('stylist_report', token), loadData('employee_start_dates'), loadScoped('store_goals', token), loadScoped('store_managers', token), loadScoped('milestone_goals', token), loadScoped('reviews', token), loadData('review_notes'), loadData('review_gold_combs'),
-      loadData('homepage_news'), loadData('homepage_events'), loadData('homepage_news_groups'),
+      loadData('homepage_news'), loadData('homepage_events'), loadData('homepage_news_groups'), loadData('hsa_signups'),
       loadScopedByPrefix('daily_history_', token), loadScopedByPrefix('weekly_history_', token),
       loadScoped('daily_history', token), loadScoped('weekly_history', token), // legacy single-row format, if anything was saved before chunking
-    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
+    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, hsaSignupsRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
       if (reportRes.data) setReport(ensureReportCph(reportRes.data)); else if (currentUser.role === 'owner') { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
@@ -5359,6 +5559,7 @@ export default function App() {
       const loadedNews = newsRes.data || [];
       if (newsRes.data) setNews(loadedNews);
       if (eventsRes.data) setEvents(eventsRes.data);
+      if (hsaSignupsRes.data) setHsaSignups(hsaSignupsRes.data);
 
       // Groups are managed separately from the posts that reference them
       // (name/order/color), but a group name can be typed straight into a
@@ -5875,6 +6076,72 @@ export default function App() {
     });
   }, []);
 
+  // HSA/class schedule upload (Setup > HSA) — merged straight into the same
+  // `events`/homepage_events the Homepage calendar already reads, tagged
+  // `source: 'hsa'` so a re-upload only replaces these rows, never a
+  // hand-authored Homepage event. Ids are deterministic (see
+  // parseHsaScheduleFromGrid) so re-uploading the same schedule doesn't
+  // orphan sign-ups already recorded against a class.
+  const HSA_EVENT_COLOR = '#2E7D4F';
+  const handleImportHsaSchedule = useCallback(file => {
+    setUploadingHsaSchedule(true);
+    parseHsaScheduleFile(file).then(({ classes, fileName }) => {
+      const hsaEvents = classes.map(c => ({
+        id: c.id, title: c.location ? `${c.event} — ${c.location}` : c.event, date: c.date, endDate: null,
+        description: c.time, headerImage: null, color: HSA_EVENT_COLOR,
+        source: 'hsa', eventType: c.event, location: c.location, time: c.time,
+      }));
+      setEvents(prev => {
+        const next = [...prev.filter(ev => ev.source !== 'hsa'), ...hsaEvents];
+        saveData('homepage_events', next).then(result => {
+          if (isConfigured() && !result.ok) showToast(`Schedule saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+        });
+        return next;
+      });
+      showToast(`HSA schedule uploaded — ${classes.length} classes from ${fileName}`);
+    }).catch(err => showToast(err.message, 'error')).finally(() => setUploadingHsaSchedule(false));
+  }, []);
+
+  const handleClearHsaSchedule = useCallback(() => {
+    if (!window.confirm("Clear the whole class schedule? Sign-ups already recorded stay on file, just without a class to show them under.")) return;
+    setEvents(prev => {
+      const next = prev.filter(ev => ev.source !== 'hsa');
+      saveData('homepage_events', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Cleared locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+  }, []);
+
+  // Sign-ups are saved straight to Supabase the same way homepage news/events
+  // already are (non-sensitive, direct anon-key path) — the Google Sheets
+  // export (hsaSheetSync) is a secondary, best-effort mirror on top, never
+  // something a failure here should roll back or alarm the user about.
+  const handleHsaSignUp = useCallback((classInfo, name, store) => {
+    const entry = { id: genId(), classId: classInfo.id, name: name.trim(), store: store || '', signedUpAt: new Date().toISOString() };
+    setHsaSignups(prev => {
+      const next = [...prev, entry];
+      saveData('hsa_signups', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Signed up locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+    hsaSheetSync(currentUser?.token, {
+      date: classInfo.date, event: classInfo.eventType, location: classInfo.location, time: classInfo.time,
+      name: entry.name, store: entry.store,
+    }).catch(() => {}); // best-effort — a broken Sheets export shouldn't disrupt the in-app sign-up above
+  }, [currentUser]);
+
+  const handleRemoveHsaSignup = useCallback(id => {
+    setHsaSignups(prev => {
+      const next = prev.filter(s => s.id !== id);
+      saveData('hsa_signups', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Removed locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+  }, []);
+
   const handleSaveMilestoneGoal = useCallback((storeCode, field, value) => {
     setMilestoneGoals(prev => {
       const next = { ...prev, [storeCode]: { ...prev[storeCode], [field]: value } };
@@ -6161,7 +6428,7 @@ export default function App() {
   // exact same tables via each tab's own current-week fallback (see
   // getCurrentWeekRange). Only actually block on "nothing at all yet".
   const hasHistoricalData = Object.keys(history || {}).length > 0 || Object.keys(weeklyHistory || {}).length > 0;
-  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News';
+  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA';
 
   return (
     <div className="app">
@@ -6194,6 +6461,9 @@ export default function App() {
         )}
         {tab === 'News' && (
           <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} />
+        )}
+        {tab === 'HSA' && (
+          <HsaTab events={events} hsaSignups={hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} />
         )}
         {!needsReport && tab === 'Overview' && (report || hasHistoricalData) && (
           <OverviewTab report={report} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} />
@@ -6266,10 +6536,14 @@ export default function App() {
             }}
             employeeAccessProps={{ token: currentUser.token }}
             rewardsProps={{ token: currentUser.token, showToast }}
+            hsaProps={{
+              classCount: events.filter(ev => ev.source === 'hsa').length,
+              uploading: uploadingHsaSchedule, onFile: handleImportHsaSchedule, onClear: handleClearHsaSchedule,
+            }}
           />
         )}
       </main>
-      <AIChatWidget report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} milestoneGoals={milestoneGoals} news={news} events={events} points={pointsSummary} />
+      <AIChatWidget report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} milestoneGoals={milestoneGoals} news={news} events={events} points={pointsSummary} hsaSignups={hsaSignups} />
     </div>
   );
 }

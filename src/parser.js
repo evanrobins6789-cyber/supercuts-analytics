@@ -289,6 +289,72 @@ export function parseEmployeeStartDatesFromGrid(grid, fileName) {
   return { employees, fileName };
 }
 
+// ─── HSA class schedule (Date | Event | location | Time) ──────────────────
+// One shared calendar upload covering every class/training type (HSA, HSA
+// Cert, Manager Training, Fade Class, etc.) — App.js tags each row
+// `source: 'hsa'` and merges it straight into the Homepage events calendar
+// rather than keeping a separate list, so these show up on the same
+// calendar hand-authored events already use.
+function slugify(text) {
+  return String(text || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function dateCellToISO(cell) {
+  const raw = cell?.v;
+  if (typeof raw === 'number') {
+    const epoch = new Date(Date.UTC(1899, 11, 30));
+    return new Date(epoch.getTime() + raw * 86400000).toISOString().slice(0, 10);
+  }
+  const m = cellText(cell).match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!m) return null;
+  let [, mo, da, yr] = m;
+  if (yr.length === 2) yr = '20' + yr;
+  return `${yr}-${mo.padStart(2, '0')}-${da.padStart(2, '0')}`;
+}
+
+export async function parseHsaScheduleFile(file) {
+  const grid = await readWorkbookGrid(file);
+  return parseHsaScheduleFromGrid(grid, file.name);
+}
+
+export function parseHsaScheduleFromGrid(grid, fileName) {
+  const hdrRowIdx = grid.findIndex(row => row.some(c => cellText(c).toLowerCase().startsWith('date')));
+  if (hdrRowIdx === -1) throw new Error('Could not find a "Date" column in this file.');
+  const headerRow = grid[hdrRowIdx];
+  const findAny = labels => {
+    for (const label of labels) {
+      const idx = findCol(headerRow, label);
+      if (idx !== -1) return idx;
+    }
+    return -1;
+  };
+  const dateCol = findAny(['date:', 'date']);
+  const eventCol = findAny(['event']);
+  const locationCol = findAny(['location']);
+  const timeCol = findAny(['time:', 'time']);
+  if (dateCol === -1) throw new Error('Could not find a "Date" column in this file.');
+  if (eventCol === -1) throw new Error('Could not find an "Event" column in this file.');
+
+  const classes = [];
+  for (let r = hdrRowIdx + 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (!rowHasData(row)) continue;
+    const iso = dateCellToISO(row[dateCol]);
+    const event = cellText(row[eventCol]);
+    if (!iso || !event) continue;
+    const location = locationCol !== -1 ? cellText(row[locationCol]) : '';
+    const time = timeCol !== -1 ? cellText(row[timeCol]) : '';
+    // Deterministic id from content (not random/incrementing) so re-uploading
+    // the same schedule keeps the same class ids — sign-ups reference a
+    // class by id, so a random id here would orphan every existing signup
+    // on the very next re-upload.
+    const id = `hsa-${iso}-${slugify(event)}-${slugify(location)}-${slugify(time)}`;
+    classes.push({ id, date: iso, event, location, time });
+  }
+  if (!classes.length) throw new Error('No class rows with a valid date and event were found in this file.');
+  return { classes, fileName };
+}
+
 // ─── Goal file (DL | Salon | Goal amount) ──────────────────────────────────
 // Read by column position rather than header text, since the goal column's
 // header changes every time (e.g. "July 26 Goal") — always DL, Store, Goal.
