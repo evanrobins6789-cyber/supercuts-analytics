@@ -3,7 +3,7 @@ import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip } fro
 import { Bar } from 'react-chartjs-2';
 import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDataByPrefix } from './db';
 import {
-  parseStylistReport, parseEmployeeStartDates, parseGoalFile, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
+  parseStylistReport, parseEmployeeStartDates, parseGoalFile, downloadGoalTemplate, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
   parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory,
   buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile, parseMasterSalonListFile, parseHsaScheduleFile,
 } from './parser';
@@ -2896,6 +2896,8 @@ function NewHireTab({ report, fallbackEmployeesByStore, employeeRoster, query, o
 }
 
 // ─── Goals tab ──────────────────────────────────────────────────────────────
+const GOAL_FIELD_LABELS = { salesGoal: 'sales', colorGoal: 'color', retailGoal: 'retail', signatureSGoal: 'signature service' };
+
 function GoalsTab({ report, goals, onSaveGoal, onImportGoals, fallbackEmployeesByStore }) {
   const [query, setQuery] = useState('');
   const [drafts, setDrafts] = useState({}); // { code: { salesGoal, colorGoal, retailGoal, signatureSGoal } } — in-progress edits
@@ -2948,12 +2950,31 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, fallbackEmployeesB
     />
   );
 
+  const handleDownloadTemplate = () => {
+    const rows = groupStoresByLeader(allStores).flatMap(g => g.stores.map(s => ({ leaderName: g.leaderName, storeName: s.name })));
+    downloadGoalTemplate(rows);
+  };
+
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
-      <p className="section-hint">Set a weekly Sales, Color, Retail, and Signature Service goal per store. Color and Retail goals show up as "Goal"/"vs Goal" columns on their tabs; Signature Service goals show up the same way on the Signature Service tab.</p>
+      <p className="section-hint">Set a weekly Sales, Color, Retail, and Signature Service goal per store. Color, Retail, and Signature Service goals show up as "Goal"/"vs Goal" columns on their tabs; Sales goals show up on the Stores tab.</p>
+
+      <p className="section-hint">Download a blank sheet listing your stores (grouped by DL), fill in the Goal column, then import it below with whichever button matches what you filled in.</p>
+      <div className="goal-import-row">
+        <button type="button" className="goal-import-btn" onClick={handleDownloadTemplate}>
+          ⬇ Download blank goal sheet (DL | Store | Goal)
+        </button>
+      </div>
 
       <div className="goal-import-row">
+        <label className="goal-import-btn">
+          <input
+            type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+            onChange={e => { if (e.target.files[0]) handleImportFile('salesGoal', e.target.files[0]); e.target.value = ''; }}
+          />
+          {importing === 'salesGoal' ? <span className="spinner small" /> : '📥'} Import Sales Goals from file
+        </label>
         <label className="goal-import-btn">
           <input
             type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
@@ -2967,6 +2988,13 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, fallbackEmployeesB
             onChange={e => { if (e.target.files[0]) handleImportFile('retailGoal', e.target.files[0]); e.target.value = ''; }}
           />
           {importing === 'retailGoal' ? <span className="spinner small" /> : '📥'} Import Retail Goals from file
+        </label>
+        <label className="goal-import-btn">
+          <input
+            type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+            onChange={e => { if (e.target.files[0]) handleImportFile('signatureSGoal', e.target.files[0]); e.target.value = ''; }}
+          />
+          {importing === 'signatureSGoal' ? <span className="spinner small" /> : '📥'} Import Signature Service Goals from file
         </label>
       </div>
 
@@ -3439,15 +3467,15 @@ const REVIEW_SORT_OPTIONS = [
 // with their own postedAt dates, not tied to the Sales-Accrual/Attendance
 // history those tabs filter against.
 function ReviewDateRangeBar({ start, end, onChange }) {
+  const applyCurrentMonth = () => { const r = getCurrentMonthRange(); onChange(r.start, r.end); };
   return (
     <div className="date-range-bar">
       <span className="date-range-label">Date range:</span>
       <input type="date" className="date-range-input" value={start || ''} onChange={e => onChange(e.target.value || null, end)} />
       <span className="date-range-to">to</span>
       <input type="date" className="date-range-input" value={end || ''} onChange={e => onChange(start, e.target.value || null)} />
-      {(start || end) && (
-        <button className="btn-ghost date-range-clear" onClick={() => onChange(null, null)}>Clear — show all reviews</button>
-      )}
+      <button className="date-range-quick-btn" onClick={applyCurrentMonth}>Current Month</button>
+      <button className="btn-ghost date-range-clear" onClick={() => onChange(null, null)}>Show All Reviews</button>
       {(start && end) && <span className="date-range-note">Showing only reviews posted between these dates.</span>}
     </div>
   );
@@ -6363,7 +6391,7 @@ export default function App() {
       });
       setGoals(next);
       const result = await saveData('store_goals', next);
-      const label = field === 'colorGoal' ? 'color' : 'retail';
+      const label = GOAL_FIELD_LABELS[field] || field;
       if (isConfigured() && !result.ok) {
         showToast(`Imported ${matched} ${label} goals, but couldn't sync to Supabase (${result.error})`, 'error');
       } else if (unmatched.length) {

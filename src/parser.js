@@ -377,6 +377,20 @@ export async function parseGoalFile(file) {
   return { entries, periodLabel, fileName: file.name };
 }
 
+// Blank template for the above — same DL | Store | Goal column layout (DL is
+// ignored on import, kept here only so the person filling it in can see
+// which stores are theirs), with the Goal column left empty. Works for any
+// of the four goal types, since parseGoalFile never looks at the header
+// text — filling it in and using any "Import ... Goals from file" button
+// round-trips straight back through the same parser.
+export function downloadGoalTemplate(rows) {
+  const aoa = [['DL', 'Store', 'Goal'], ...rows.map(r => [r.leaderName, r.storeName, null])];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Goals');
+  XLSX.writeFile(wb, 'goal-sheet-template.xlsx');
+}
+
 // ─── Manager roster (STORE | Manager) ──────────────────────────────────────
 // A simple two-column list — store name, manager name ("Open" for a vacant
 // position, kept as-is rather than treated as empty since it's meaningful).
