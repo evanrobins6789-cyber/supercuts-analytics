@@ -1,5 +1,7 @@
 # Handoff — Supercuts Analytics
 
+Last updated: 2026-08-05. **Real bug found and fixed — Mullica Hill was missing from Reviews (By DL and flat list both), not a data gap after all.** The 8/3 entry below concluded Mullica Hill was correctly configured (code `80354`, grouped under Jennifer Sutton) and just hadn't had an upload with data yet — true for Sales-Accrual, but the user checked the actual Reviews export and found it identifies this store as `80654`, not `80354`. Every review row for that store was silently keyed to a code with no matching entry in `STORE_CODE_TO_NAME`, so `ReviewsTab`'s `storeMap` (built only from codes present in the review data) never created a row for it at all — not even an "unrecognized code" fallback entry, since `resolveStoreName` only produces one of those when a review row exists in the first place. Fixed with a new `canonicalizeStoreCode()` (`src/storeDirectory.js`) and a `CODE_ALIASES` table (`{ '80654': '80354' }`, commented with why) — applied in `parseReviewsFromGrid` (`src/parser.js`) so every future reviews upload self-corrects at parse time. Commit `eec6e57`, pushed to `main`. **Verified**: real `npm run build`, clean. **Not verified**: a live upload — Setup > Upload's reviews slot fully replaces the list each time (per the standing note elsewhere in this doc), so the *next* normal reviews upload should make Mullica Hill appear under Jennifer Sutton automatically; worth confirming next session. Already-stored review rows from before this fix still carry the wrong `80654` code until the next full reviews upload overwrites them — no backfill script was written since a normal upload naturally supersedes it.
+
 Last updated: 2026-08-03. Ten pieces of work landed today (git log has the commit-by-commit history; this is the consolidated summary):
 
 - **Real brand assets** replaced hand-drawn placeholder art: header (white wordmark), login screen (blue wordmark + robin badge), Tilly's chat FAB (real G&C robin badge instead of a generic bird SVG). Old placeholder SVG components deleted.
@@ -18,7 +20,7 @@ Last updated: 2026-08-03. Ten pieces of work landed today (git log has the commi
 **Open items for next session**:
 - Has the real HSA class schedule been uploaded (Setup > HSA)?
 - Did the Sunday Rallio review email get picked up cleanly by the Gmail automation (check for a "Supercuts report upload failed — SC-Reviews" email, or a fresh timestamp on Setup > Upload's reviews slot)?
-- Has Mullica Hill shown up in any tab yet?
+- Has Mullica Hill shown up correctly under Jennifer Sutton in Reviews after the next reviews upload (see 2026-08-05 fix above)? Also worth checking whether the same `80654`-vs-`80354` mismatch exists in any *other* upload source (Sales-Accrual/Attendance/roster) for this store, or if Reviews was the only one using a divergent code.
 - Does everything from today actually look right live — calendar sizing, the Reviews-tab fix, the Products view, the Weekly tab tiles, the HSA sign-up flow?
 - If the Google Sheets export for HSA sign-ups is still wanted, walk through the Setup > HSA walkthrough to set up `HSA_SHEET_WEBHOOK_URL`/`HSA_SHEET_SECRET`.
 
