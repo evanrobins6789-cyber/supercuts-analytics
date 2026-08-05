@@ -818,7 +818,7 @@ export async function parseSalesAccrualFile(file) {
     const soldBy = col.soldBy !== -1 ? cellText(row[col.soldBy]) : '';
 
     const key = `${code}|${isoDate}`;
-    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, employees: {}, products: {} });
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0, employees: {}, products: {} });
     const rec = daily.get(key);
     const employeeFor = name => {
       if (!name) return null;
@@ -856,6 +856,7 @@ export async function parseSalesAccrualFile(file) {
       if (/^gift\s*card/i.test(itemType)) { rec.giftCards += amount; continue; }
       if (itemType === 'Product') {
         rec.retail += amount;
+        rec.bottles += qty;
         addRetail(soldBy || stylist);
         addProduct();
       } else {
@@ -898,6 +899,7 @@ export async function parseSalesAccrualFile(file) {
     haircuts: Math.round(r.haircuts * 100) / 100,
     signatureS: Math.round(r.signatureS * 100) / 100,
     signatureSCount: Math.round(r.signatureSCount * 100) / 100,
+    bottles: Math.round(r.bottles * 100) / 100,
     employees: Object.entries(r.employees).map(([name, v]) => ({
       name, sales: Math.round(v.sales * 100) / 100, colorSales: Math.round(v.colorSales * 100) / 100,
       haircuts: Math.round(v.haircuts * 100) / 100, retail: Math.round(v.retail * 100) / 100,
@@ -974,9 +976,9 @@ export function mergeSalesIntoHistory(history, salesRecords) {
   const next = { ...history };
   salesRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, signatureSCount: null, employees: {}, products: {} };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, signatureSCount: null, bottles: null, employees: {}, products: {} };
     next[key] = {
-      ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards, haircuts: r.haircuts, signatureS: r.signatureS, signatureSCount: r.signatureSCount,
+      ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards, haircuts: r.haircuts, signatureS: r.signatureS, signatureSCount: r.signatureSCount, bottles: r.bottles,
       products: r.products || {},
       employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales', 'haircuts', 'retail', 'signatureS', 'signatureSCount']),
     };

@@ -389,6 +389,7 @@ function rollupRows(rows) {
   const totalHaircuts = sum('haircuts');
   const totalSignatureS = sum('signatureS');
   const totalSignatureSCount = sum('signatureSCount');
+  const totalBottles = sum('bottles');
   return {
     sales: totalSales,
     totalHours,
@@ -397,6 +398,7 @@ function rollupRows(rows) {
     haircuts: totalHaircuts,
     signatureS: totalSignatureS,
     signatureSCount: totalSignatureSCount,
+    bottles: totalBottles,
     tsth: totalHours > 0 ? totalSales / totalHours : null,
     cpc: totalHaircuts > 0 ? totalColor / totalHaircuts : null,
     rpc: totalHaircuts > 0 ? totalRetail / totalHaircuts : null,
@@ -437,7 +439,7 @@ function groupStoresByLeader(storeRows) {
 // an uploaded weekly report if its whole range sits inside the query range;
 // any day already covered by SOME weekly report is skipped from the daily
 // (Sales-Accrual/Attendance) bucket either way, so nothing is ever counted twice.
-const EMPTY_RANGE_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0 };
+const EMPTY_RANGE_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0 };
 // `products` is deliberately NOT part of the EMPTY_RANGE_TOTALS constant
 // above — that object gets shallow-copied (`{ ...EMPTY_RANGE_TOTALS }`) once
 // per store, and a nested object baked into a shared constant would hand
@@ -453,6 +455,7 @@ function addRangeInto(target, src) {
   target.haircuts += src.haircuts || 0;
   target.signatureS += src.signatureS || 0;
   target.signatureSCount += src.signatureSCount || 0;
+  target.bottles += src.bottles || 0;
   if (src.products) {
     Object.entries(src.products).forEach(([name, v]) => {
       if (!target.products[name]) target.products[name] = { qty: 0, amount: 0 };
@@ -528,12 +531,12 @@ function getRangeTotals(history, weeklyHistory, startISO, endISO) {
       // A weekly Stylist Report upload covers this day for every OTHER
       // field (it's the more authoritative source, hence `covered`
       // skipping the daily record entirely below) — but the Stylist Report
-      // has no item-level detail, so it never carries Signature S (or a
-      // product breakdown) at all. Pulling those straight from the daily
-      // Sales-Accrual record here can't double-count anything, since the
-      // weekly source's contribution to them is always zero.
-      if (r.signatureS || r.signatureSCount) {
-        addTo(r.code, { signatureS: r.signatureS, signatureSCount: r.signatureSCount });
+      // has no item-level detail, so it never carries Signature S, bottle
+      // counts, or a product breakdown at all. Pulling those straight from
+      // the daily Sales-Accrual record here can't double-count anything,
+      // since the weekly source's contribution to them is always zero.
+      if (r.signatureS || r.signatureSCount || r.bottles) {
+        addTo(r.code, { signatureS: r.signatureS, signatureSCount: r.signatureSCount, bottles: r.bottles });
       }
       if (r.products && Object.keys(r.products).length) {
         addTo(r.code, { products: r.products });
@@ -581,6 +584,7 @@ function historyTotalsToReportShape(t) {
     giftCards: t?.giftCards || 0,
     signatureS: t?.signatureS || 0,
     signatureSCount: t?.signatureSCount || 0,
+    bottles: t?.bottles || 0,
     haircuts: haircuts || null,
     tsth: hours > 0 ? service / hours : null,
     cpc: haircuts > 0 ? (t.color || 0) / haircuts : null,
@@ -2086,7 +2090,7 @@ function getPrevMonthRange() {
 }
 
 // ─── Single-focus store tabs (Retail, Color Sales) — grouped by DL ─────────
-function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers, canAward, onAward, isOwner, showProducts }) {
+function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers, canAward, onAward, isOwner, showProducts, goalMetricKey, goalMetricLabel, goalFmt }) {
   const [sortBy, setSortBy] = useState(metricA.key);
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat' | 'products'
   const [expanded, setExpanded] = useState({});
@@ -2095,9 +2099,15 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   const usingDefaultRange = isReportStale(report) && !(dateRange?.start && dateRange?.end);
   const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const isHistorical = !!(effectiveRange?.start && effectiveRange?.end);
+  // The goal is usually tracked against metricA itself (Color/SS goals vs
+  // $ Color/SS sold) — but Retail's goal is a bottle COUNT, a different unit
+  // than the $ retail figure metricA still shows, so the two can be decoupled.
+  const goalKey = goalMetricKey || metricA.key;
+  const goalFormatter = goalFmt || fmt$;
   const getGoal = code => (goalType && goals?.[code]?.[goalType] != null ? goals[code][goalType] : null);
   const showGoals = !!goalType;
-  const colCount = 3 + (showGoals ? 2 : 0) + (showPrevMonthColor ? 1 : 0);
+  const showGoalMetricCol = showGoals && goalKey !== metricA.key && goalKey !== metricB.key;
+  const colCount = 3 + (showGoals ? 2 : 0) + (showPrevMonthColor ? 1 : 0) + (showGoalMetricCol ? 1 : 0);
 
   const prevMonthColorByCode = useMemo(() => {
     if (!showPrevMonthColor) return {};
@@ -2116,7 +2126,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
         const goal = getGoal(code);
         return {
           name: STORE_CODE_TO_NAME[code] || `Store ${code}`, code, ...shape, employees: shape.employees,
-          vsGoal: goal != null ? shape[metricA.key] - goal : null,
+          vsGoal: goal != null ? (shape[goalKey] || 0) - goal : null,
           prevMonthColor: showPrevMonthColor ? prevMonthColorByCode[code] : undefined,
         };
       });
@@ -2125,7 +2135,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
       const goal = getGoal(s.code);
       return {
         name: s.name, code: s.code, employees: s.employees, ...s.totals,
-        vsGoal: goal != null ? s.totals[metricA.key] - goal : null,
+        vsGoal: goal != null ? (s.totals[goalKey] || 0) - goal : null,
         prevMonthColor: showPrevMonthColor ? prevMonthColorByCode[s.code] : undefined,
       };
     });
@@ -2216,6 +2226,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
         <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
           <option value={metricA.key}>Sort: {metricA.label}</option>
           <option value={metricB.key}>Sort: {metricB.label}</option>
+          {showGoalMetricCol && <option value={goalKey}>Sort: {goalMetricLabel}</option>}
           {showGoals && <option value="vsGoal">Sort: vs Goal</option>}
           <option value="name">Sort: Name (A–Z)</option>
         </select>
@@ -2233,7 +2244,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
             const groupTotals = rollupRows(g.stores);
             const sortedStores = sortByMetric(g.stores, sortBy, 'desc');
             const goalTotal = groupGoalTotal(g.stores);
-            const groupDiff = goalTotal > 0 ? groupTotals[metricA.key] - goalTotal : null;
+            const groupDiff = goalTotal > 0 ? (groupTotals[goalKey] || 0) - goalTotal : null;
             const isLeaderOpen = !!expandedLeader[g.leaderName];
             return (
               <div key={g.leaderName} className="dl-card">
@@ -2247,9 +2258,10 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                     <div className="dl-stat"><span className="dl-stat-label">{metricA.label}</span><span className="dl-stat-value">{metricA.fmt(groupTotals[metricA.key])}</span></div>
                     <div className="dl-stat"><span className="dl-stat-label">{metricB.label}</span><span className="dl-stat-value">{metricB.fmt(groupTotals[metricB.key])}</span></div>
                     {showPrevMonthColor && <div className="dl-stat"><span className="dl-stat-label">Prev Month Color</span><span className="dl-stat-value">{fmt$(prevMonthColSum(g.stores))}</span></div>}
-                    {showGoals && <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{goalTotal > 0 ? fmt$(goalTotal) : '—'}</span></div>}
+                    {showGoalMetricCol && <div className="dl-stat"><span className="dl-stat-label">{goalMetricLabel}</span><span className="dl-stat-value">{goalFormatter(groupTotals[goalKey])}</span></div>}
+                    {showGoals && <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{goalTotal > 0 ? goalFormatter(goalTotal) : '—'}</span></div>}
                     {showGoals && (
-                      <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupTotals[metricA.key]} milestone={goalTotal} /></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupTotals[goalKey]} milestone={goalTotal} /></div>
                     )}
                   </div>
                 </button>
@@ -2260,6 +2272,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                         <tr>
                           <th className="ledger-name-col">Store</th><th>{metricA.label}</th><th>{metricB.label}</th>
                           {showPrevMonthColor && <th>Prev Month Color</th>}
+                          {showGoalMetricCol && <th>{goalMetricLabel}</th>}
                           {showGoals && <><th>Goal</th><th>vs Goal</th></>}
                         </tr>
                       </thead>
@@ -2278,10 +2291,11 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                                 <td>{metricA.fmt(s[metricA.key])}</td>
                                 <td>{metricB.fmt(s[metricB.key])}</td>
                                 {showPrevMonthColor && <td>{s.prevMonthColor != null ? fmt$(s.prevMonthColor) : '—'}</td>}
+                                {showGoalMetricCol && <td>{goalFormatter(s[goalKey])}</td>}
                                 {showGoals && (
                                   <>
-                                    <td>{goal != null ? fmt$(goal) : '—'}</td>
-                                    <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${fmt$(diff)}` : '—'}</td>
+                                    <td>{goal != null ? goalFormatter(goal) : '—'}</td>
+                                    <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${goalFormatter(diff)}` : '—'}</td>
                                   </>
                                 )}
                               </tr>
@@ -2309,11 +2323,12 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                           <td>{metricA.fmt(groupTotals[metricA.key])}</td>
                           <td>{metricB.fmt(groupTotals[metricB.key])}</td>
                           {showPrevMonthColor && <td>{fmt$(prevMonthColSum(g.stores))}</td>}
+                          {showGoalMetricCol && <td>{goalFormatter(groupTotals[goalKey])}</td>}
                           {showGoals && (
                             <>
-                              <td>{goalTotal > 0 ? fmt$(goalTotal) : '—'}</td>
+                              <td>{goalTotal > 0 ? goalFormatter(goalTotal) : '—'}</td>
                               <td className={vsGoalClass(groupDiff)}>
-                                {groupDiff != null ? `${groupDiff >= 0 ? '+' : ''}${fmt$(groupDiff)}` : '—'}
+                                {groupDiff != null ? `${groupDiff >= 0 ? '+' : ''}${goalFormatter(groupDiff)}` : '—'}
                               </td>
                             </>
                           )}
@@ -2335,6 +2350,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
               <tr>
                 <th className="ledger-name-col">Store</th><th>{metricA.label}</th><th>{metricB.label}</th>
                 {showPrevMonthColor && <th>Prev Month Color</th>}
+                {showGoalMetricCol && <th>{goalMetricLabel}</th>}
                 {showGoals && <><th>Goal</th><th>vs Goal</th></>}
               </tr>
             </thead>
@@ -2353,10 +2369,11 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                       <td>{metricA.fmt(s[metricA.key])}</td>
                       <td>{metricB.fmt(s[metricB.key])}</td>
                       {showPrevMonthColor && <td>{s.prevMonthColor != null ? fmt$(s.prevMonthColor) : '—'}</td>}
+                      {showGoalMetricCol && <td>{goalFormatter(s[goalKey])}</td>}
                       {showGoals && (
                         <>
-                          <td>{goal != null ? fmt$(goal) : '—'}</td>
-                          <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${fmt$(diff)}` : '—'}</td>
+                          <td>{goal != null ? goalFormatter(goal) : '—'}</td>
+                          <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${goalFormatter(diff)}` : '—'}</td>
                         </>
                       )}
                     </tr>
@@ -2385,11 +2402,12 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                   <td>{metricA.fmt(t[metricA.key])}</td>
                   <td>{metricB.fmt(t[metricB.key])}</td>
                   {showPrevMonthColor && <td>{fmt$(prevMonthColSum(sortedFlat))}</td>}
+                  {showGoalMetricCol && <td>{goalFormatter(t[goalKey])}</td>}
                   {showGoals && (
                     <>
-                      <td>{companyGoalTotal > 0 ? fmt$(companyGoalTotal) : '—'}</td>
-                      <td className={companyGoalTotal > 0 ? vsGoalClass(t[metricA.key] - companyGoalTotal) : ''}>
-                        {companyGoalTotal > 0 ? `${t[metricA.key] - companyGoalTotal >= 0 ? '+' : ''}${fmt$(t[metricA.key] - companyGoalTotal)}` : '—'}
+                      <td>{companyGoalTotal > 0 ? goalFormatter(companyGoalTotal) : '—'}</td>
+                      <td className={companyGoalTotal > 0 ? vsGoalClass((t[goalKey] || 0) - companyGoalTotal) : ''}>
+                        {companyGoalTotal > 0 ? `${(t[goalKey] || 0) - companyGoalTotal >= 0 ? '+' : ''}${goalFormatter((t[goalKey] || 0) - companyGoalTotal)}` : '—'}
                       </td>
                     </>
                   )}
@@ -2896,12 +2914,12 @@ function NewHireTab({ report, fallbackEmployeesByStore, employeeRoster, query, o
 }
 
 // ─── Goals tab ──────────────────────────────────────────────────────────────
-const GOAL_FIELD_LABELS = { salesGoal: 'sales', colorGoal: 'color', retailGoal: 'retail', signatureSGoal: 'signature service' };
+const GOAL_FIELD_LABELS = { salesGoal: 'sales', colorGoal: 'color', bottleGoal: 'bottle', signatureSGoal: 'signature service' };
 
 function GoalsTab({ report, goals, onSaveGoal, onImportGoals, fallbackEmployeesByStore }) {
   const [query, setQuery] = useState('');
-  const [drafts, setDrafts] = useState({}); // { code: { salesGoal, colorGoal, retailGoal, signatureSGoal } } — in-progress edits
-  const [importing, setImporting] = useState(null); // 'colorGoal' | 'retailGoal' | null
+  const [drafts, setDrafts] = useState({}); // { code: { salesGoal, colorGoal, bottleGoal, signatureSGoal } } — in-progress edits
+  const [importing, setImporting] = useState(null); // 'colorGoal' | 'bottleGoal' | null
 
   const handleImportFile = async (field, file) => {
     setImporting(field);
@@ -2941,9 +2959,9 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, fallbackEmployeesB
     onSaveGoal(code, field, isNaN(num) ? null : num);
   };
 
-  const goalField = (code, field) => (
+  const goalField = (code, field, placeholder = '$0') => (
     <input
-      type="number" className="goal-input" placeholder="$0"
+      type="number" className="goal-input" placeholder={placeholder}
       value={getVal(code, field)}
       onChange={e => handleChange(code, field, e.target.value)}
       onBlur={() => handleBlur(code, field)}
@@ -2958,7 +2976,7 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, fallbackEmployeesB
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
-      <p className="section-hint">Set a weekly Sales, Color, Retail, and Signature Service goal per store. Color, Retail, and Signature Service goals show up as "Goal"/"vs Goal" columns on their tabs; Sales goals show up on the Stores tab.</p>
+      <p className="section-hint">Set a weekly Sales, Color, Bottle, and Signature Service goal per store. Color and Signature Service goals track $ sold; the Bottle goal tracks a unit count of retail product sold instead of a dollar figure. All three show up as "Goal"/"vs Goal" columns on their tabs; Sales goals show up on the Stores tab.</p>
 
       <p className="section-hint">Download a blank sheet listing your stores (grouped by DL), fill in the Goal column, then import it below with whichever button matches what you filled in.</p>
       <div className="goal-import-row">
@@ -2985,9 +3003,9 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, fallbackEmployeesB
         <label className="goal-import-btn">
           <input
             type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
-            onChange={e => { if (e.target.files[0]) handleImportFile('retailGoal', e.target.files[0]); e.target.value = ''; }}
+            onChange={e => { if (e.target.files[0]) handleImportFile('bottleGoal', e.target.files[0]); e.target.value = ''; }}
           />
-          {importing === 'retailGoal' ? <span className="spinner small" /> : '📥'} Import Retail Goals from file
+          {importing === 'bottleGoal' ? <span className="spinner small" /> : '📥'} Import Bottle Goals from file
         </label>
         <label className="goal-import-btn">
           <input
@@ -3005,7 +3023,7 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, fallbackEmployeesB
               <th className="ledger-name-col">Store</th>
               <th>Sales Goal</th>
               <th>Color Goal</th>
-              <th>Retail Goal</th>
+              <th>Bottle Goal</th>
               <th>Signature Service Goal</th>
             </tr>
           </thead>
@@ -3015,7 +3033,7 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, fallbackEmployeesB
                 <td className="ledger-name-col">{s.name}</td>
                 <td>{goalField(s.code, 'salesGoal')}</td>
                 <td>{goalField(s.code, 'colorGoal')}</td>
-                <td>{goalField(s.code, 'retailGoal')}</td>
+                <td>{goalField(s.code, 'bottleGoal', '0')}</td>
                 <td>{goalField(s.code, 'signatureSGoal')}</td>
               </tr>
             ))}
@@ -4148,7 +4166,7 @@ function expandDateRange(start, end) {
   }
   return dates;
 }
-const EMPTY_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0 };
+const EMPTY_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0 };
 function addInto(target, src) {
   target.service += src.service || 0;
   target.retail += src.retail || 0;
@@ -4158,6 +4176,7 @@ function addInto(target, src) {
   target.haircuts += src.haircuts || 0;
   target.signatureS += src.signatureS || 0;
   target.signatureSCount += src.signatureSCount || 0;
+  target.bottles += src.bottles || 0;
 }
 
 // Builds one row per week — a real uploaded Stylist Report week where one
@@ -4179,17 +4198,18 @@ function buildWeeklySnapshots(dailyHistory, weeklyHistory) {
   Object.values(dailyHistory || {}).forEach(r => {
     if (covered.has(r.date)) {
       // Same reasoning as getRangeTotals: a weekly Stylist Report upload
-      // never carries Signature S (no item-level detail), so a day that's
-      // "covered" by one still needs its daily Sales-Accrual signatureS
-      // patched into that week's entry — otherwise Signature S silently
-      // reads $0 for any week that also had a routine Stylist Report
+      // never carries Signature S or bottle counts (no item-level detail),
+      // so a day that's "covered" by one still needs its daily Sales-Accrual
+      // signatureS/bottles patched into that week's entry — otherwise they'd
+      // silently read 0 for any week that also had a routine Stylist Report
       // uploaded, which is the normal case every week.
-      if (r.signatureS) {
+      if (r.signatureS || r.bottles) {
         const w = weeklyEntries.find(w => r.date >= w.startDate && r.date <= w.endDate);
         if (w) {
           if (!w.stores[r.code]) w.stores[r.code] = { ...EMPTY_TOTALS };
           w.stores[r.code].signatureS = (w.stores[r.code].signatureS || 0) + r.signatureS;
           w.stores[r.code].signatureSCount = (w.stores[r.code].signatureSCount || 0) + (r.signatureSCount || 0);
+          w.stores[r.code].bottles = (w.stores[r.code].bottles || 0) + (r.bottles || 0);
         }
       }
       return;
@@ -4573,7 +4593,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     report.stores.forEach(s => {
       const st = s.totals;
       const goal = goals?.[s.code];
-      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Retail Goal: ${goal.retailGoal ?? 'none'}, Signature Service Goal: ${goal.signatureSGoal ?? 'none'}` : '';
+      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Bottle Goal: ${goal.bottleGoal ?? 'none'}, Signature Service Goal: ${goal.signatureSGoal ?? 'none'}` : '';
       lines.push(`${s.name}: Sales $${Math.round(st.sales)}, TSTH $${st.tsth != null ? st.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(st.totalHours)}, Color $${Math.round(st.colorSales)}, Retail $${Math.round(st.retail)}, CPC ${st.cpc != null ? st.cpc.toFixed(2) : 'n/a'}, RPC ${st.rpc != null ? st.rpc.toFixed(2) : 'n/a'}, Cuts ${Math.round(st.haircuts || 0)}, CPH ${st.cph != null ? st.cph.toFixed(2) : 'n/a'}${goalStr}`);
     });
     currentStoreRows = report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals }));
@@ -4592,7 +4612,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     lines.push('Per-store totals for the CURRENT period (Store: Sales, TSTH, Hours, Color, Retail, CPC, RPC, Cuts, CPH, goals if set):');
     currentStoreRows.forEach(s => {
       const goal = goals?.[s.code];
-      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Retail Goal: ${goal.retailGoal ?? 'none'}, Signature Service Goal: ${goal.signatureSGoal ?? 'none'}` : '';
+      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Bottle Goal: ${goal.bottleGoal ?? 'none'}, Signature Service Goal: ${goal.signatureSGoal ?? 'none'}` : '';
       lines.push(`${s.name}: Sales $${Math.round(s.sales)}, TSTH $${s.tsth != null ? s.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(s.totalHours)}, Color $${Math.round(s.colorSales)}, Retail $${Math.round(s.retail)}, CPC ${s.cpc != null ? s.cpc.toFixed(2) : 'n/a'}, RPC ${s.rpc != null ? s.rpc.toFixed(2) : 'n/a'}, Cuts ${Math.round(s.haircuts || 0)}, CPH ${s.cph != null ? s.cph.toFixed(2) : 'n/a'}${goalStr}`);
     });
   }
@@ -4610,11 +4630,11 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   // standing target, not tied to a specific historical month.
   if (goals && Object.keys(goals).length) {
     lines.push('');
-    lines.push('STORE GOALS (Sales/Color/Retail/Signature Service targets — standing targets, not specific to any period, entered by DLs on the Goals tab):');
+    lines.push('STORE GOALS (Sales/Color/Bottle/Signature Service targets — standing targets, not specific to any period, entered by DLs on the Goals tab; Bottle Goal is a unit count of retail product, not a dollar figure):');
     Object.entries(goals).forEach(([code, g]) => {
-      if (g.salesGoal == null && g.colorGoal == null && g.retailGoal == null && g.signatureSGoal == null) return;
+      if (g.salesGoal == null && g.colorGoal == null && g.bottleGoal == null && g.signatureSGoal == null) return;
       const name = STORE_CODE_TO_NAME[code] || `Store ${code}`;
-      lines.push(`${name}: Sales Goal ${g.salesGoal ?? 'none'}, Color Goal ${g.colorGoal ?? 'none'}, Retail Goal ${g.retailGoal ?? 'none'}, Signature Service Goal ${g.signatureSGoal ?? 'none'}`);
+      lines.push(`${name}: Sales Goal ${g.salesGoal ?? 'none'}, Color Goal ${g.colorGoal ?? 'none'}, Bottle Goal ${g.bottleGoal ?? 'none'}, Signature Service Goal ${g.signatureSGoal ?? 'none'}`);
     });
   }
 
@@ -4657,7 +4677,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     months.forEach(m => {
       const t = periodTotals(m.stores);
       const cph = t.hours > 0 ? t.haircuts / t.hours : null;
-      lines.push(`${m.month}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Gift Cards $${Math.round(t.giftCards)}, SS ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}, CPH ${cph != null ? cph.toFixed(2) : 'n/a'}`);
+      lines.push(`${m.month}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Bottles ${Math.round(t.bottles || 0)}, Gift Cards $${Math.round(t.giftCards)}, SS ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}, CPH ${cph != null ? cph.toFixed(2) : 'n/a'}`);
     });
 
     // Per-store breakdown + top employees, computed once per month from the
@@ -4675,7 +4695,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       lines.push(`${m.month}:`);
       Object.entries(monthlyTotals.get(m.month)).forEach(([code, t]) => {
         const name = STORE_CODE_TO_NAME[code] || `Store ${code}`;
-        lines.push(`  ${name}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, SS ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}`);
+        lines.push(`  ${name}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Bottles ${Math.round(t.bottles || 0)}, SS ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}`);
       });
     });
 
@@ -6702,7 +6722,7 @@ export default function App() {
           <StoreMetricTab
             report={report} query={queries.Retail} onQuery={v => setQuery('Retail', v)}
             title="Retail" metricA={{ key: 'retail', label: 'Retail', fmt: fmt$ }} metricB={{ key: 'rpc', label: 'RPC', fmt: fmtNum }}
-            goalType="retailGoal" goals={goals}
+            goalType="bottleGoal" goals={goals} goalMetricKey="bottles" goalMetricLabel="Bottles" goalFmt={fmtInt}
             history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
             managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
             showProducts
