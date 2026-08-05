@@ -94,3 +94,19 @@ export function getCodeForStoreName(name) {
   if (nameToCode[n]) return nameToCode[n];
   return null;
 }
+
+// Some upload sources identify a store by a CODE (not a name), but use a
+// different code than the roster's canonical one for that store. Unlike
+// ALIASES above (name -> code), this maps a wrong/source-specific code
+// straight to the canonical one, so a code-keyed source can be corrected at
+// parse time instead of silently producing an unmatched/misattributed store.
+const CODE_ALIASES = {
+  '80654': '80354', // the Reviews export's "Location Short Name" for Mullica Hill; roster's real code is 80354
+};
+
+// Returns the canonical store code for a given raw code, correcting known
+// per-source mistakes via CODE_ALIASES; passes the code through unchanged
+// if it isn't a known alias.
+export function canonicalizeStoreCode(code) {
+  return CODE_ALIASES[code] || code;
+}

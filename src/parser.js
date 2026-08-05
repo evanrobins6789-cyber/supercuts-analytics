@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { getCodeForStoreName } from './storeDirectory';
+import { getCodeForStoreName, canonicalizeStoreCode } from './storeDirectory';
 
 export function sheetToGrid(ws) {
   const ref = ws['!ref'];
@@ -465,7 +465,7 @@ export function parseReviewsFromGrid(grid, fileName) {
   for (let r = 1; r < grid.length; r++) {
     const row = grid[r];
     if (!rowHasData(row)) continue;
-    const code = cellText(row[col.code]);
+    const code = canonicalizeStoreCode(cellText(row[col.code]));
     if (!code) continue;
     reviews.push({
       code,
