@@ -1818,8 +1818,9 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
 }
 
 // ─── Stores tab ─────────────────────────────────────────────────────────────
-function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers, canAward, onAward, isOwner }) {
+function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers, canAward, onAward, isOwner, goals }) {
   const [sortBy, setSortBy] = useState('tsth');
+  const getSalesGoal = code => goals?.[code]?.salesGoal ?? null;
   const [expanded, setExpanded] = useState({});
   const [focused, setFocused] = useState(null);
   // No live weekly Stylist Report and no explicit date range picked — fall
@@ -1892,6 +1893,12 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
                 </div>
                 <div className="dl-card-stats">
                   <div className="dl-stat"><span className="dl-stat-label">Sales</span><span className="dl-stat-value">{fmt$(s.sales)}</span></div>
+                  {getSalesGoal(s.code) != null && (
+                    <>
+                      <div className="dl-stat"><span className="dl-stat-label">Sales Goal</span><span className="dl-stat-value">{fmt$(getSalesGoal(s.code))}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">vs Goal</span><span className={`dl-stat-value ${vsGoalClass(s.sales - getSalesGoal(s.code))}`}>{s.sales - getSalesGoal(s.code) >= 0 ? '+' : ''}{fmt$(s.sales - getSalesGoal(s.code))}</span></div>
+                    </>
+                  )}
                   <div className="dl-stat"><span className="dl-stat-label">TSTH</span><span className={`dl-stat-value ${tsthClass(s.tsth)}`}>{fmtRate(s.tsth)}</span></div>
                   <div className="dl-stat"><span className="dl-stat-label">Hours</span><span className="dl-stat-value">{fmtNum(s.totalHours, 0)}</span></div>
                   <div className="dl-stat"><span className="dl-stat-label">Color</span><span className="dl-stat-value">{fmt$(s.colorSales)}</span></div>
@@ -2889,9 +2896,9 @@ function NewHireTab({ report, fallbackEmployeesByStore, employeeRoster, query, o
 }
 
 // ─── Goals tab ──────────────────────────────────────────────────────────────
-function GoalsTab({ report, goals, onSaveGoal, onImportGoals }) {
+function GoalsTab({ report, goals, onSaveGoal, onImportGoals, fallbackEmployeesByStore }) {
   const [query, setQuery] = useState('');
-  const [drafts, setDrafts] = useState({}); // { code: { colorGoal, retailGoal } } — in-progress edits
+  const [drafts, setDrafts] = useState({}); // { code: { salesGoal, colorGoal, retailGoal, signatureSGoal } } — in-progress edits
   const [importing, setImporting] = useState(null); // 'colorGoal' | 'retailGoal' | null
 
   const handleImportFile = async (field, file) => {
@@ -2900,12 +2907,19 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals }) {
     setImporting(null);
   };
 
-  if (!report) {
-    return <div className="empty-state"><p className="empty-title">No report yet</p><p>Upload a stylist report first, so there's a store list to set goals for.</p></div>;
+  // A live weekly Stylist Report isn't always on file (see the rest of the
+  // app's month-to-date fallback) — goals are forward-looking and shouldn't
+  // be blocked just because there's no live upload right now, so fall back
+  // to whatever stores show up in the Sales-Accrual/Attendance history.
+  const allStores = report
+    ? report.stores.map(s => ({ name: s.name, code: s.code }))
+    : Object.keys(fallbackEmployeesByStore || {}).map(code => ({ code, name: STORE_CODE_TO_NAME[code] || `Store ${code}` }));
+
+  if (!allStores.length) {
+    return <div className="empty-state"><p className="empty-title">No stores yet</p><p>Upload a stylist report or run a Sales-Accrual historical import first, so there's a store list to set goals for.</p></div>;
   }
 
-  const stores = report.stores
-    .map(s => ({ name: s.name, code: s.code }))
+  const stores = allStores
     .filter(s => !query.trim() || s.name.toLowerCase().includes(query.trim().toLowerCase()))
     .sort((a, b) => a.name.localeCompare(b.name));
 
@@ -2925,10 +2939,19 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals }) {
     onSaveGoal(code, field, isNaN(num) ? null : num);
   };
 
+  const goalField = (code, field) => (
+    <input
+      type="number" className="goal-input" placeholder="$0"
+      value={getVal(code, field)}
+      onChange={e => handleChange(code, field, e.target.value)}
+      onBlur={() => handleBlur(code, field)}
+    />
+  );
+
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
-      <p className="section-hint">Set a weekly Color and Retail sales goal per store. These show up as "Goal" and "vs Goal" columns on the Retail and Color Sales tabs.</p>
+      <p className="section-hint">Set a weekly Sales, Color, Retail, and Signature Service goal per store. Color and Retail goals show up as "Goal"/"vs Goal" columns on their tabs; Signature Service goals show up the same way on the Signature Service tab.</p>
 
       <div className="goal-import-row">
         <label className="goal-import-btn">
@@ -2952,30 +2975,20 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals }) {
           <thead>
             <tr>
               <th className="ledger-name-col">Store</th>
+              <th>Sales Goal</th>
               <th>Color Goal</th>
               <th>Retail Goal</th>
+              <th>Signature Service Goal</th>
             </tr>
           </thead>
           <tbody>
             {stores.map(s => (
               <tr key={s.code}>
                 <td className="ledger-name-col">{s.name}</td>
-                <td>
-                  <input
-                    type="number" className="goal-input" placeholder="$0"
-                    value={getVal(s.code, 'colorGoal')}
-                    onChange={e => handleChange(s.code, 'colorGoal', e.target.value)}
-                    onBlur={() => handleBlur(s.code, 'colorGoal')}
-                  />
-                </td>
-                <td>
-                  <input
-                    type="number" className="goal-input" placeholder="$0"
-                    value={getVal(s.code, 'retailGoal')}
-                    onChange={e => handleChange(s.code, 'retailGoal', e.target.value)}
-                    onBlur={() => handleBlur(s.code, 'retailGoal')}
-                  />
-                </td>
+                <td>{goalField(s.code, 'salesGoal')}</td>
+                <td>{goalField(s.code, 'colorGoal')}</td>
+                <td>{goalField(s.code, 'retailGoal')}</td>
+                <td>{goalField(s.code, 'signatureSGoal')}</td>
               </tr>
             ))}
           </tbody>
@@ -4532,7 +4545,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     report.stores.forEach(s => {
       const st = s.totals;
       const goal = goals?.[s.code];
-      const goalStr = goal ? ` | Color Goal: ${goal.colorGoal ?? 'none'}, Retail Goal: ${goal.retailGoal ?? 'none'}` : '';
+      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Retail Goal: ${goal.retailGoal ?? 'none'}, Signature Service Goal: ${goal.signatureSGoal ?? 'none'}` : '';
       lines.push(`${s.name}: Sales $${Math.round(st.sales)}, TSTH $${st.tsth != null ? st.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(st.totalHours)}, Color $${Math.round(st.colorSales)}, Retail $${Math.round(st.retail)}, CPC ${st.cpc != null ? st.cpc.toFixed(2) : 'n/a'}, RPC ${st.rpc != null ? st.rpc.toFixed(2) : 'n/a'}, Cuts ${Math.round(st.haircuts || 0)}, CPH ${st.cph != null ? st.cph.toFixed(2) : 'n/a'}${goalStr}`);
     });
     currentStoreRows = report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals }));
@@ -4551,7 +4564,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     lines.push('Per-store totals for the CURRENT period (Store: Sales, TSTH, Hours, Color, Retail, CPC, RPC, Cuts, CPH, goals if set):');
     currentStoreRows.forEach(s => {
       const goal = goals?.[s.code];
-      const goalStr = goal ? ` | Color Goal: ${goal.colorGoal ?? 'none'}, Retail Goal: ${goal.retailGoal ?? 'none'}` : '';
+      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Retail Goal: ${goal.retailGoal ?? 'none'}, Signature Service Goal: ${goal.signatureSGoal ?? 'none'}` : '';
       lines.push(`${s.name}: Sales $${Math.round(s.sales)}, TSTH $${s.tsth != null ? s.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(s.totalHours)}, Color $${Math.round(s.colorSales)}, Retail $${Math.round(s.retail)}, CPC ${s.cpc != null ? s.cpc.toFixed(2) : 'n/a'}, RPC ${s.rpc != null ? s.rpc.toFixed(2) : 'n/a'}, Cuts ${Math.round(s.haircuts || 0)}, CPH ${s.cph != null ? s.cph.toFixed(2) : 'n/a'}${goalStr}`);
     });
   }
@@ -4569,11 +4582,11 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   // standing target, not tied to a specific historical month.
   if (goals && Object.keys(goals).length) {
     lines.push('');
-    lines.push('STORE GOALS (Color/Retail targets — standing targets, not specific to any period):');
+    lines.push('STORE GOALS (Sales/Color/Retail/Signature Service targets — standing targets, not specific to any period, entered by DLs on the Goals tab):');
     Object.entries(goals).forEach(([code, g]) => {
-      if (g.colorGoal == null && g.retailGoal == null) return;
+      if (g.salesGoal == null && g.colorGoal == null && g.retailGoal == null && g.signatureSGoal == null) return;
       const name = STORE_CODE_TO_NAME[code] || `Store ${code}`;
-      lines.push(`${name}: Color Goal ${g.colorGoal ?? 'none'}, Retail Goal ${g.retailGoal ?? 'none'}`);
+      lines.push(`${name}: Sales Goal ${g.salesGoal ?? 'none'}, Color Goal ${g.colorGoal ?? 'none'}, Retail Goal ${g.retailGoal ?? 'none'}, Signature Service Goal ${g.signatureSGoal ?? 'none'}`);
     });
   }
 
@@ -4854,7 +4867,6 @@ function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory
 // ─── Setup tab ──────────────────────────────────────────────────────────────
 const SETUP_SECTIONS = [
   { key: 'guide', label: 'Guide' },
-  { key: 'goals', label: 'Goals' },
   { key: 'managers', label: 'Managers' },
   { key: 'milestoneGoals', label: 'Milestone Goals' },
   { key: 'homepage', label: 'Homepage' },
@@ -5303,7 +5315,7 @@ function doPost(e) {
 
 const SETUP_PASSWORD = 'sc4310';
 
-function SetupTab({ configured, section, onSection, goalsProps, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps, employeeAccessProps, rewardsProps, hsaProps }) {
+function SetupTab({ configured, section, onSection, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps, employeeAccessProps, rewardsProps, hsaProps }) {
   const [unlocked, setUnlocked] = useState(false);
   const [pwInput, setPwInput] = useState('');
   const [pwError, setPwError] = useState(false);
@@ -5356,7 +5368,6 @@ function SetupTab({ configured, section, onSection, goalsProps, managersProps, m
         ))}
       </div>
 
-      {section === 'goals' && <GoalsTab {...goalsProps} />}
       {section === 'managers' && <ManagersTab {...managersProps} />}
       {section === 'milestoneGoals' && <MilestoneGoalsTab {...milestoneGoalsProps} />}
       {section === 'homepage' && <HomepageAdminTab {...homepageAdminProps} />}
@@ -5669,7 +5680,7 @@ function RewardsSetupTab({ token, showToast }) {
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'DL', '60 Day Employee', 'Reviews', 'Weekly', "Tillie's Nest", 'Setup'];
+const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'Signature Service', 'Goals', 'DL', '60 Day Employee', 'Reviews', 'Weekly', "Tillie's Nest", 'Setup'];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
@@ -5714,7 +5725,7 @@ export default function App() {
   const [uploadingRoster, setUploadingRoster] = useState(false);
   const [uploadingReviews, setUploadingReviews] = useState(false);
   const [selectedMetric, setSelectedMetric] = useState('tsth');
-  const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', Retail: '', 'Color Sales': '', DL: '', '60 Day Employee': '', Reviews: '' });
+  const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', Retail: '', 'Color Sales': '', 'Signature Service': '', Goals: '', DL: '', '60 Day Employee': '', Reviews: '' });
   const [pointsSummary, setPointsSummary] = useState(null);
 
   useEffect(() => {
@@ -6607,13 +6618,13 @@ export default function App() {
   if (!currentUser) return <LoginScreen onLoggedIn={handleLoggedIn} />;
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
-  const visibleTabs = TABS.filter(t => t !== 'Setup' || currentUser.role === 'owner');
+  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee'));
   // A live weekly Stylist Report upload is no longer the only way to power
   // these tabs — Sales-Accrual + Attendance historical imports feed the
   // exact same tables via each tab's own current-month fallback (see
   // getCurrentMonthRange). Only actually block on "nothing at all yet".
   const hasHistoricalData = Object.keys(history || {}).length > 0 || Object.keys(weeklyHistory || {}).length > 0;
-  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA';
+  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals';
 
   return (
     <div className="app">
@@ -6654,7 +6665,7 @@ export default function App() {
           <OverviewTab report={report} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} />
         )}
         {!needsReport && tab === 'Stores' && (report || hasHistoricalData) && (
-          <StoresTab report={report} query={queries.Stores} onQuery={v => setQuery('Stores', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'} />
+          <StoresTab report={report} query={queries.Stores} onQuery={v => setQuery('Stores', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'} goals={goals} />
         )}
         {!needsReport && tab === 'Employees' && (report || hasHistoricalData) && (
           <EmployeesTab report={report} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
@@ -6680,6 +6691,18 @@ export default function App() {
             managers={managers}
           />
         )}
+        {!needsReport && tab === 'Signature Service' && (report || hasHistoricalData) && (
+          <StoreMetricTab
+            report={report} query={queries['Signature Service']} onQuery={v => setQuery('Signature Service', v)}
+            title="Signature Service" metricA={{ key: 'signatureS', label: 'Signature Service', fmt: fmt$ }} metricB={{ key: 'signatureSCount', label: 'SS Count', fmt: fmtInt }}
+            goalType="signatureSGoal" goals={goals}
+            history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
+            managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
+          />
+        )}
+        {tab === 'Goals' && (
+          <GoalsTab report={report} goals={goals} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} fallbackEmployeesByStore={fallbackEmployeesByStore} />
+        )}
         {!needsReport && tab === 'DL' && (report || hasHistoricalData) && (
           <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} milestoneGoals={milestoneGoals} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
         )}
@@ -6703,7 +6726,6 @@ export default function App() {
         {tab === 'Setup' && (
           <SetupTab
             configured={isConfigured()} section={setupSection} onSection={setSetupSection}
-            goalsProps={{ report, goals, onSaveGoal: handleSaveGoal, onImportGoals: handleImportGoals }}
             managersProps={{ report, managers, onSaveManager: handleSaveManager, onImportManagers: handleImportManagers }}
             milestoneGoalsProps={{ report, milestoneGoals, onSaveMilestoneGoal: handleSaveMilestoneGoal, onImportMilestoneGoals: handleImportMilestoneGoals }}
             homepageAdminProps={{
