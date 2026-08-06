@@ -9,7 +9,7 @@ import {
 } from './parser';
 import {
   getSession, setSession, clearSession, checkEligible, signUp, logIn, logOut,
-  loadScoped, loadScopedByPrefix, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate,
+  loadScoped, loadScopedByPrefix, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
   pointsBalance, pointsAward, pointsAllBalances, pointsTransactions, pointsDeleteTransaction,
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled, hsaSheetSync,
 } from './auth';
@@ -4953,6 +4953,9 @@ function EmployeeAccessSetupTab({ token }) {
   const [drafts, setDrafts] = useState({}); // { id: { name?, phone?, employeeCode?, storeCodes? } } — in-progress edits
   const [savingId, setSavingId] = useState(null);
   const [query, setQuery] = useState('');
+  const [loginCounts, setLoginCounts] = useState(null); // null = not loaded yet
+  const [loadingLoginCounts, setLoadingLoginCounts] = useState(false);
+  const [loginCountsError, setLoginCountsError] = useState(null);
 
   const refresh = useCallback(() => {
     setLoadingList(true);
@@ -5006,6 +5009,15 @@ function EmployeeAccessSetupTab({ token }) {
     setSavingId(null);
     if (!res.ok) setMsg({ type: 'error', text: res.error });
     else { setMsg({ type: 'ok', text: `PIN set for ${name}.` }); refresh(); }
+  };
+
+  const loadLoginCounts = async () => {
+    setLoadingLoginCounts(true);
+    setLoginCountsError(null);
+    const res = await rosterLoginCounts(token);
+    setLoadingLoginCounts(false);
+    if (!res.ok) setLoginCountsError(res.error);
+    else setLoginCounts(res.counts);
   };
 
   const getVal = (id, field, fallback) => (drafts[id]?.[field] !== undefined ? drafts[id][field] : fallback);
@@ -5148,6 +5160,45 @@ function EmployeeAccessSetupTab({ token }) {
       )}
       {!loadingList && !employees.length && <p className="empty-note">No one uploaded yet.</p>}
       {!loadingList && !!employees.length && !filteredEmployees.length && <p className="empty-note">No one matches your search.</p>}
+
+      <p className="section-label">🔐 Login Activity</p>
+      <p className="section-hint">
+        How many times each person has actually logged in, owner-only. Counts every "Create a Login" and Sign In from an append-only log —
+        unlike the roster above, this can't be edited or reset from here. Someone who's never logged in won't have a row.
+      </p>
+      {loginCounts === null ? (
+        <button className="btn-ghost" onClick={loadLoginCounts} disabled={loadingLoginCounts}>
+          {loadingLoginCounts ? <span className="spinner small" /> : '📊'} Show Login Activity
+        </button>
+      ) : (
+        <>
+          <button className="btn-ghost" onClick={loadLoginCounts} disabled={loadingLoginCounts}>
+            {loadingLoginCounts ? <span className="spinner small" /> : '↻'} Refresh
+          </button>
+          <div className="ledger-scroll">
+            <table className="ledger-table">
+              <thead>
+                <tr>
+                  <th className="ledger-name-col">Name</th>
+                  <th className="ledger-text-col">Times Logged In</th>
+                  <th className="ledger-text-col">Last Login</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loginCounts.map(c => (
+                  <tr key={c.employeeId}>
+                    <td className="ledger-name-col">{c.employeeName}</td>
+                    <td className="ledger-text-col">{fmtInt(c.count)}</td>
+                    <td className="ledger-text-col">{c.lastLogin ? new Date(c.lastLogin).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {!loginCounts.length && <p className="empty-note">No logins recorded yet.</p>}
+        </>
+      )}
+      {loginCountsError && <p className="password-error">{loginCountsError}</p>}
     </div>
   );
 }

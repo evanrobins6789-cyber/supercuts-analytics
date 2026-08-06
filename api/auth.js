@@ -38,6 +38,20 @@ async function findEligibleSignupRow(supabase, phone) {
   return unregistered[0];
 }
 
+// Append-only audit trail, separate from `sessions` — `sessions` rows get
+// deleted on logout (it's just "who's currently signed in"), which makes it
+// useless for answering "how many times has this person logged in." A row
+// here is never deleted, so counts/last-login are always reconstructable.
+// Best-effort: a failure here shouldn't block someone from actually logging
+// in, so errors are swallowed rather than thrown.
+async function logLoginEvent(supabase, employee) {
+  try {
+    await supabase.from('login_events').insert({ employee_id: employee.id, employee_name: employee.name });
+  } catch {
+    // swallow — see comment above
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
@@ -87,6 +101,7 @@ export default async function handler(req, res) {
       const sessionToken = generateToken();
       const { error: sessionError } = await supabase.from('sessions').insert({ token: sessionToken, employee_id: employee.id });
       if (sessionError) throw new Error(sessionError.message);
+      await logLoginEvent(supabase, employee);
       res.status(200).json({ token: sessionToken, name: employee.name, role: employee.role });
       return;
     }
@@ -104,6 +119,7 @@ export default async function handler(req, res) {
       const sessionToken = generateToken();
       const { error: sessionError } = await supabase.from('sessions').insert({ token: sessionToken, employee_id: employee.id });
       if (sessionError) throw new Error(sessionError.message);
+      await logLoginEvent(supabase, employee);
       res.status(200).json({ token: sessionToken, name: employee.name, role: employee.role });
       return;
     }

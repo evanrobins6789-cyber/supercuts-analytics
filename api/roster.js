@@ -64,6 +64,29 @@ export default async function handler(req, res) {
       return;
     }
 
+    // Aggregates the append-only `login_events` log (see api/auth.js) into
+    // per-person counts. Fetched and rolled up in JS rather than a SQL GROUP
+    // BY — matches this app's existing pragmatic style (e.g. the O(n) PIN
+    // scan in serverAuth.js) since the login volume here is nowhere near
+    // where that'd matter.
+    if (action === 'loginCounts') {
+      const { data, error } = await supabase.from('login_events').select('employee_id, employee_name, created_at');
+      if (error) throw new Error(error.message);
+      const byEmployee = new Map();
+      for (const row of data || []) {
+        const entry = byEmployee.get(row.employee_id) || { employeeId: row.employee_id, employeeName: row.employee_name, count: 0, lastLogin: null };
+        entry.count += 1;
+        if (!entry.lastLogin || row.created_at > entry.lastLogin) {
+          entry.lastLogin = row.created_at;
+          entry.employeeName = row.employee_name; // keep whichever name was current as of their most recent login
+        }
+        byEmployee.set(row.employee_id, entry);
+      }
+      const counts = Array.from(byEmployee.values()).sort((a, b) => b.count - a.count);
+      res.status(200).json({ ok: true, counts });
+      return;
+    }
+
     if (action === 'upload') {
       if (!Array.isArray(rows) || !rows.length) {
         res.status(400).json({ error: 'No rows to upload.' });

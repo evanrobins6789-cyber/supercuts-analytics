@@ -96,6 +96,10 @@ export function rosterUpdate(token, id, patch) {
   return postJson('/api/roster', { action: 'update', token, id, ...patch });
 }
 
+export function rosterLoginCounts(token) {
+  return postJson('/api/roster', { action: 'loginCounts', token });
+}
+
 // Employee points / "Tillie's Nest" shop — thin wrappers over api/points.js,
 // same postJson shape as the roster wrappers above.
 export function pointsBalance(token) {
