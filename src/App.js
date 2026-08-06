@@ -654,7 +654,7 @@ function isReportStale(report) {
 }
 
 // Employee-name-mention matching (Reviews tab, Homepage shoutouts) and
-// "which store is this person at" lookups (60 Day Employee tab) all used to
+// "which store is this person at" lookups (Employees tab's New Hires sort) all used to
 // read report.stores[].employees directly — fine while a live report existed,
 // but that roster goes stale exactly like everything else about `report`
 // once uploads stop. This gives the same {code: [{name}, ...]} shape sourced
@@ -670,7 +670,7 @@ function getEmployeesByStoreFromHistory(history, weeklyHistory) {
   const map = {};
   // Full finalized employee records (name + sales/color/retail/hours/etc,
   // same shape report.allEmployees entries have) — mention-matching only
-  // ever reads .name, but the 60 Day Employee tab's fallback needs the
+  // ever reads .name, but the Employees tab's New Hires fallback needs the
   // real metrics too, so keep everything rather than stripping to name-only.
   Object.entries(totals).forEach(([code, t]) => { map[code] = t.employees || []; });
   return map;
@@ -2013,9 +2013,11 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
   );
 }
 
-function EmployeesTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, query, onQuery, managers, canAward, onAward }) {
+function EmployeesTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, query, onQuery, managers, canAward, onAward, employeeRoster, fallbackEmployeesByStore }) {
   const [sortBy, setSortBy] = useState('sales');
+  const [newHireSortBy, setNewHireSortBy] = useState('daysAgo');
   const [focused, setFocused] = useState(null);
+  const showingNewHires = sortBy === 'newHires';
   const usingDefaultRange = isReportStale(report) && !(dateRange?.start && dateRange?.end);
   const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const isHistorical = !!(effectiveRange?.start && effectiveRange?.end);
@@ -2051,32 +2053,117 @@ function EmployeesTab({ report, history, weeklyHistory, dateRange, onDateRangeCh
   const sorted = useMemo(() => sortByMetric(filtered, sortBy, 'desc'), [filtered, sortBy]);
   const activeMetric = EMPLOYEE_METRICS.find(m => m.key === sortBy);
 
+  // "New Hires (last 60 days)" — folded in from the old standalone 60 Day
+  // Employee tab as just another sort option, since it's really the same
+  // employee list narrowed to a different question ("who's new" instead of
+  // "who's ranked how"), not a fundamentally different view.
+  const newHireRows = useMemo(() => buildNewHireRows(report, employeeRoster, fallbackEmployeesByStore), [report, employeeRoster, fallbackEmployeesByStore]);
+  const newHireFiltered = useMemo(() => {
+    if (!query.trim()) return newHireRows;
+    const q = query.trim().toLowerCase();
+    return newHireRows.filter(r =>
+      r.name.toLowerCase().includes(q) ||
+      (r.store || '').toLowerCase().includes(q) ||
+      (r.dl || '').toLowerCase().includes(q)
+    );
+  }, [newHireRows, query]);
+  const newHireSorted = useMemo(() => {
+    if (newHireSortBy === 'daysAgo') return [...newHireFiltered].sort((a, b) => a.daysAgo - b.daysAgo);
+    return sortByMetric(newHireFiltered, newHireSortBy, newHireSortBy === 'name' || newHireSortBy === 'store' ? 'asc' : 'desc');
+  }, [newHireFiltered, newHireSortBy]);
+  const newHireUnmatchedCount = newHireFiltered.filter(r => !r.matched).length;
+
   return (
     <div className="tab-content">
       {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
       {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
-      <SearchBox value={query} onChange={onQuery} placeholder="Search employees or stores…" />
+      <SearchBox value={query} onChange={onQuery} placeholder={showingNewHires ? 'Search employees, stores, or DL…' : 'Search employees or stores…'} />
       <div className="ledger-head-row">
-        <p className="section-label">{filtered.length} of {allEmployees.length} employees</p>
+        <p className="section-label">
+          {showingNewHires
+            ? `${newHireFiltered.length} employee${newHireFiltered.length !== 1 ? 's' : ''} hired in the last 60 days`
+            : `${filtered.length} of ${allEmployees.length} employees`}
+        </p>
         <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
-          {[...EMPLOYEE_METRICS, { key: 'name', label: 'Name (A–Z)' }, { key: 'store', label: 'Store (A–Z)' }]
+          {[...EMPLOYEE_METRICS, { key: 'name', label: 'Name (A–Z)' }, { key: 'store', label: 'Store (A–Z)' }, { key: 'newHires', label: 'New Hires (last 60 days)' }]
             .map(o => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
         </select>
+        {showingNewHires && (
+          <select className="sort-select" value={newHireSortBy} onChange={e => setNewHireSortBy(e.target.value)}>
+            {NEW_HIRE_SORT_OPTIONS.map(o => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
+          </select>
+        )}
       </div>
 
-      {activeMetric && (
-        <div className="leaderboard-grid">
-          <Leaderboard rows={filtered} metric={activeMetric.key} formatter={activeMetric.fmt} title={`Top 10 — ${activeMetric.label}`} count={10} order="desc" />
-          <Leaderboard rows={filtered} metric={activeMetric.key} formatter={activeMetric.fmt} title={`Bottom 10 — ${activeMetric.label}`} count={10} order="asc" />
-        </div>
-      )}
+      {showingNewHires ? (
+        !employeeRoster ? (
+          <div className="empty-state">
+            <p className="empty-title">No employee start-date file uploaded</p>
+            <p>Go to the Setup tab's Upload section and add the "Employee Start Dates" file to see who's new.</p>
+          </div>
+        ) : (
+          <>
+            <div className="ledger-scroll">
+              <table className="ledger-table">
+                <thead>
+                  <tr>
+                    <th className="ledger-name-col">Employee</th>
+                    <th>Start Date</th><th>Days</th>
+                    <th className="ledger-store-col">Store</th><th className="ledger-store-col">DL</th>
+                    <th>Sales</th><th>Color Sales</th><th>Retail</th><th>CPC</th><th>RPC</th><th>TSTH</th><th>Hours</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {newHireSorted.map((r, i) => (
+                    <tr key={`${r.name}-${i}`}>
+                      <td className="ledger-name-col">
+                        {canAward ? (
+                          <button type="button" className="ledger-name-award" onClick={() => onAward(r.name)} title={`Award 5 points to ${r.name}`}>
+                            {r.name}<span className="award-plus">+5</span>
+                          </button>
+                        ) : r.name}
+                      </td>
+                      <td>{fmtDateLong(r.startDate)}</td>
+                      <td>{r.daysAgo}</td>
+                      <td className="ledger-store-col">{r.store || '—'}</td>
+                      <td className="ledger-store-col">{r.dl || '—'}</td>
+                      <td>{r.sales != null ? fmt$(r.sales) : '—'}</td>
+                      <td>{r.colorSales != null ? fmt$(r.colorSales) : '—'}</td>
+                      <td>{r.retail != null ? fmt$(r.retail) : '—'}</td>
+                      <td>{r.cpc != null ? fmtNum(r.cpc) : '—'}</td>
+                      <td>{r.rpc != null ? fmtNum(r.rpc) : '—'}</td>
+                      <td className={`ledger-rate ${tsthClass(r.tsth)}`}>{r.tsth != null ? fmtRate(r.tsth) : '—'}</td>
+                      <td>{r.totalHours != null ? fmtNum(r.totalHours, 1) : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {!newHireSorted.length && <p className="empty-note" style={{ textAlign: 'center' }}>No new hires match "{query}".</p>}
+            {newHireUnmatchedCount > 0 && (
+              <p className="ledger-footnote">
+                ⚠ {newHireUnmatchedCount} of these {newHireUnmatchedCount === 1 ? "person isn't" : "people aren't"} matched in the current Stylist Report yet (no store/sales data) — likely because they haven't had a shift with sales logged, or their name is spelled slightly differently between the two files.
+              </p>
+            )}
+          </>
+        )
+      ) : (
+        <>
+          {activeMetric && (
+            <div className="leaderboard-grid">
+              <Leaderboard rows={filtered} metric={activeMetric.key} formatter={activeMetric.fmt} title={`Top 10 — ${activeMetric.label}`} count={10} order="desc" />
+              <Leaderboard rows={filtered} metric={activeMetric.key} formatter={activeMetric.fmt} title={`Bottom 10 — ${activeMetric.label}`} count={10} order="asc" />
+            </div>
+          )}
 
-      {focused && (
-        <p className="section-hint">
-          Focused on <strong>{focused}</strong> — everyone else is blurred. <button className="btn-ghost" onClick={() => setFocused(null)}>Clear focus</button>
-        </p>
+          {focused && (
+            <p className="section-hint">
+              Focused on <strong>{focused}</strong> — everyone else is blurred. <button className="btn-ghost" onClick={() => setFocused(null)}>Clear focus</button>
+            </p>
+          )}
+          <EmployeeTable rows={sorted} showStoreCol focused={focused} onFocus={setFocused} canAward={canAward} onAward={onAward} />
+        </>
       )}
-      <EmployeeTable rows={sorted} showStoreCol focused={focused} onFocus={setFocused} canAward={canAward} onAward={onAward} />
     </div>
   );
 }
@@ -2772,7 +2859,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
   );
 }
 
-// ─── 60 Day Employee tab ────────────────────────────────────────────────────
+// ─── New hires (folded into the Employees tab as a sort option) ────────────
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function buildNewHireRows(report, employeeRoster, fallbackEmployeesByStore) {
@@ -2828,90 +2915,6 @@ const NEW_HIRE_SORT_OPTIONS = [
   { key: 'sales', label: 'Sales' },
   { key: 'tsth', label: 'TSTH' },
 ];
-
-function NewHireTab({ report, fallbackEmployeesByStore, employeeRoster, query, onQuery, canAward, onAward }) {
-  const [sortBy, setSortBy] = useState('daysAgo');
-  const rows = useMemo(() => buildNewHireRows(report, employeeRoster, fallbackEmployeesByStore), [report, employeeRoster, fallbackEmployeesByStore]);
-  const filtered = useMemo(() => {
-    if (!query.trim()) return rows;
-    const q = query.trim().toLowerCase();
-    return rows.filter(r =>
-      r.name.toLowerCase().includes(q) ||
-      (r.store || '').toLowerCase().includes(q) ||
-      (r.dl || '').toLowerCase().includes(q)
-    );
-  }, [rows, query]);
-  const sorted = useMemo(() => {
-    if (sortBy === 'daysAgo') return [...filtered].sort((a, b) => a.daysAgo - b.daysAgo);
-    return sortByMetric(filtered, sortBy, sortBy === 'name' || sortBy === 'store' ? 'asc' : 'desc');
-  }, [filtered, sortBy]);
-
-  const unmatchedCount = filtered.filter(r => !r.matched).length;
-
-  if (!employeeRoster) {
-    return (
-      <div className="empty-state">
-        <p className="empty-title">No employee start-date file uploaded</p>
-        <p>Go to the Setup tab's Upload section and add the "Employee Start Dates" file to see who's new.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="tab-content">
-      <SearchBox value={query} onChange={onQuery} placeholder="Search employees, stores, or DL…" />
-      <div className="ledger-head-row">
-        <p className="section-label">{filtered.length} employee{filtered.length !== 1 ? 's' : ''} hired in the last 60 days</p>
-        <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
-          {NEW_HIRE_SORT_OPTIONS.map(o => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
-        </select>
-      </div>
-
-      <div className="ledger-scroll">
-        <table className="ledger-table">
-          <thead>
-            <tr>
-              <th className="ledger-name-col">Employee</th>
-              <th>Start Date</th><th>Days</th>
-              <th className="ledger-store-col">Store</th><th className="ledger-store-col">DL</th>
-              <th>Sales</th><th>Color Sales</th><th>Retail</th><th>CPC</th><th>RPC</th><th>TSTH</th><th>Hours</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((r, i) => (
-              <tr key={`${r.name}-${i}`}>
-                <td className="ledger-name-col">
-                  {canAward ? (
-                    <button type="button" className="ledger-name-award" onClick={() => onAward(r.name)} title={`Award 5 points to ${r.name}`}>
-                      {r.name}<span className="award-plus">+5</span>
-                    </button>
-                  ) : r.name}
-                </td>
-                <td>{fmtDateLong(r.startDate)}</td>
-                <td>{r.daysAgo}</td>
-                <td className="ledger-store-col">{r.store || '—'}</td>
-                <td className="ledger-store-col">{r.dl || '—'}</td>
-                <td>{r.sales != null ? fmt$(r.sales) : '—'}</td>
-                <td>{r.colorSales != null ? fmt$(r.colorSales) : '—'}</td>
-                <td>{r.retail != null ? fmt$(r.retail) : '—'}</td>
-                <td>{r.cpc != null ? fmtNum(r.cpc) : '—'}</td>
-                <td>{r.rpc != null ? fmtNum(r.rpc) : '—'}</td>
-                <td className={`ledger-rate ${tsthClass(r.tsth)}`}>{r.tsth != null ? fmtRate(r.tsth) : '—'}</td>
-                <td>{r.totalHours != null ? fmtNum(r.totalHours, 1) : '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {!sorted.length && <p className="empty-note" style={{ textAlign: 'center' }}>No new hires match "{query}".</p>}
-      {unmatchedCount > 0 && (
-        <p className="ledger-footnote">
-          ⚠ {unmatchedCount} of these {unmatchedCount === 1 ? "person isn't" : "people aren't"} matched in the current Stylist Report yet (no store/sales data) — likely because they haven't had a shift with sales logged, or their name is spelled slightly differently between the two files.
-        </p>
-      )}
-    </div>
-  );
-}
 
 // ─── Goals tab ──────────────────────────────────────────────────────────────
 const GOAL_FIELD_LABELS = { salesGoal: 'sales', colorGoal: 'color', bottleGoal: 'bottle', signatureSGoal: 'signature service' };
@@ -4640,10 +4643,10 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
 
   // Employee roster (start dates) — company-wide, not just recent hires, so
   // "when did X start" works for anyone, not only people hired in the last
-  // 60 days (that's just what the 60 Day Employee tab itself narrows to).
+  // 60 days (that's just what the Employees tab's New Hires sort narrows to).
   // Enriched with Store/DL whenever the name matches someone in the current
   // period (whichever source fed currentStoreRows/currentAllEmployees above),
-  // same matching the 60 Day Employee tab itself does.
+  // same matching the New Hires sort itself does.
   if (employeeRoster?.employees?.length) {
     lines.push('');
     lines.push('EMPLOYEE START DATES (from the Employee Start Dates roster — "new hire" flags anyone hired in the last 60 days; Store/DL shown when the name matches someone in the CURRENT period):');
@@ -5395,8 +5398,8 @@ function SetupTab({ configured, section, onSection, managersProps, milestoneGoal
   const steps = [
     { n: 1, title: 'Export this week\u2019s stylist report', body: 'Run the report with every store and every employee under it, covering the week you want to see.' },
     { n: 2, title: 'Upload it', body: 'Go to the Upload section below and drop it into the "Stylist Report" slot. The date range fills in automatically.' },
-    { n: 3, title: 'Optionally upload employee start dates', body: 'A simple Employee Name + Start Date export. Drop it into the "Employee Start Dates" slot to power the "60 Day Employee" tab, which shows anyone hired in the last 60 days along with their store, DL, and sales — even if they don\u2019t have sales data yet.' },
-    { n: 4, title: 'Explore the tabs', body: 'Overview: tap a metric to see the top/bottom 10 stores. Stores: every location, click one to see its employees. Employees: every stylist company-wide. Retail / Color Sales: grouped by DL, or toggle to a flat list. DL: rolled-up totals per leader, click to expand their stores. 60 Day Employee: recent hires. Reviews: totals, negative-review categories, and per-store review lists with employee call-outs. Every tab has a search box.' },
+    { n: 3, title: 'Optionally upload employee start dates', body: 'A simple Employee Name + Start Date export. Drop it into the "Employee Start Dates" slot to power the Employees tab\u2019s "New Hires (last 60 days)" sort option, which shows anyone hired recently along with their store, DL, and sales — even if they don\u2019t have sales data yet.' },
+    { n: 4, title: 'Explore the tabs', body: 'Overview: tap a metric to see the top/bottom 10 stores. Stores: every location, click one to see its employees. Employees: every stylist company-wide — sort by any metric, or switch to "New Hires (last 60 days)" to see recent hires instead. Retail / Color Sales: grouped by DL, or toggle to a flat list. DL: rolled-up totals per leader, click to expand their stores. Reviews: totals, negative-review categories, and per-store review lists with employee call-outs. Every tab has a search box.' },
     { n: 5, title: 'Next week', body: 'Just upload a new stylist report the same way \u2014 it replaces this week\u2019s data for everyone viewing the site.' },
   ];
   return (
@@ -5728,7 +5731,7 @@ function RewardsSetupTab({ token, showToast }) {
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'Signature Service', 'Goals', 'DL', '60 Day Employee', 'Reviews', 'Weekly', "Tillie's Nest", 'Setup'];
+const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'Signature Service', 'Goals', 'DL', 'Reviews', 'Weekly', "Tillie's Nest", 'Setup'];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
@@ -5773,7 +5776,7 @@ export default function App() {
   const [uploadingRoster, setUploadingRoster] = useState(false);
   const [uploadingReviews, setUploadingReviews] = useState(false);
   const [selectedMetric, setSelectedMetric] = useState('tsth');
-  const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', Retail: '', 'Color Sales': '', 'Signature Service': '', Goals: '', DL: '', '60 Day Employee': '', Reviews: '' });
+  const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', Retail: '', 'Color Sales': '', 'Signature Service': '', Goals: '', DL: '', Reviews: '' });
   const [pointsSummary, setPointsSummary] = useState(null);
 
   useEffect(() => {
@@ -6655,8 +6658,8 @@ export default function App() {
 
   // Shared fallback roster (name-only, per store code) for anything that
   // still needs "who works here" once the live report goes stale — Reviews
-  // mention-matching, Homepage shoutouts, and the 60 Day Employee tab's
-  // store lookup. Computed once here rather than separately in each
+  // mention-matching, Homepage shoutouts, and the Employees tab's New Hires
+  // sort's store lookup. Computed once here rather than separately in each
   // component, since it's the same underlying history/weeklyHistory data.
   const fallbackEmployeesByStore = useMemo(
     () => getEmployeesByStoreFromHistory(history, weeklyHistory),
@@ -6672,7 +6675,7 @@ export default function App() {
   // exact same tables via each tab's own current-month fallback (see
   // getCurrentMonthRange). Only actually block on "nothing at all yet".
   const hasHistoricalData = Object.keys(history || {}).length > 0 || Object.keys(weeklyHistory || {}).length > 0;
-  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== '60 Day Employee' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals';
+  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals';
 
   return (
     <div className="app">
@@ -6716,7 +6719,7 @@ export default function App() {
           <StoresTab report={report} query={queries.Stores} onQuery={v => setQuery('Stores', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'} goals={goals} />
         )}
         {!needsReport && tab === 'Employees' && (report || hasHistoricalData) && (
-          <EmployeesTab report={report} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
+          <EmployeesTab report={report} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} employeeRoster={employeeRoster} fallbackEmployeesByStore={fallbackEmployeesByStore} />
         )}
         {!needsReport && tab === 'Retail' && (report || hasHistoricalData) && (
           <StoreMetricTab
@@ -6753,9 +6756,6 @@ export default function App() {
         )}
         {!needsReport && tab === 'DL' && (report || hasHistoricalData) && (
           <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} milestoneGoals={milestoneGoals} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
-        )}
-        {tab === '60 Day Employee' && (
-          <NewHireTab report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} employeeRoster={employeeRoster} query={queries['60 Day Employee']} onQuery={v => setQuery('60 Day Employee', v)} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
         )}
         {tab === 'Reviews' && (
           <ReviewsTab
