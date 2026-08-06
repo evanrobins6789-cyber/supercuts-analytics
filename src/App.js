@@ -15,6 +15,10 @@ import {
 } from './auth';
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
+import {
+  EMPTY_RANGE_TOTALS, addRangeInto, expandDateRangeDays, mergeEmployeesInto, finalizeEmployee,
+  getRangeTotals, historyTotalsToReportShape, rollupRows, addDaysISO, isoWeekStart, getLastFullWeekRange, sortByMetric,
+} from './metrics';
 import { BITMOJI_POOLS } from './bitmoji';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
 import supercutsWordmarkBlue from './assets/branding/supercuts-wordmark-blue.png';
@@ -319,16 +323,6 @@ const EMPLOYEE_METRICS = [
   { key: 'signatureS', label: 'SS', fmt: (v, row) => fmtSS(row?.signatureSCount, v) },
 ];
 
-function sortByMetric(rows, key, order = 'desc') {
-  const arr = [...rows];
-  if (key === 'name' || key === 'store') {
-    arr.sort((a, b) => String(a[key]).localeCompare(String(b[key])) * (order === 'desc' ? -1 : 1));
-  } else {
-    arr.sort((a, b) => ((a[key] ?? 0) - (b[key] ?? 0)) * (order === 'desc' ? -1 : 1));
-  }
-  return arr;
-}
-
 // Green when at/above goal, red when under — used everywhere a "vs Goal" cell renders.
 function vsGoalClass(diff) { return diff == null ? '' : diff < 0 ? 'ledger-margin-neg' : 'ledger-margin-pos'; }
 
@@ -377,35 +371,6 @@ function MilestoneThermometer({ actual, goal, milestone }) {
   );
 }
 
-// Re-aggregate a set of already-rolled-up rows (stores, or store totals) one
-// level higher (e.g. up to a District Leader). Sums the additive fields and
-// recomputes the ratio fields from those sums — never averages ratios directly.
-function rollupRows(rows) {
-  const sum = key => rows.reduce((s, r) => s + (r[key] || 0), 0);
-  const totalSales = sum('sales');
-  const totalHours = sum('totalHours');
-  const totalColor = sum('colorSales');
-  const totalRetail = sum('retail');
-  const totalHaircuts = sum('haircuts');
-  const totalSignatureS = sum('signatureS');
-  const totalSignatureSCount = sum('signatureSCount');
-  const totalBottles = sum('bottles');
-  return {
-    sales: totalSales,
-    totalHours,
-    colorSales: totalColor,
-    retail: totalRetail,
-    haircuts: totalHaircuts,
-    signatureS: totalSignatureS,
-    signatureSCount: totalSignatureSCount,
-    bottles: totalBottles,
-    tsth: totalHours > 0 ? totalSales / totalHours : null,
-    cpc: totalHaircuts > 0 ? totalColor / totalHaircuts : null,
-    rpc: totalHaircuts > 0 ? totalRetail / totalHaircuts : null,
-    cph: totalHours > 0 ? totalHaircuts / totalHours : null,
-  };
-}
-
 // Groups store rows (each needs a `code` and `name`) under their District
 // Leader / Area Supervisor, in the roster's own order. Stores with no match
 // in the roster land in a trailing "Unassigned" group instead of vanishing.
@@ -435,165 +400,10 @@ function groupStoresByLeader(storeRows) {
 }
 
 // ─── Historical date-range querying (shared by Stores/Retail/Color/DL) ─────
-// Same "don't double-count" rule as the Weekly tab: a week only counts from
-// an uploaded weekly report if its whole range sits inside the query range;
-// any day already covered by SOME weekly report is skipped from the daily
-// (Sales-Accrual/Attendance) bucket either way, so nothing is ever counted twice.
-const EMPTY_RANGE_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0 };
-// `products` is deliberately NOT part of the EMPTY_RANGE_TOTALS constant
-// above — that object gets shallow-copied (`{ ...EMPTY_RANGE_TOTALS }`) once
-// per store, and a nested object baked into a shared constant would hand
-// every store the SAME `products` reference, so one store's product totals
-// would silently bleed into every other store's. getRangeTotals below always
-// attaches a fresh `products: {}` per store instead.
-function addRangeInto(target, src) {
-  target.service += src.service || 0;
-  target.retail += src.retail || 0;
-  target.color += src.color || 0;
-  target.hours += src.hours || 0;
-  target.giftCards += src.giftCards || 0;
-  target.haircuts += src.haircuts || 0;
-  target.signatureS += src.signatureS || 0;
-  target.signatureSCount += src.signatureSCount || 0;
-  target.bottles += src.bottles || 0;
-  if (src.products) {
-    Object.entries(src.products).forEach(([name, v]) => {
-      if (!target.products[name]) target.products[name] = { qty: 0, amount: 0 };
-      target.products[name].qty += v.qty || 0;
-      target.products[name].amount += v.amount || 0;
-    });
-  }
-}
-function expandDateRangeDays(start, end) {
-  const dates = [];
-  const d = new Date(start + 'T00:00:00');
-  const endD = new Date(end + 'T00:00:00');
-  let guard = 0;
-  while (d <= endD && guard < 1200) {
-    dates.push(d.toISOString().slice(0, 10));
-    d.setDate(d.getDate() + 1);
-    guard++;
-  }
-  return dates;
-}
-// Employee-level detail comes from weekly Stylist Report uploads AND from
-// the Sales-Accrual/Attendance historical backfill (both attribute rows to
-// a Stylist/Employee Name, so both can populate per-employee totals).
-// Merges by name across every week in range, summing raw totals and
-// recomputing tsth/cpc/rpc from those sums — never averaging ratios.
-function mergeEmployeesInto(targetMap, employees) {
-  employees.forEach(e => {
-    if (!targetMap[e.name]) targetMap[e.name] = { name: e.name, sales: 0, colorSales: 0, retail: 0, haircuts: 0, totalHours: 0, signatureS: 0, signatureSCount: 0 };
-    const t = targetMap[e.name];
-    t.sales += e.sales || 0;
-    t.colorSales += e.colorSales || 0;
-    t.retail += e.retail || 0;
-    t.haircuts += e.haircuts || 0;
-    t.totalHours += e.totalHours || 0;
-    t.signatureS += e.signatureS || 0;
-    t.signatureSCount += e.signatureSCount || 0;
-  });
-}
-function finalizeEmployee(e) {
-  return {
-    ...e,
-    tsth: e.totalHours > 0 ? e.sales / e.totalHours : null,
-    cpc: e.haircuts > 0 ? e.colorSales / e.haircuts : null,
-    rpc: e.haircuts > 0 ? e.retail / e.haircuts : null,
-    cph: e.totalHours > 0 ? e.haircuts / e.totalHours : null,
-  };
-}
-function getRangeTotals(history, weeklyHistory, startISO, endISO) {
-  const weeklyEntries = Object.values(weeklyHistory || {});
-  const covered = new Set();
-  weeklyEntries.forEach(w => expandDateRangeDays(w.startDate, w.endDate).forEach(d => covered.add(d)));
-
-  const byStore = {};
-  const employeesByStore = {};
-  const addTo = (code, src) => {
-    if (!byStore[code]) byStore[code] = { ...EMPTY_RANGE_TOTALS, products: {} };
-    addRangeInto(byStore[code], src);
-  };
-  weeklyEntries.forEach(w => {
-    if (w.startDate >= startISO && w.endDate <= endISO) {
-      Object.entries(w.stores).forEach(([code, v]) => {
-        addTo(code, v);
-        if (v.employees && v.employees.length) {
-          if (!employeesByStore[code]) employeesByStore[code] = {};
-          mergeEmployeesInto(employeesByStore[code], v.employees);
-        }
-      });
-    }
-  });
-  Object.values(history || {}).forEach(r => {
-    if (r.date < startISO || r.date > endISO) return;
-    if (covered.has(r.date)) {
-      // A weekly Stylist Report upload covers this day for every OTHER
-      // field (it's the more authoritative source, hence `covered`
-      // skipping the daily record entirely below) — but the Stylist Report
-      // has no item-level detail, so it never carries Signature S, bottle
-      // counts, or a product breakdown at all. Pulling those straight from
-      // the daily Sales-Accrual record here can't double-count anything,
-      // since the weekly source's contribution to them is always zero.
-      if (r.signatureS || r.signatureSCount || r.bottles) {
-        addTo(r.code, { signatureS: r.signatureS, signatureSCount: r.signatureSCount, bottles: r.bottles });
-      }
-      if (r.products && Object.keys(r.products).length) {
-        addTo(r.code, { products: r.products });
-      }
-      if (r.employees && Object.keys(r.employees).length) {
-        const sigOnly = Object.entries(r.employees)
-          .filter(([, v]) => v.signatureS || v.signatureSCount)
-          .map(([name, v]) => ({ name, signatureS: v.signatureS, signatureSCount: v.signatureSCount }));
-        if (sigOnly.length) {
-          if (!employeesByStore[r.code]) employeesByStore[r.code] = {};
-          mergeEmployeesInto(employeesByStore[r.code], sigOnly);
-        }
-      }
-      return;
-    }
-    addTo(r.code, r);
-    if (r.employees && Object.keys(r.employees).length) {
-      if (!employeesByStore[r.code]) employeesByStore[r.code] = {};
-      const asArray = Object.entries(r.employees).map(([name, v]) => ({ name, ...v }));
-      mergeEmployeesInto(employeesByStore[r.code], asArray);
-    }
-  });
-  Object.keys(byStore).forEach(code => {
-    byStore[code].employees = employeesByStore[code]
-      ? Object.values(employeesByStore[code]).map(finalizeEmployee)
-      : [];
-  });
-  return byStore;
-}
-// Adapts history's {service,retail,color,hours,giftCards,haircuts,employees}
-// shape into the same shape a live Stylist Report uses, so the exact same
-// tables/columns can render either one. haircuts/employees come through
-// whenever the Sales-Accrual/Attendance backfill (or a weekly Stylist Report)
-// covered that period; otherwise they come back null/empty rather than a
-// made-up number.
-function historyTotalsToReportShape(t) {
-  const hours = t?.hours || 0;
-  const service = t?.service || 0;
-  const haircuts = t?.haircuts || 0;
-  return {
-    sales: service,
-    totalHours: hours,
-    colorSales: t?.color || 0,
-    retail: t?.retail || 0,
-    giftCards: t?.giftCards || 0,
-    signatureS: t?.signatureS || 0,
-    signatureSCount: t?.signatureSCount || 0,
-    bottles: t?.bottles || 0,
-    haircuts: haircuts || null,
-    tsth: hours > 0 ? service / hours : null,
-    cpc: haircuts > 0 ? (t.color || 0) / haircuts : null,
-    rpc: haircuts > 0 ? (t.retail || 0) / haircuts : null,
-    cph: hours > 0 ? haircuts / hours : null,
-    employees: t?.employees || [],
-    products: t?.products || {},
-  };
-}
+// EMPTY_RANGE_TOTALS/addRangeInto/expandDateRangeDays/mergeEmployeesInto/
+// finalizeEmployee/getRangeTotals/historyTotalsToReportShape all moved to
+// ./metrics so api/leaderboard-email.js can compute the exact same numbers
+// outside a browser, without a second copy of the dedup rules to drift.
 
 // A `report` blob cached before CPH existed (e.g. sitting in Supabase from
 // an old upload) won't have `.cph` on its stores/employees — it's baked in
@@ -621,19 +431,6 @@ function getCurrentMonthRange() {
   const first = new Date(now.getFullYear(), now.getMonth(), 1);
   const toISO = d => d.toISOString().slice(0, 10);
   return { start: toISO(first), end: toISO(now) };
-}
-
-// The most recently *completed* Monday–Sunday week — used only by the
-// Homepage Top 10 leaderboard's "Past 7 Days" toggle (as an alternative to
-// its own "Month to Date" option), independent of the month-to-date default
-// every other tab falls back to. addDaysISO/isoWeekStart are defined further
-// down in this file but hoisted, same as every other plain function
-// declaration.
-function getLastFullWeekRange() {
-  const thisWeekStart = isoWeekStart(new Date().toISOString().slice(0, 10));
-  const end = addDaysISO(thisWeekStart, -1);
-  const start = addDaysISO(end, -6);
-  return { start, end };
 }
 
 // A live `report` object never expires on its own — it's whatever Stylist
@@ -4157,18 +3954,6 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
 }
 
 // ─── Weekly tab ─────────────────────────────────────────────────────────────
-function addDaysISO(dateStr, n) {
-  const d = new Date(dateStr + 'T00:00:00');
-  d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
-}
-function isoWeekStart(dateStr) {
-  const d = new Date(dateStr + 'T00:00:00');
-  const day = d.getDay(); // 0=Sun..6=Sat
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setDate(d.getDate() + diff);
-  return d.toISOString().slice(0, 10);
-}
 function expandDateRange(start, end) {
   const dates = [];
   let cur = start;
@@ -5213,6 +4998,33 @@ function EmployeeAccessSetupTab({ token }) {
 // in Vercel's env vars and the user's private Apps Script project.
 function EmailReportsSetupTab() {
   const webhookUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/email-report` : 'https://YOUR-SITE.vercel.app/api/email-report';
+  const leaderboardUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/leaderboard-email` : 'https://YOUR-SITE.vercel.app/api/leaderboard-email';
+  const leaderboardScript = `// Google Apps Script — every Monday, fetches last week's Top 10/Bottom 10
+// stores for Retail, Color Sales, and Signature Service and emails them to
+// a recipient list. Paste this whole file in at script.google.com as a new
+// project (or add to the one from the report-upload automation above),
+// fill in SHARED_SECRET and RECIPIENTS below, then follow the numbered
+// steps in Setup > Email Reports.
+
+const ENDPOINT_URL = '${leaderboardUrl}';
+const SHARED_SECRET = 'PASTE_YOUR_SECRET_HERE'; // must exactly match LEADERBOARD_EMAIL_SECRET in Vercel
+const RECIPIENTS = ['someone@example.com', 'someoneelse@example.com']; // add everyone who should get this email
+
+function sendWeeklyLeaderboard() {
+  const response = UrlFetchApp.fetch(ENDPOINT_URL, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ secret: SHARED_SECRET }),
+    muteHttpExceptions: true,
+  });
+  const status = response.getResponseCode();
+  if (status < 200 || status >= 300) {
+    MailApp.sendEmail(Session.getActiveUser().getEmail(), 'Weekly Leaderboard email failed', \`HTTP \${status}: \${response.getContentText()}\`);
+    return;
+  }
+  const data = JSON.parse(response.getContentText());
+  GmailApp.sendEmail(RECIPIENTS.join(','), data.subject, 'This email requires HTML support to view.', { htmlBody: data.html });
+}`;
   const script = `// Google Apps Script — forwards labeled Gmail reports to the site so
 // weekly reports upload themselves. Paste this whole file in at
 // script.google.com as a new project, fill in SHARED_SECRET below, then
@@ -5349,6 +5161,29 @@ function notifyFailure(labelName, fileName, detail) {
         <div><p className="step-title">Add the matching secret in Vercel</p><p className="step-body">Vercel project → Settings → Environment Variables → add <code>EMAIL_INGEST_SECRET</code> set to the exact same value you pasted into the script → redeploy. If the two don't match, uploads fail (safely) and you'll get an email explaining why.</p></div>
       </div>
       <p className="step-body">If a report ever fails to parse or upload, you get an email at your own address explaining why — the source email stays unread so it's retried automatically the next time the script runs.</p>
+
+      <div className="setup-sql-card">
+        <p className="chart-title">Weekly Leaderboard email (Mondays)</p>
+        <p className="step-body">A second, independent automation — every Monday, emails the previous week's Top 10 and Bottom 10 stores for Retail, Color Sales, and Signature Service to whoever you list. Uses its own script and its own secret, separate from the report-upload automation above, so the two can't interfere with each other.</p>
+      </div>
+      <div className="setup-step">
+        <div className="step-num">1</div>
+        <div><p className="step-title">Add the script</p><p className="step-body">Go to <code>script.google.com</code> → New project (or reuse the one above) → paste in the code below, replacing everything if it's a new project → fill in <code>SHARED_SECRET</code> and <code>RECIPIENTS</code>.</p></div>
+      </div>
+      <pre className="setup-sql">{leaderboardScript}</pre>
+      <div className="setup-step">
+        <div className="step-num">2</div>
+        <div><p className="step-title">Authorize it</p><p className="step-body">Pick <code>sendWeeklyLeaderboard</code> from the function dropdown and click Run once — same "unverified app" warning as above, click through it (Advanced → Go to (project name) (unsafe) → Allow). Check the recipients' inboxes to confirm the test email arrived and looks right.</p></div>
+      </div>
+      <div className="setup-step">
+        <div className="step-num">3</div>
+        <div><p className="step-title">Set it to run every Monday</p><p className="step-body">Triggers (clock icon) → "+ Add Trigger" → function: <code>sendWeeklyLeaderboard</code> → Time-driven → Week timer → Every Monday → pick a morning hour → Save.</p></div>
+      </div>
+      <div className="setup-step">
+        <div className="step-num">4</div>
+        <div><p className="step-title">Add the matching secret in Vercel</p><p className="step-body">Vercel project → Settings → Environment Variables → add <code>LEADERBOARD_EMAIL_SECRET</code> set to the exact same value you pasted into the script → redeploy.</p></div>
+      </div>
+      <p className="step-body">If the fetch fails (wrong/missing secret, deployment not redeployed yet, etc.), you get a failure email at your own address instead of a broken send — no email goes out to the full recipient list in that case.</p>
     </div>
   );
 }
