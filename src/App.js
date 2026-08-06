@@ -2016,8 +2016,8 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
 function EmployeesTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, query, onQuery, managers, canAward, onAward, employeeRoster, fallbackEmployeesByStore }) {
   const [sortBy, setSortBy] = useState('sales');
   const [newHireSortBy, setNewHireSortBy] = useState('daysAgo');
+  const [showingNewHires, setShowingNewHires] = useState(false);
   const [focused, setFocused] = useState(null);
-  const showingNewHires = sortBy === 'newHires';
   const usingDefaultRange = isReportStale(report) && !(dateRange?.start && dateRange?.end);
   const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const isHistorical = !!(effectiveRange?.start && effectiveRange?.end);
@@ -2084,15 +2084,26 @@ function EmployeesTab({ report, history, weeklyHistory, dateRange, onDateRangeCh
             ? `${newHireFiltered.length} employee${newHireFiltered.length !== 1 ? 's' : ''} hired in the last 60 days`
             : `${filtered.length} of ${allEmployees.length} employees`}
         </p>
-        <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
-          {[...EMPLOYEE_METRICS, { key: 'name', label: 'Name (A–Z)' }, { key: 'store', label: 'Store (A–Z)' }, { key: 'newHires', label: 'New Hires (last 60 days)' }]
-            .map(o => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
-        </select>
+        {!showingNewHires && (
+          <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+            {[...EMPLOYEE_METRICS, { key: 'name', label: 'Name (A–Z)' }, { key: 'store', label: 'Store (A–Z)' }]
+              .map(o => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
+          </select>
+        )}
         {showingNewHires && (
           <select className="sort-select" value={newHireSortBy} onChange={e => setNewHireSortBy(e.target.value)}>
             {NEW_HIRE_SORT_OPTIONS.map(o => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
           </select>
         )}
+        <div className="view-toggle">
+          <button
+            type="button"
+            className={`view-toggle-btn ${showingNewHires ? 'active' : ''}`}
+            onClick={() => setShowingNewHires(v => !v)}
+          >
+            {showingNewHires ? '✓ ' : ''}New Hires (last 60 days)
+          </button>
+        </div>
       </div>
 
       {showingNewHires ? (
