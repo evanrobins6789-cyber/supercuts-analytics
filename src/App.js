@@ -2976,7 +2976,7 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, fallbackEmployeesB
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
-      <p className="section-hint">Set a weekly Sales, Color, Bottle, and Signature Service goal per store. Color and Signature Service goals track $ sold; the Bottle goal tracks a unit count of retail product sold instead of a dollar figure. All three show up as "Goal"/"vs Goal" columns on their tabs; Sales goals show up on the Stores tab.</p>
+      <p className="section-hint">Set a weekly Sales, Color, Bottle, and Signature Service goal per store. Sales and Color goals track $ sold; Bottle and Signature Service goals track a unit count instead — bottles of retail product sold, and number of Signature Services performed. Color, Bottle, and Signature Service show up as "Goal"/"vs Goal" columns on their tabs; Sales goals show up on the Stores tab.</p>
 
       <p className="section-hint">Download a blank sheet listing your stores (grouped by DL), fill in the Goal column, then import it below with whichever button matches what you filled in.</p>
       <div className="goal-import-row">
@@ -3034,7 +3034,7 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, fallbackEmployeesB
                 <td>{goalField(s.code, 'salesGoal')}</td>
                 <td>{goalField(s.code, 'colorGoal')}</td>
                 <td>{goalField(s.code, 'bottleGoal', '0')}</td>
-                <td>{goalField(s.code, 'signatureSGoal')}</td>
+                <td>{goalField(s.code, 'signatureSGoal', '0')}</td>
               </tr>
             ))}
           </tbody>
@@ -4593,7 +4593,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     report.stores.forEach(s => {
       const st = s.totals;
       const goal = goals?.[s.code];
-      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Bottle Goal: ${goal.bottleGoal ?? 'none'}, Signature Service Goal: ${goal.signatureSGoal ?? 'none'}` : '';
+      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Bottle Goal: ${goal.bottleGoal ?? 'none'} bottles, Signature Service Goal: ${goal.signatureSGoal ?? 'none'} services` : '';
       lines.push(`${s.name}: Sales $${Math.round(st.sales)}, TSTH $${st.tsth != null ? st.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(st.totalHours)}, Color $${Math.round(st.colorSales)}, Retail $${Math.round(st.retail)}, CPC ${st.cpc != null ? st.cpc.toFixed(2) : 'n/a'}, RPC ${st.rpc != null ? st.rpc.toFixed(2) : 'n/a'}, Cuts ${Math.round(st.haircuts || 0)}, CPH ${st.cph != null ? st.cph.toFixed(2) : 'n/a'}${goalStr}`);
     });
     currentStoreRows = report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals }));
@@ -4612,7 +4612,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     lines.push('Per-store totals for the CURRENT period (Store: Sales, TSTH, Hours, Color, Retail, CPC, RPC, Cuts, CPH, goals if set):');
     currentStoreRows.forEach(s => {
       const goal = goals?.[s.code];
-      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Bottle Goal: ${goal.bottleGoal ?? 'none'}, Signature Service Goal: ${goal.signatureSGoal ?? 'none'}` : '';
+      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Bottle Goal: ${goal.bottleGoal ?? 'none'} bottles, Signature Service Goal: ${goal.signatureSGoal ?? 'none'} services` : '';
       lines.push(`${s.name}: Sales $${Math.round(s.sales)}, TSTH $${s.tsth != null ? s.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(s.totalHours)}, Color $${Math.round(s.colorSales)}, Retail $${Math.round(s.retail)}, CPC ${s.cpc != null ? s.cpc.toFixed(2) : 'n/a'}, RPC ${s.rpc != null ? s.rpc.toFixed(2) : 'n/a'}, Cuts ${Math.round(s.haircuts || 0)}, CPH ${s.cph != null ? s.cph.toFixed(2) : 'n/a'}${goalStr}`);
     });
   }
@@ -4630,11 +4630,11 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   // standing target, not tied to a specific historical month.
   if (goals && Object.keys(goals).length) {
     lines.push('');
-    lines.push('STORE GOALS (Sales/Color/Bottle/Signature Service targets — standing targets, not specific to any period, entered by DLs on the Goals tab; Bottle Goal is a unit count of retail product, not a dollar figure):');
+    lines.push('STORE GOALS (Sales/Color/Bottle/Signature Service targets — standing targets, not specific to any period, entered by DLs on the Goals tab; Sales/Color Goal are $ figures, Bottle Goal is a unit count of retail product sold, Signature Service Goal is a unit count of services performed — NOT a dollar figure, despite Signature Service dollar totals appearing elsewhere in this context):');
     Object.entries(goals).forEach(([code, g]) => {
       if (g.salesGoal == null && g.colorGoal == null && g.bottleGoal == null && g.signatureSGoal == null) return;
       const name = STORE_CODE_TO_NAME[code] || `Store ${code}`;
-      lines.push(`${name}: Sales Goal ${g.salesGoal ?? 'none'}, Color Goal ${g.colorGoal ?? 'none'}, Bottle Goal ${g.bottleGoal ?? 'none'}, Signature Service Goal ${g.signatureSGoal ?? 'none'}`);
+      lines.push(`${name}: Sales Goal ${g.salesGoal ?? 'none'}, Color Goal ${g.colorGoal ?? 'none'}, Bottle Goal ${g.bottleGoal ?? 'none'} bottles, Signature Service Goal ${g.signatureSGoal ?? 'none'} services`);
     });
   }
 
@@ -6743,7 +6743,7 @@ export default function App() {
           <StoreMetricTab
             report={report} query={queries['Signature Service']} onQuery={v => setQuery('Signature Service', v)}
             title="Signature Service" metricA={{ key: 'signatureS', label: 'Signature Service', fmt: fmt$ }} metricB={{ key: 'signatureSCount', label: 'SS Count', fmt: fmtInt }}
-            goalType="signatureSGoal" goals={goals}
+            goalType="signatureSGoal" goals={goals} goalMetricKey="signatureSCount" goalFmt={fmtInt}
             history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
             managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
           />
