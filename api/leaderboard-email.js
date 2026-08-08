@@ -81,6 +81,19 @@ const BRAND = {
 const FONT = "Arial, Helvetica, sans-serif";
 const NEWS_ACCENTS = [BRAND.navy2, BRAND.green, BRAND.gold, BRAND.red, BRAND.bronze];
 
+// Emoji as numeric HTML character references, not raw Unicode literals.
+// The literal characters showed up as "??????" in a real send — GmailApp's
+// UrlFetchApp round-trip (or something downstream of it) was mangling the
+// 4-byte "astral plane" emoji (anything above U+FFFF, which is all of these)
+// while plain 2-byte characters elsewhere in the email (e.g. the "·"
+// separator) survived fine. Numeric entities are pure ASCII in the HTTP
+// response, so there's no multi-byte encoding left to get lost in transit —
+// the email client's own HTML parser resolves them to the glyph.
+const EMOJI = {
+  megaphone: '&#x1F4E3;', calendar: '&#x1F4C5;', bags: '&#x1F6CD;&#xFE0F;',
+  palette: '&#x1F3A8;', haircut: '&#x1F487;',
+};
+
 const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 const fmtInt = n => Number(n || 0).toLocaleString('en-US');
 const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -151,7 +164,7 @@ function newsSection(news, range) {
       </td></tr>`;
   }).join('');
   return `
-    ${sectionBand('📣 Latest News &amp; Updates', BRAND.navy)}
+    ${sectionBand(`${EMOJI.megaphone} Latest News &amp; Updates`, BRAND.navy)}
     <tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${cards}</table></td></tr>`;
 }
 
@@ -187,16 +200,16 @@ function eventsSection(events, todayISO) {
       </td></tr>`;
   }).join('');
   return `
-    ${sectionBand('📅 Upcoming Events', BRAND.navy2)}
+    ${sectionBand(`${EMOJI.calendar} Upcoming Events`, BRAND.navy2)}
     <tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${cards}</table></td></tr>`;
 }
 
 // One entry per metric this email covers — add another here (matching a key
 // historyTotalsToReportShape produces) to include it in a future round.
 const METRICS = [
-  { key: 'retail', label: 'Retail', icon: '🛍️', fmt: r => fmt$(r.retail) },
-  { key: 'colorSales', label: 'Color Sales', icon: '🎨', fmt: r => fmt$(r.colorSales) },
-  { key: 'signatureS', label: 'Signature Service (SS)', icon: '💇', fmt: r => `${fmtInt(r.signatureSCount)} (${fmt$(r.signatureS)})` },
+  { key: 'retail', label: 'Retail', icon: EMOJI.bags, fmt: r => fmt$(r.retail) },
+  { key: 'colorSales', label: 'Color Sales', icon: EMOJI.palette, fmt: r => fmt$(r.colorSales) },
+  { key: 'signatureS', label: 'Signature Service (SS)', icon: EMOJI.haircut, fmt: r => `${fmtInt(r.signatureSCount)} (${fmt$(r.signatureS)})` },
 ];
 
 // tone 'top'/'bottom' picks the header color and rank-badge palette — top 3
@@ -225,8 +238,14 @@ function rankTable(rows, metric, title, tone) {
     </table>`;
 }
 
-function buildEmail(storeRows, range, news, events, todayISO) {
+function buildEmail(storeRows, range, news, events, todayISO, siteUrl) {
   const subject = `Supercuts Weekly Recap — Retail, Color, SS (${range.start} to ${range.end})`;
+  const visitButton = siteUrl ? `
+    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px auto 0;">
+      <tr><td style="border-radius:6px;background:${BRAND.card};">
+        <a href="${escapeHtml(siteUrl)}" style="display:inline-block;padding:10px 26px;font-family:${FONT};font-size:13px;font-weight:700;color:${BRAND.navy};text-decoration:none;border-radius:6px;">Visit Site &#8594;</a>
+      </td></tr>
+    </table>` : '';
   const leaderboardSections = METRICS.map(metric => {
     const top10 = sortByMetric(storeRows, metric.key, 'desc').slice(0, 10);
     const bottom10 = sortByMetric(storeRows, metric.key, 'asc').slice(0, 10);
@@ -251,6 +270,7 @@ function buildEmail(storeRows, range, news, events, todayISO) {
             <div style="font-family:${FONT};font-size:11px;letter-spacing:2px;color:#9FB3CE;text-transform:uppercase;">Supercuts Analytics</div>
             <div style="font-family:${FONT};font-size:23px;font-weight:700;color:#fff;margin-top:4px;">Weekly Recap</div>
             <div style="font-family:${FONT};font-size:13px;color:#C7D3E3;margin-top:6px;">Week of ${fmtDateLong(range.start)} through ${fmtDateLong(range.end)}</div>
+            ${visitButton}
           </td>
         </tr>
         <tr>
@@ -310,7 +330,13 @@ export default async function handler(req, res) {
     const storeRows = Object.entries(totals).map(([code, t]) => ({
       code, name: STORE_CODE_TO_NAME[code] || `Store ${code}`, ...historyTotalsToReportShape(t),
     }));
-    const { subject, html } = buildEmail(storeRows, range, news, events, todayISO);
+    // Built from the request's own host rather than a hardcoded/env URL —
+    // this endpoint is only ever reached by hitting the live deployment, so
+    // req.headers.host is always the real, current domain (custom domain or
+    // *.vercel.app, whichever the site is actually running on).
+    const proto = (req.headers['x-forwarded-proto'] || 'https').split(',')[0];
+    const siteUrl = req.headers.host ? `${proto}://${req.headers.host}` : null;
+    const { subject, html } = buildEmail(storeRows, range, news, events, todayISO, siteUrl);
     res.status(200).json({ ok: true, subject, html, storeCount: storeRows.length });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
