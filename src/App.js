@@ -295,7 +295,7 @@ function fmtDateRangeLong(startISO, endISO) {
   return `${startPart} – ${MONTH_NAMES[em - 1]} ${ed}, ${ey}`;
 }
 
-// Store-level metrics shown on Overview / Stores.
+// Store-level metrics shown on the Overview tab.
 const STORE_METRICS = [
   { key: 'sales', label: 'Net Sales', fmt: fmt$ },
   { key: 'tsth', label: 'TSTH', fmt: fmtRate },
@@ -1566,60 +1566,8 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews }) {
 }
 
 // ─── Overview tab ───────────────────────────────────────────────────────────
-function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery }) {
-  const usingDefaultRange = isReportStale(report) && !(dateRange?.start && dateRange?.end);
-  const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
-  const isHistorical = !!(effectiveRange?.start && effectiveRange?.end);
-  const metric = STORE_METRICS.find(m => m.key === selected) || STORE_METRICS[0];
-
-  const allStoreRows = useMemo(() => {
-    if (isHistorical) {
-      const totals = getRangeTotals(history, weeklyHistory, effectiveRange.start, effectiveRange.end);
-      return Object.entries(totals).map(([code, t]) => {
-        const shape = historyTotalsToReportShape(t);
-        return { name: STORE_CODE_TO_NAME[code] || `Store ${code}`, code, ...shape };
-      });
-    }
-    return report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals }));
-  }, [isHistorical, history, weeklyHistory, effectiveRange?.start, effectiveRange?.end, report]);
-
-  const t = isHistorical ? rollupRows(allStoreRows) : report.companyTotals;
-
-  const storeRows = useMemo(() => {
-    if (!query.trim()) return allStoreRows;
-    const q = query.trim().toLowerCase();
-    return allStoreRows.filter(r => r.name.toLowerCase().includes(q));
-  }, [allStoreRows, query]);
-
-  return (
-    <div className="tab-content">
-      {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
-      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
-      <SearchBox value={query} onChange={onQuery} placeholder="Search stores…" />
-      <p className="section-hint">Tap any metric to see the top 10 and bottom 10 stores for it.</p>
-      <div className="summary-grid">
-        {STORE_METRICS.map(m => (
-          <button
-            key={m.key}
-            className={`summary-tile ${selected === m.key ? 'summary-tile--active' : ''}`}
-            onClick={() => onSelect(m.key)}
-          >
-            <p className="summary-tile-label">{m.label}</p>
-            <p className="summary-tile-value">{m.fmt(t[m.key], t)}</p>
-          </button>
-        ))}
-      </div>
-
-      <div className="leaderboard-grid">
-        <Leaderboard rows={storeRows} metric={metric.key} formatter={metric.fmt} title={`Top 10 — ${metric.label}`} count={10} order="desc" />
-        <Leaderboard rows={storeRows} metric={metric.key} formatter={metric.fmt} title={`Bottom 10 — ${metric.label}`} count={10} order="asc" />
-      </div>
-    </div>
-  );
-}
-
-// ─── Stores tab ─────────────────────────────────────────────────────────────
-function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers, canAward, onAward, isOwner, goals }) {
+// ─── Overview tab (top-10/bottom-10 leaderboards, plus the full store list) ─
+function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery, managers, canAward, onAward, isOwner, goals }) {
   const [sortBy, setSortBy] = useState('tsth');
   const getSalesGoal = code => goals?.[code]?.salesGoal ?? null;
   const [expanded, setExpanded] = useState({});
@@ -1630,6 +1578,7 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
   const usingDefaultRange = isReportStale(report) && !(dateRange.start && dateRange.end);
   const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const isHistorical = !!(effectiveRange.start && effectiveRange.end);
+  const metric = STORE_METRICS.find(m => m.key === selected) || STORE_METRICS[0];
 
   const storeRows = useMemo(() => {
     if (isHistorical) {
@@ -1664,6 +1613,25 @@ function StoresTab({ report, query, onQuery, history, weeklyHistory, dateRange, 
       <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
       {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores or employees…" />
+
+      <p className="section-hint">Tap any metric to see the top 10 and bottom 10 stores for it.</p>
+      <div className="summary-grid">
+        {STORE_METRICS.map(m => (
+          <button
+            key={m.key}
+            className={`summary-tile ${selected === m.key ? 'summary-tile--active' : ''}`}
+            onClick={() => onSelect(m.key)}
+          >
+            <p className="summary-tile-label">{m.label}</p>
+            <p className="summary-tile-value">{m.fmt(t[m.key], t)}</p>
+          </button>
+        ))}
+      </div>
+
+      <div className="leaderboard-grid">
+        <Leaderboard rows={filtered} metric={metric.key} formatter={metric.fmt} title={`Top 10 — ${metric.label}`} count={10} order="desc" />
+        <Leaderboard rows={filtered} metric={metric.key} formatter={metric.fmt} title={`Bottom 10 — ${metric.label}`} count={10} order="asc" />
+      </div>
 
       <div className="ledger-head-row">
         <p className="section-label">{filtered.length} of {storeRows.length} stores{isHistorical ? ' (historical)' : ''}</p>
@@ -2887,7 +2855,7 @@ function ManagersTab({ report, managers, onSaveManager, onImportManagers }) {
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
-      <p className="section-hint">Assign who manages each store — type their name exactly as it appears in the stylist report so it gets a MANAGER tag wherever employees are listed (Stores, Employees, DL, Retail, Color Sales). The DL tab's "Managers" view rolls this up by DL, and this always saves even if the name doesn't match yet. Usually you won't need this tab at all — setting someone's Role to Manager with a Store Code in Setup &gt; Employee Access does this automatically. Use this tab directly only for a manager who isn't a login-roster row (or to override the auto-assigned name).</p>
+      <p className="section-hint">Assign who manages each store — type their name exactly as it appears in the stylist report so it gets a MANAGER tag wherever employees are listed (Overview, Employees, DL, Retail, Color Sales). The DL tab's "Managers" view rolls this up by DL, and this always saves even if the name doesn't match yet. Usually you won't need this tab at all — setting someone's Role to Manager with a Store Code in Setup &gt; Employee Access does this automatically. Use this tab directly only for a manager who isn't a login-roster row (or to override the auto-assigned name).</p>
 
       {onImportManagers && (
         <div className="goal-import-row">
@@ -4847,7 +4815,7 @@ function EmployeeAccessSetupTab({ token, onRosterChanged }) {
     <div className="tab-content">
       <p className="section-hint">
         Upload the employee access list — one row per person: <b>Employee Name | Employee Code | Phone Number | Role | Store Codes</b>.
-        Role is Owner, District Leader, Manager, or Employee. Store Codes only matters for District Leader (multiple codes, separated by commas or spaces) and Manager (one code) — leave it blank for Owner/Employee. Setting someone's Role to Manager with a Store Code here also gives them the MANAGER tag on that store (Stores/Employees/DL/Retail/Color Sales) — no need to also enter them in Setup &gt; Managers.
+        Role is Owner, District Leader, Manager, or Employee. Store Codes only matters for District Leader (multiple codes, separated by commas or spaces) and Manager (one code) — leave it blank for Owner/Employee. Setting someone's Role to Manager with a Store Code here also gives them the MANAGER tag on that store (Overview/Employees/DL/Retail/Color Sales) — no need to also enter them in Setup &gt; Managers.
         Employee Code and Phone Number can be left blank if you don't have them yet — that person still gets added to the table below (with a placeholder code) so you can fill them in directly, right in this table, once you find out.
         Every upload replaces the current list — anyone whose Employee Code isn't in the new file loses access immediately, even if they're already logged in.
       </p>
@@ -5637,7 +5605,7 @@ function RewardsSetupTab({ token, showToast }) {
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'Stores', 'Employees', 'Retail', 'Color Sales', 'Signature Service', 'Goals', 'DL', 'Reviews', 'Weekly', "Tillie's Nest", 'Setup'];
+const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Setup'];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
@@ -5682,7 +5650,7 @@ export default function App() {
   const [uploadingRoster, setUploadingRoster] = useState(false);
   const [uploadingReviews, setUploadingReviews] = useState(false);
   const [selectedMetric, setSelectedMetric] = useState('tsth');
-  const [queries, setQueries] = useState({ Overview: '', Stores: '', Employees: '', Retail: '', 'Color Sales': '', 'Signature Service': '', Goals: '', DL: '', Reviews: '' });
+  const [queries, setQueries] = useState({ Overview: '', Employees: '', Retail: '', 'Color Sales': '', 'Signature Service': '', Goals: '', DL: '', Reviews: '' });
   const [pointsSummary, setPointsSummary] = useState(null);
 
   useEffect(() => {
@@ -6661,10 +6629,7 @@ export default function App() {
           <HsaTab events={events} hsaSignups={hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} />
         )}
         {!needsReport && tab === 'Overview' && (report || hasHistoricalData) && (
-          <OverviewTab report={report} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} />
-        )}
-        {!needsReport && tab === 'Stores' && (report || hasHistoricalData) && (
-          <StoresTab report={report} query={queries.Stores} onQuery={v => setQuery('Stores', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'} goals={goals} />
+          <OverviewTab report={report} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'} goals={goals} />
         )}
         {!needsReport && tab === 'Employees' && (report || hasHistoricalData) && (
           <EmployeesTab report={report} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} employeeRoster={employeeRoster} fallbackEmployeesByStore={fallbackEmployeesByStore} />
