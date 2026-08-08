@@ -2887,7 +2887,7 @@ function ManagersTab({ report, managers, onSaveManager, onImportManagers }) {
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
-      <p className="section-hint">Assign who manages each store — type their name exactly as it appears in the stylist report so it gets a MANAGER tag wherever employees are listed (Stores, Employees, DL, Retail, Color Sales). The DL tab's "Managers" view rolls this up by DL, and this always saves even if the name doesn't match yet.</p>
+      <p className="section-hint">Assign who manages each store — type their name exactly as it appears in the stylist report so it gets a MANAGER tag wherever employees are listed (Stores, Employees, DL, Retail, Color Sales). The DL tab's "Managers" view rolls this up by DL, and this always saves even if the name doesn't match yet. Usually you won't need this tab at all — setting someone's Role to Manager with a Store Code in Setup &gt; Employee Access does this automatically. Use this tab directly only for a manager who isn't a login-roster row (or to override the auto-assigned name).</p>
 
       {onImportManagers && (
         <div className="goal-import-row">
@@ -4730,7 +4730,7 @@ const SETUP_SECTIONS = [
 // parser.js). Every upload replaces the full current list; api/roster.js
 // deactivates anyone whose employee code isn't in the new file, which is
 // what actually revokes access for someone who quit/was let go.
-function EmployeeAccessSetupTab({ token }) {
+function EmployeeAccessSetupTab({ token, onRosterChanged }) {
   const [employees, setEmployees] = useState([]);
   const [loadingList, setLoadingList] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -4742,14 +4742,23 @@ function EmployeeAccessSetupTab({ token }) {
   const [loadingLoginCounts, setLoadingLoginCounts] = useState(false);
   const [loginCountsError, setLoginCountsError] = useState(null);
 
+  // Tracks the roster as of the last load so refresh() can hand
+  // onRosterChanged a before/after pair — a plain ref instead of reading
+  // `employees` state directly, since refresh() (a useCallback) would
+  // otherwise close over a stale list from whenever it was created.
+  const employeesRef = useRef([]);
+  useEffect(() => { employeesRef.current = employees; }, [employees]);
+
   const refresh = useCallback(() => {
     setLoadingList(true);
     rosterList(token).then(res => {
       setLoadingList(false);
-      if (res.ok) setEmployees(res.employees);
-      else setMsg({ type: 'error', text: res.error });
+      if (res.ok) {
+        onRosterChanged?.(employeesRef.current, res.employees);
+        setEmployees(res.employees);
+      } else setMsg({ type: 'error', text: res.error });
     });
-  }, [token]);
+  }, [token, onRosterChanged]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -4838,7 +4847,7 @@ function EmployeeAccessSetupTab({ token }) {
     <div className="tab-content">
       <p className="section-hint">
         Upload the employee access list — one row per person: <b>Employee Name | Employee Code | Phone Number | Role | Store Codes</b>.
-        Role is Owner, District Leader, Manager, or Employee. Store Codes only matters for District Leader (multiple codes, separated by commas or spaces) and Manager (one code) — leave it blank for Owner/Employee.
+        Role is Owner, District Leader, Manager, or Employee. Store Codes only matters for District Leader (multiple codes, separated by commas or spaces) and Manager (one code) — leave it blank for Owner/Employee. Setting someone's Role to Manager with a Store Code here also gives them the MANAGER tag on that store (Stores/Employees/DL/Retail/Color Sales) — no need to also enter them in Setup &gt; Managers.
         Employee Code and Phone Number can be left blank if you don't have them yet — that person still gets added to the table below (with a placeholder code) so you can fill them in directly, right in this table, once you find out.
         Every upload replaces the current list — anyone whose Employee Code isn't in the new file loses access immediately, even if they're already logged in.
       </p>
@@ -6071,6 +6080,48 @@ export default function App() {
     });
   }, []);
 
+  // Keeps the MANAGER tag (Setup > Managers' `managers` map, matched by name
+  // against report/history rows) in sync with Setup > Employee Access's
+  // role/store-code assignment — those are two separate systems that used to
+  // require the same person be set up twice. Called with the roster's
+  // before/after employee lists (from EmployeeAccessSetupTab's refresh())
+  // any time the roster is loaded, edited, or re-uploaded, so a role change
+  // there is enough on its own; also self-heals any pre-existing mismatch
+  // the first time Employee Access is opened in a session.
+  const reconcileManagerTagsFromRoster = useCallback((prevEmployees, nextEmployees) => {
+    const prevById = new Map((prevEmployees || []).map(e => [e.id, e]));
+    setManagers(prevManagers => {
+      let next = { ...prevManagers };
+      let changed = false;
+      (nextEmployees || []).forEach(emp => {
+        const prev = prevById.get(emp.id);
+        const prevCodes = (prev?.role === 'manager' && prev.active) ? (prev.storeCodes || []) : [];
+        const nextCodes = (emp.role === 'manager' && emp.active) ? (emp.storeCodes || []) : [];
+        prevCodes.forEach(code => {
+          // Only clear a store's tag if this employee was the one who set it —
+          // don't stomp a name someone else typed into Setup > Managers.
+          if (!nextCodes.includes(code) && prev && normalizeName(next[code] || '') === normalizeName(prev.name)) {
+            delete next[code];
+            changed = true;
+          }
+        });
+        nextCodes.forEach(code => {
+          if (normalizeName(next[code] || '') !== normalizeName(emp.name)) {
+            next[code] = emp.name;
+            changed = true;
+          }
+        });
+      });
+      if (!changed) return prevManagers;
+      saveData('store_managers', next).then(result => {
+        if (isConfigured() && !result.ok) {
+          showToast(`Manager tag saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+        }
+      });
+      return next;
+    });
+  }, []);
+
   const handleOpenNews = useCallback(id => {
     setTab('News');
     setOpenNews({ id });
@@ -6687,7 +6738,7 @@ export default function App() {
               employeeRoster, uploadingRoster, onRosterFile: handleRosterFile, onClearRoster: handleClearRoster,
               reviews, uploadingReviews, onReviewsFile: handleReviewsFile, onClearReviews: handleClearReviews,
             }}
-            employeeAccessProps={{ token: currentUser.token }}
+            employeeAccessProps={{ token: currentUser.token, onRosterChanged: reconcileManagerTagsFromRoster }}
             rewardsProps={{ token: currentUser.token, showToast }}
             hsaProps={{
               classCount: events.filter(ev => ev.source === 'hsa').length,
