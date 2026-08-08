@@ -1,11 +1,16 @@
 // Vercel serverless function — Node.js runtime.
 // Computes last week's company-wide Top 10 / Bottom 10 stores for Retail,
 // Color Sales, and Signature Service, and hands back a ready-to-send HTML
-// email body. Called by a Google Apps Script on a Monday-morning time
-// trigger (Setup > Email Reports has the walkthrough) — the script does the
-// mechanical part (fetch + GmailApp.sendEmail), all the actual computation
-// happens here so it can share ./metrics.js with the live app instead of a
-// second copy of the weekly-vs-daily dedup rules.
+// email body. Also includes a "what's new" recap — News posts made during
+// that same week, and upcoming events off the Homepage calendar — reading
+// the same `homepage_news`/`homepage_events` Supabase keys the Homepage tab
+// already does, so nothing new needs to be maintained separately for the
+// email to stay in sync with what's posted on the site. Called by a Google
+// Apps Script on a Monday-morning time trigger (Setup > Email Reports has
+// the walkthrough) — the script does the mechanical part (fetch +
+// GmailApp.sendEmail), all the actual computation happens here so it can
+// share ./metrics.js with the live app instead of a second copy of the
+// weekly-vs-daily dedup rules.
 //
 // Auth is a single shared secret (LEADERBOARD_EMAIL_SECRET), same pattern as
 // EMAIL_INGEST_SECRET in api/email-report.js — there's no user session to
@@ -60,6 +65,57 @@ async function loadHistory() {
 const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 const fmtInt = n => Number(n || 0).toLocaleString('en-US');
 const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function fmtDateShort(iso) {
+  const [y, m, d] = String(iso || '').slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return iso || '';
+  return `${MONTH_NAMES[m - 1]} ${d}`;
+}
+
+// News items posted since the last leaderboard email went out (same
+// week window as the leaderboard itself, `range.start`..`range.end`) — a
+// "here's what was posted this week" recap, not every post ever made.
+function newsSection(news, range) {
+  const rows = (news || [])
+    .filter(n => n.date >= range.start && n.date <= range.end)
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+  if (!rows.length) return '';
+  const items = rows.map(n => `
+    <tr>
+      <td style="padding:6px 10px;vertical-align:top;color:#888;white-space:nowrap;">${fmtDateShort(n.date)}</td>
+      <td style="padding:6px 10px;">
+        <div style="font-weight:600;">${escapeHtml(n.title)}${n.group ? ` <span style="font-weight:400;color:#888;">— ${escapeHtml(n.group)}</span>` : ''}</div>
+        ${n.body ? `<div style="color:#555;">${escapeHtml(n.body)}</div>` : ''}
+      </td>
+    </tr>`).join('');
+  return `
+    <tr><td colspan="2" style="padding:20px 0 4px;border-top:2px solid #eee;font-family:Arial,sans-serif;font-size:16px;font-weight:700;">📣 New This Week</td></tr>
+    <tr><td colspan="2"><table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:13px;">${items}</table></td></tr>`;
+}
+
+// Upcoming events on the calendar, regardless of when they were added — a
+// reminder as an event approaches, same "is it still ahead of today" filter
+// FeaturedEvents (src/App.js) uses for the Homepage strip. Capped so a
+// calendar with a lot of future events doesn't blow the email up.
+const UPCOMING_EVENTS_LIMIT = 8;
+function eventsSection(events, todayISO) {
+  const rows = (events || [])
+    .filter(ev => (ev.endDate || ev.date) >= todayISO)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(0, UPCOMING_EVENTS_LIMIT);
+  if (!rows.length) return '';
+  const items = rows.map(ev => `
+    <tr>
+      <td style="padding:6px 10px;vertical-align:top;color:#888;white-space:nowrap;">${fmtDateShort(ev.date)}${ev.endDate ? `–${fmtDateShort(ev.endDate)}` : ''}</td>
+      <td style="padding:6px 10px;">
+        <div style="font-weight:600;">${escapeHtml(ev.title)}</div>
+        ${ev.description ? `<div style="color:#555;">${escapeHtml(ev.description)}</div>` : ''}
+      </td>
+    </tr>`).join('');
+  return `
+    <tr><td colspan="2" style="padding:20px 0 4px;border-top:2px solid #eee;font-family:Arial,sans-serif;font-size:16px;font-weight:700;">📅 Upcoming Events</td></tr>
+    <tr><td colspan="2"><table cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:13px;">${items}</table></td></tr>`;
+}
 
 // One entry per metric this email covers — add another here (matching a key
 // historyTotalsToReportShape produces) to include it in a future round.
@@ -83,9 +139,9 @@ function rankTable(rows, metric, title) {
     </table>`;
 }
 
-function buildEmail(storeRows, range) {
+function buildEmail(storeRows, range, news, events, todayISO) {
   const subject = `Weekly Leaderboard — Retail, Color, SS (${range.start} to ${range.end})`;
-  const sections = METRICS.map(metric => {
+  const leaderboardSections = METRICS.map(metric => {
     const top10 = sortByMetric(storeRows, metric.key, 'desc').slice(0, 10);
     const bottom10 = sortByMetric(storeRows, metric.key, 'asc').slice(0, 10);
     return `
@@ -100,7 +156,11 @@ function buildEmail(storeRows, range) {
   const html = `
     <div style="font-family:Arial,sans-serif;">
       <p style="font-size:14px;color:#555;">Week of ${escapeHtml(range.start)} through ${escapeHtml(range.end)}, from Sales-Accrual/Attendance data.</p>
-      <table cellpadding="0" cellspacing="0" style="width:100%;max-width:700px;">${sections}</table>
+      <table cellpadding="0" cellspacing="0" style="width:100%;max-width:700px;">
+        ${newsSection(news, range)}
+        ${eventsSection(events, todayISO)}
+        ${leaderboardSections}
+      </table>
     </div>`;
   return { subject, html };
 }
@@ -127,13 +187,16 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { history, weeklyHistory } = await loadHistory();
+    const [{ history, weeklyHistory }, news, events] = await Promise.all([
+      loadHistory(), loadRow('homepage_news'), loadRow('homepage_events'),
+    ]);
     const range = getLastFullWeekRange();
+    const todayISO = new Date().toISOString().slice(0, 10);
     const totals = getRangeTotals(history, weeklyHistory, range.start, range.end);
     const storeRows = Object.entries(totals).map(([code, t]) => ({
       code, name: STORE_CODE_TO_NAME[code] || `Store ${code}`, ...historyTotalsToReportShape(t),
     }));
-    const { subject, html } = buildEmail(storeRows, range);
+    const { subject, html } = buildEmail(storeRows, range, news, events, todayISO);
     res.status(200).json({ ok: true, subject, html, storeCount: storeRows.length });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
