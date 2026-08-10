@@ -351,8 +351,10 @@ function withManagerFlag(employees, managers, code) {
 // mark on the bar); omit it for a single-target progress bar (Retail/Color).
 // The milestone $ figure renders inside the bar itself (compact-formatted)
 // so a summary row doesn't need its own separate "Milestone" column to show it.
-function MilestoneThermometer({ actual, goal, milestone }) {
+function MilestoneThermometer({ actual, goal, milestone, fmt, compactFmt }) {
   if (milestone == null || milestone <= 0) return <span className="empty-note">—</span>;
+  const format = fmt || fmt$;
+  const compactFormat = compactFmt || fmtCompact$;
   const pct = actual != null ? (actual / milestone) * 100 : null;
   const fillPct = pct != null ? Math.max(0, Math.min(100, pct)) : 0;
   const goalPct = goal != null ? Math.max(0, Math.min(100, (goal / milestone) * 100)) : null;
@@ -362,9 +364,9 @@ function MilestoneThermometer({ actual, goal, milestone }) {
       <div className="thermo-bar-col">
         <div className={`thermo-bar thermo-bar--${status}`}>
           <div className="thermo-fill" style={{ width: `${fillPct}%` }} />
-          {goalPct != null && <div className="thermo-goal-tick" style={{ left: `${goalPct}%` }} title={`Goal: ${fmt$(goal)}`} />}
+          {goalPct != null && <div className="thermo-goal-tick" style={{ left: `${goalPct}%` }} title={`Goal: ${format(goal)}`} />}
         </div>
-        <span className="thermo-milestone-label">of {fmtCompact$(milestone)}</span>
+        <span className="thermo-milestone-label">of {compactFormat(milestone)}</span>
       </div>
       <span className="thermo-pct">{pct != null ? `${Math.round(pct)}%` : '—'}</span>
     </div>
@@ -2124,7 +2126,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                     {showGoalMetricCol && <div className="dl-stat"><span className="dl-stat-label">{goalMetricLabel}</span><span className="dl-stat-value">{goalFormatter(groupTotals[goalKey])}</span></div>}
                     {showGoals && <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{goalTotal > 0 ? goalFormatter(goalTotal) : '—'}</span></div>}
                     {showGoals && (
-                      <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupTotals[goalKey]} milestone={goalTotal} /></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupTotals[goalKey]} milestone={goalTotal} fmt={goalFmt && goalFormatter} compactFmt={goalFmt && goalFormatter} /></div>
                     )}
                   </div>
                 </button>
