@@ -1,6 +1,6 @@
 # Handoff — Supercuts Analytics
 
-Last updated: 2026-08-10 (yet later same day). **Owners can now add and edit HSA classes directly from the HSA tab, not just via the Setup > HSA bulk Excel upload.** Not yet committed/pushed as of this entry — see below.
+Last updated: 2026-08-10 (yet later same day). **Owners can now add and edit HSA classes directly from the HSA tab, not just via the Setup > HSA bulk Excel upload.** Commit `13dce72`, pushed to `main`.
 - **Why**: user wanted a "+ Add Class" button on the main HSA tab (owner-only) plus the ability to edit already-added classes, and to be able to group them — the existing "By Class Type" view toggle (keyed off `eventType`) already covers grouping once a class's type is easy to set/fix, so no separate grouping mechanism was built.
 - **New shared `HsaClassForm`** (`src/App.js`, next to `HsaSignUpForm`) — Date/Class Type/Location/Time fields, reused for both add and edit. Class Type has a `<datalist>` of every distinct `eventType` already on file, to nudge an owner toward reusing an existing group label instead of a near-duplicate ("Fade Class" vs "Fade class") rather than enforcing it.
 - **`HsaClassCard` gained an owner-only "✎ Edit" button** that swaps the card into the same form, pre-filled, with an explicit "(N already signed up — kept)" note when the class has sign-ups, so it's visible in the moment that editing is non-destructive to them.
