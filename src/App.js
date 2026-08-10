@@ -5277,7 +5277,7 @@ function doPost(e) {
     <div className="setup-section">
       <div className="setup-sql-card">
         <p className="chart-title">HSA class schedule</p>
-        <p className="step-body">Upload the class/training schedule (Date, Event, Location, Time columns) — every row is merged into the Homepage events calendar and becomes something people can sign up for on the HSA tab. Uploading again replaces the whole schedule; rows that are unchanged keep their existing sign-ups, since a class's identity is its date + event + location + time, not its position in the file.</p>
+        <p className="step-body">Upload the class/training schedule (Date, Event, Location, Time columns) — every row is merged into the Homepage events calendar and becomes something people can sign up for on the HSA tab. Uploading again replaces the file-sourced classes; rows that are unchanged keep their existing sign-ups, since a class's identity is its date + event + location + time, not its position in the file. Any class added or edited by hand on the HSA tab itself is kept as-is by a re-upload, even if it's missing from the new file.</p>
       </div>
       <UploadSlot
         id="hsa-schedule-file" title="Class Schedule" hint="Upload the Date / Event / Location / Time export"
@@ -6367,18 +6367,31 @@ export default function App() {
         source: 'hsa', eventType: c.event, location: c.location, time: c.time,
       }));
       setEvents(prev => {
-        const next = [...prev.filter(ev => ev.source !== 'hsa'), ...hsaEvents];
+        // Merge, don't blindly replace: any class an owner hand-added
+        // (+ Add Class) or hand-edited (✎ Edit) on the HSA tab carries
+        // `manual: true` and is protected here — kept as-is even if this
+        // upload's file doesn't contain it at all, or contains a
+        // different (stale) version of the same class under the same id,
+        // since the spreadsheet can't know about a change made only in
+        // the app. Every non-manual, purely file-sourced class is still
+        // replaced wholesale by the fresh parse — same "re-upload
+        // replaces the schedule" behavior as before for anything that was
+        // never hand-touched.
+        const manualHsa = prev.filter(ev => ev.source === 'hsa' && ev.manual);
+        const manualIds = new Set(manualHsa.map(ev => ev.id));
+        const freshHsaEvents = hsaEvents.filter(ev => !manualIds.has(ev.id));
+        const next = [...prev.filter(ev => ev.source !== 'hsa'), ...manualHsa, ...freshHsaEvents];
         saveData('homepage_events', next).then(result => {
           if (isConfigured() && !result.ok) showToast(`Schedule saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
         });
+        showToast(`HSA schedule uploaded — ${classes.length} classes from ${fileName}${manualHsa.length ? ` (${manualHsa.length} hand-added/edited class${manualHsa.length === 1 ? '' : 'es'} kept)` : ''}`);
         return next;
       });
-      showToast(`HSA schedule uploaded — ${classes.length} classes from ${fileName}`);
     }).catch(err => showToast(err.message, 'error')).finally(() => setUploadingHsaSchedule(false));
   }, []);
 
   const handleClearHsaSchedule = useCallback(() => {
-    if (!window.confirm("Clear the whole class schedule? Sign-ups already recorded stay on file, just without a class to show them under.")) return;
+    if (!window.confirm("Clear the whole class schedule, including any hand-added/edited classes? Sign-ups already recorded stay on file, just without a class to show them under.")) return;
     setEvents(prev => {
       const next = prev.filter(ev => ev.source !== 'hsa');
       saveData('homepage_events', next).then(result => {
@@ -6391,17 +6404,13 @@ export default function App() {
   // Owner-added classes from the HSA tab itself (not the bulk Setup > HSA
   // upload). Uses a random `genId()`, not the bulk path's content-derived
   // id — a hand-added class has no source file row to stay in sync with.
-  // NOTE: the next bulk Setup > HSA upload replaces every `source: 'hsa'`
-  // event wholesale (see handleImportHsaSchedule above), so a class added
-  // here will be wiped out by a later bulk re-upload, same as any bulk-
-  // uploaded class not present in that new file. Not changed as part of
-  // this addition since it's the same existing "re-upload replaces the
-  // whole schedule" behavior the Setup > HSA hint text already documents.
+  // `manual: true` protects it from being dropped by a later bulk
+  // Setup > HSA re-upload (see handleImportHsaSchedule's merge above).
   const handleAddHsaClass = useCallback((date, eventType, location, time) => {
     const entry = {
       id: genId(), title: location ? `${eventType} — ${location}` : eventType, date, endDate: null,
       description: time, headerImage: null, color: HSA_EVENT_COLOR,
-      source: 'hsa', eventType, location, time,
+      source: 'hsa', eventType, location, time, manual: true,
     };
     setEvents(prev => {
       const next = [...prev, entry];
@@ -6419,12 +6428,14 @@ export default function App() {
   // `classId`, so regenerating the id here on every text edit would
   // silently orphan every existing sign-up the moment an owner fixed a
   // typo in the location or time. Editing in place is what keeps them
-  // attached no matter what changes.
+  // attached no matter what changes. Also stamps `manual: true` so this
+  // edit isn't reverted back to the file's original text by a later bulk
+  // Setup > HSA re-upload — see handleImportHsaSchedule's merge above.
   const handleEditHsaClass = useCallback((id, date, eventType, location, time) => {
     setEvents(prev => {
       const next = prev.map(ev => ev.id === id ? {
         ...ev, date, title: location ? `${eventType} — ${location}` : eventType,
-        description: time, eventType, location, time,
+        description: time, eventType, location, time, manual: true,
       } : ev);
       saveData('homepage_events', next).then(result => {
         if (isConfigured() && !result.ok) showToast(`Class updated locally, but couldn't sync to Supabase (${result.error})`, 'error');
