@@ -15,6 +15,12 @@ import { getCodeForStoreName } from '../src/storeDirectory.js';
 const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history']);
 const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_'];
 
+// Subset of SENSITIVE_KEYS that are a flat { [storeCode]: {...fields} }
+// object and support scoped PATCH writes below — a merge-in for just the
+// codes in the patch, never a full-object overwrite. store_goals/
+// store_managers/milestone_goals all share this shape.
+const PATCHABLE_KEYS = new Set(['store_goals', 'store_managers', 'milestone_goals']);
+
 function isAllowedKey(key) {
   return SENSITIVE_KEYS.has(key) || SENSITIVE_PREFIXES.some(p => key.startsWith(p));
 }
@@ -95,7 +101,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { token, key, prefix } = req.body || {};
+  const { token, key, prefix, patch } = req.body || {};
   const { employee, error: sessionError } = await requireSession(supabase, token);
   if (!employee) {
     res.status(401).json({ error: sessionError });
@@ -103,6 +109,38 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Scoped write — a merge-in, not a read. Exists because store_goals/
+    // store_managers/milestone_goals reads are already filtered down to a
+    // non-owner's own stores (filterPayload below), but a plain client-side
+    // overwrite of the whole row (the old db.js saveData path) would take
+    // whatever's in that non-owner's browser — which, thanks to that same
+    // filtering, NEVER included any other DL's stores in the first place —
+    // and write it back as the entire row, silently deleting everyone
+    // else's entries. This forces every write to go through a read-merge-
+    // write against the CURRENT full row instead, and rejects a patch that
+    // touches a store code the caller isn't scoped to.
+    if (key && patch) {
+      if (!PATCHABLE_KEYS.has(key)) {
+        res.status(400).json({ error: `"${key}" does not support scoped patch writes.` });
+        return;
+      }
+      if (employee.role !== 'owner') {
+        const allowed = new Set(employee.store_codes || []);
+        const disallowed = Object.keys(patch).filter(code => !allowed.has(code));
+        if (disallowed.length) {
+          res.status(403).json({ error: `Not authorized to modify store(s): ${disallowed.join(', ')}` });
+          return;
+        }
+      }
+      const current = (await loadRow(supabase, key)) || {};
+      const merged = { ...current };
+      Object.entries(patch).forEach(([code, fields]) => { merged[code] = { ...merged[code], ...fields }; });
+      const { error: upsertError } = await supabase.from('weekly_report').upsert({ report_id: key, payload: merged }, { onConflict: 'report_id' });
+      if (upsertError) throw new Error(upsertError.message);
+      res.status(200).json({ ok: true, data: filterPayload(key, merged, employee) });
+      return;
+    }
+
     if (key) {
       if (!isAllowedKey(key)) {
         res.status(400).json({ error: `"${key}" is not available through this endpoint.` });

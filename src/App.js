@@ -9,7 +9,7 @@ import {
 } from './parser';
 import {
   getSession, setSession, clearSession, checkEligible, signUp, logIn, logOut,
-  loadScoped, loadScopedByPrefix, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
+  loadScoped, loadScopedByPrefix, saveScoped, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
   pointsBalance, pointsAward, pointsAllBalances, pointsTransactions, pointsDeleteTransaction,
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled, hsaSheetSync,
 } from './auth';
@@ -6030,17 +6030,28 @@ export default function App() {
     }
   }, [goldCombs]);
 
+  // Goes through saveScoped (a server-side read-merge-write, api/scoped-
+  // data.js) instead of db.js's saveData, which used to overwrite the
+  // ENTIRE store_goals row with whatever this browser's local `goals` state
+  // held — for a non-owner (a DL), that state only ever contained their own
+  // stores to begin with (reads are already role-filtered), so a single
+  // goal edit could silently wipe out every other store's goals. See
+  // HANDOFF.md's 2026-08-10 entry for the real incident this fixes.
   const handleSaveGoal = useCallback((storeCode, field, value) => {
     setGoals(prev => {
       const next = { ...prev, [storeCode]: { ...prev[storeCode], [field]: value } };
-      saveData('store_goals', next).then(result => {
-        if (isConfigured() && !result.ok) {
-          showToast(`Goal saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
-        }
-      });
+      goalsRef.current = next;
       return next;
     });
-  }, []);
+    saveScoped(currentUser.token, 'store_goals', { [storeCode]: { [field]: value } }).then(result => {
+      if (result.ok) {
+        setGoals(result.data || {});
+        goalsRef.current = result.data || {};
+      } else {
+        showToast(`Goal saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      }
+    });
+  }, [currentUser]);
 
   const handleSaveManager = useCallback((storeCode, name) => {
     setManagers(prev => {
@@ -6326,26 +6337,31 @@ export default function App() {
 
   // Queued through importChainRef (same serialization the Sales-Accrual/
   // Attendance/Reviews batches use) so importing more than one goal type
-  // back to back can't race — each import always starts from goalsRef's
-  // latest value instead of a snapshot that predates a still-in-flight
-  // sibling import.
+  // back to back can't race locally — each import always starts from
+  // goalsRef's latest value instead of a snapshot that predates a
+  // still-in-flight sibling import. Saves through saveScoped with only the
+  // touched store codes (not the whole goals object) — see handleSaveGoal's
+  // comment above for why a full-object overwrite from local state is
+  // unsafe for a non-owner.
   const handleImportGoals = useCallback((field, file) => {
     const task = async () => {
       try {
         const parsed = await parseGoalFile(file);
         const next = { ...goalsRef.current };
+        const patch = {};
         let matched = 0;
         const unmatched = [];
         parsed.entries.forEach(e => {
           const code = getCodeForStoreName(e.storeName);
-          if (code) { next[code] = { ...next[code], [field]: e.amount }; matched++; }
+          if (code) { next[code] = { ...next[code], [field]: e.amount }; patch[code] = { [field]: e.amount }; matched++; }
           else unmatched.push(e.storeName);
         });
         goalsRef.current = next;
         setGoals(next);
-        const result = await saveData('store_goals', next);
+        const result = matched ? await saveScoped(currentUser.token, 'store_goals', patch) : { ok: true };
+        if (result.ok && result.data) { goalsRef.current = result.data; setGoals(result.data); }
         const label = GOAL_FIELD_LABELS[field] || field;
-        if (isConfigured() && !result.ok) {
+        if (!result.ok) {
           showToast(`Imported ${matched} ${label} goals, but couldn't sync to Supabase (${result.error})`, 'error');
         } else if (unmatched.length) {
           showToast(`Imported ${matched} ${label} goals from ${file.name} — ${unmatched.length} store name${unmatched.length > 1 ? 's' : ''} not recognized: ${unmatched.slice(0, 3).join(', ')}${unmatched.length > 3 ? '…' : ''}`, 'error');
@@ -6359,7 +6375,7 @@ export default function App() {
     const queued = importChainRef.current.then(task, task);
     importChainRef.current = queued.then(() => {}, () => {});
     return queued;
-  }, []);
+  }, [currentUser]);
 
   const handleImportManagers = useCallback(async file => {
     try {

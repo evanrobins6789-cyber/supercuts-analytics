@@ -76,6 +76,16 @@ export async function loadScopedByPrefix(prefix, token) {
   return { data: res.data, source: 'supabase', error: null };
 }
 
+// Merge-in write for store_goals/store_managers/milestone_goals — `patch` is
+// { [storeCode]: {...fields} } for just the store(s) being changed. The
+// server reads the current full row, merges only these codes into it, and
+// writes that back — never a full-row overwrite from the client's own
+// (possibly role-scoped-down) local state. Returns the caller's own
+// role-filtered view of the result, same shape as loadScoped.
+export function saveScoped(token, key, patch) {
+  return postJson('/api/scoped-data', { token, key, patch });
+}
+
 export function rosterList(token) {
   return postJson('/api/roster', { action: 'list', token });
 }
