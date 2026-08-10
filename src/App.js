@@ -1454,7 +1454,7 @@ function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemo
           <p className="hsa-class-meta">{fmtDateLong(cls.date)}{cls.location ? ` · ${cls.location}` : ''}{cls.time ? ` · ${cls.time}` : ''}</p>
         </div>
         <div className="hsa-class-actions">
-          {isOwner && !signingUp && <button className="btn-ghost hsa-class-edit" onClick={() => setEditing(true)}>✎ Edit</button>}
+          {isOwner && !signingUp && <button className="hsa-class-edit" onClick={() => setEditing(true)}>✎ Edit Class</button>}
           {!signingUp && (
             <button className="btn-primary btn-secondary" onClick={() => setSigningUp(true)}>
               {alreadyIn ? "✋ Sign up someone else" : '✋ Sign Up'}
