@@ -833,6 +833,13 @@
 .hsa-roster-remove { padding: 1px 7px; font-size: 11px; }
 .hsa-type-group { margin-bottom: 18px; }
 .hsa-type-group-count { font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 400; color: var(--ink-soft); }
+.hsa-owner-tools { margin-bottom: 4px; }
+.hsa-class-actions { display: flex; align-items: center; gap: 8px; }
+.hsa-class-edit { padding: 4px 10px; font-size: 12px; }
+.hsa-class-card--editing { border-style: dashed; border-color: var(--navy); }
+.hsa-class-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.hsa-class-form .text-input { margin: 0; flex: 1; min-width: 140px; }
+.hsa-class-form-actions { display: flex; gap: 8px; flex-basis: 100%; }
 
 /* ─── Retail "Products" view ─────────────────────────────────────────────── */
 .product-view { display: flex; flex-direction: column; gap: 14px; }

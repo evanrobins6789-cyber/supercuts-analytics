@@ -1394,9 +1394,58 @@ function HsaSignUpForm({ onSubmit, defaultName }) {
   );
 }
 
-function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemoveSignup }) {
+// Add/edit form for a class — shared by "+ Add Class" (blank) and each
+// card's "✎ Edit" (pre-filled). `existingEventTypes` feeds a datalist so an
+// owner grouping/re-grouping classes by type tends to reuse an existing
+// label instead of a near-duplicate ("Fade Class" vs "Fade class").
+function HsaClassForm({ initial, existingEventTypes, submitLabel, onSubmit, onCancel }) {
+  const [date, setDate] = useState(initial?.date || '');
+  const [eventType, setEventType] = useState(initial?.eventType || '');
+  const [location, setLocation] = useState(initial?.location || '');
+  const [time, setTime] = useState(initial?.time || '');
+  const valid = date && eventType.trim();
+  const submit = e => {
+    e.preventDefault();
+    if (!valid) return;
+    onSubmit(date, eventType.trim(), location.trim(), time.trim());
+  };
+  return (
+    <form className="hsa-class-form" onSubmit={submit}>
+      <input className="text-input" type="date" value={date} onChange={e => setDate(e.target.value)} required />
+      <input className="text-input" list="hsa-event-type-options" placeholder="Class type (e.g. HSA, Fade Class)" value={eventType} onChange={e => setEventType(e.target.value)} required />
+      <datalist id="hsa-event-type-options">
+        {existingEventTypes.map(t => <option key={t} value={t} />)}
+      </datalist>
+      <input className="text-input" placeholder="Location (optional)" value={location} onChange={e => setLocation(e.target.value)} />
+      <input className="text-input" placeholder="Time (optional)" value={time} onChange={e => setTime(e.target.value)} />
+      <div className="hsa-class-form-actions">
+        <button type="submit" className="btn-primary" disabled={!valid}>{submitLabel}</button>
+        <button type="button" className="btn-ghost" onClick={onCancel}>Cancel</button>
+      </div>
+    </form>
+  );
+}
+
+function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemoveSignup, onEditClass, existingEventTypes }) {
   const [signingUp, setSigningUp] = useState(false);
+  const [editing, setEditing] = useState(false);
   const alreadyIn = currentUserName && signups.some(s => normalizeName(s.name) === normalizeName(currentUserName));
+  // Editing only ever changes this class's own date/type/location/time —
+  // its `id` is passed through untouched by the caller (onEditClass), so
+  // every sign-up already recorded against this class (matched by classId)
+  // stays attached no matter what the visible details change to.
+  if (editing) {
+    return (
+      <div className="hsa-class-card hsa-class-card--editing">
+        <p className="hsa-class-title">Editing class{signups.length ? ` (${signups.length} already signed up — kept)` : ''}</p>
+        <HsaClassForm
+          initial={cls} existingEventTypes={existingEventTypes} submitLabel="Save changes"
+          onSubmit={(date, eventType, location, time) => { onEditClass(cls.id, date, eventType, location, time); setEditing(false); }}
+          onCancel={() => setEditing(false)}
+        />
+      </div>
+    );
+  }
   return (
     <div className="hsa-class-card">
       <div className="hsa-class-head">
@@ -1404,11 +1453,14 @@ function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemo
           <p className="hsa-class-title">{cls.eventType}</p>
           <p className="hsa-class-meta">{fmtDateLong(cls.date)}{cls.location ? ` · ${cls.location}` : ''}{cls.time ? ` · ${cls.time}` : ''}</p>
         </div>
-        {!signingUp && (
-          <button className="btn-primary btn-secondary" onClick={() => setSigningUp(true)}>
-            {alreadyIn ? "✋ Sign up someone else" : '✋ Sign Up'}
-          </button>
-        )}
+        <div className="hsa-class-actions">
+          {isOwner && !signingUp && <button className="btn-ghost hsa-class-edit" onClick={() => setEditing(true)}>✎ Edit</button>}
+          {!signingUp && (
+            <button className="btn-primary btn-secondary" onClick={() => setSigningUp(true)}>
+              {alreadyIn ? "✋ Sign up someone else" : '✋ Sign Up'}
+            </button>
+          )}
+        </div>
       </div>
       {signingUp && (
         <HsaSignUpForm
@@ -1433,20 +1485,24 @@ function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemo
   );
 }
 
-function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup }) {
+function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup, onAddClass, onEditClass }) {
   const [query, setQuery] = useState('');
   const [showPast, setShowPast] = useState(false);
   const [groupByType, setGroupByType] = useState(false);
+  const [addingClass, setAddingClass] = useState(false);
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const isOwner = currentUser.role === 'owner';
+
+  const allHsaEvents = useMemo(() => events.filter(ev => ev.source === 'hsa'), [events]);
+  const existingEventTypes = useMemo(() => [...new Set(allHsaEvents.map(ev => ev.eventType))].sort(), [allHsaEvents]);
 
   const classes = useMemo(() => {
-    const hsaEvents = events.filter(ev => ev.source === 'hsa');
     const q = query.trim().toLowerCase();
-    return hsaEvents
+    return allHsaEvents
       .filter(ev => showPast || ev.date >= todayISO)
       .filter(ev => !q || ev.eventType.toLowerCase().includes(q) || (ev.location || '').toLowerCase().includes(q))
       .sort((a, b) => a.date.localeCompare(b.date) || a.eventType.localeCompare(b.eventType));
-  }, [events, query, showPast, todayISO]);
+  }, [allHsaEvents, query, showPast, todayISO]);
 
   // Grouped by class type (the "Event" column — HSA, HSA Cert, Manager
   // Training, Fade Class, etc.), groups in alphabetical order, classes
@@ -1465,14 +1521,31 @@ function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup }) {
     <HsaClassCard
       key={cls.id} cls={cls}
       signups={hsaSignups.filter(s => s.classId === cls.id)}
-      isOwner={currentUser.role === 'owner'} currentUserName={currentUser.name}
+      isOwner={isOwner} currentUserName={currentUser.name}
       onSignUp={onSignUp} onRemoveSignup={onRemoveSignup}
+      onEditClass={onEditClass} existingEventTypes={existingEventTypes}
     />
   );
 
   return (
     <div className="tab-content">
-      <p className="section-hint">Hair Stylist Academy — sign up for a class below. Everyone can see who's already signed up. Classes are uploaded by the owner in Setup &gt; HSA.</p>
+      <p className="section-hint">Hair Stylist Academy — sign up for a class below. Everyone can see who's already signed up. Classes are uploaded by the owner in Setup &gt; HSA, or added directly below.</p>
+      {isOwner && (
+        <div className="hsa-owner-tools">
+          {!addingClass ? (
+            <button className="btn-primary" onClick={() => setAddingClass(true)}>+ Add Class</button>
+          ) : (
+            <div className="hsa-class-card hsa-class-card--editing">
+              <p className="hsa-class-title">New class</p>
+              <HsaClassForm
+                existingEventTypes={existingEventTypes} submitLabel="Add class"
+                onSubmit={(date, eventType, location, time) => { onAddClass(date, eventType, location, time); setAddingClass(false); }}
+                onCancel={() => setAddingClass(false)}
+              />
+            </div>
+          )}
+        </div>
+      )}
       <SearchBox value={query} onChange={setQuery} placeholder="Search classes or locations…" />
       <div className="view-toggle">
         <button className={`view-toggle-btn ${!showPast ? 'active' : ''}`} onClick={() => setShowPast(false)}>Upcoming</button>
@@ -6315,6 +6388,52 @@ export default function App() {
     });
   }, []);
 
+  // Owner-added classes from the HSA tab itself (not the bulk Setup > HSA
+  // upload). Uses a random `genId()`, not the bulk path's content-derived
+  // id — a hand-added class has no source file row to stay in sync with.
+  // NOTE: the next bulk Setup > HSA upload replaces every `source: 'hsa'`
+  // event wholesale (see handleImportHsaSchedule above), so a class added
+  // here will be wiped out by a later bulk re-upload, same as any bulk-
+  // uploaded class not present in that new file. Not changed as part of
+  // this addition since it's the same existing "re-upload replaces the
+  // whole schedule" behavior the Setup > HSA hint text already documents.
+  const handleAddHsaClass = useCallback((date, eventType, location, time) => {
+    const entry = {
+      id: genId(), title: location ? `${eventType} — ${location}` : eventType, date, endDate: null,
+      description: time, headerImage: null, color: HSA_EVENT_COLOR,
+      source: 'hsa', eventType, location, time,
+    };
+    setEvents(prev => {
+      const next = [...prev, entry];
+      saveData('homepage_events', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Class saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+    showToast(`Class added — ${eventType}`);
+  }, []);
+
+  // Editing a class deliberately keeps its `id` untouched — only the bulk
+  // upload path (parseHsaScheduleFromGrid) derives an id from the class's
+  // own date/type/location/time text. Sign-ups reference a class by
+  // `classId`, so regenerating the id here on every text edit would
+  // silently orphan every existing sign-up the moment an owner fixed a
+  // typo in the location or time. Editing in place is what keeps them
+  // attached no matter what changes.
+  const handleEditHsaClass = useCallback((id, date, eventType, location, time) => {
+    setEvents(prev => {
+      const next = prev.map(ev => ev.id === id ? {
+        ...ev, date, title: location ? `${eventType} — ${location}` : eventType,
+        description: time, eventType, location, time,
+      } : ev);
+      saveData('homepage_events', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Class updated locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+    showToast('Class updated');
+  }, []);
+
   // Sign-ups are saved straight to Supabase the same way homepage news/events
   // already are (non-sensitive, direct anon-key path) — the Google Sheets
   // export (hsaSheetSync) is a secondary, best-effort mirror on top, never
@@ -6705,7 +6824,7 @@ export default function App() {
           <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} />
         )}
         {tab === 'HSA' && (
-          <HsaTab events={events} hsaSignups={hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} />
+          <HsaTab events={events} hsaSignups={hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} onAddClass={handleAddHsaClass} onEditClass={handleEditHsaClass} />
         )}
         {!needsReport && tab === 'Overview' && (report || hasHistoricalData) && (
           <OverviewTab report={report} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'} goals={goals} />
