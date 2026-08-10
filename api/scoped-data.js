@@ -134,7 +134,20 @@ export default async function handler(req, res) {
       }
       const current = (await loadRow(supabase, key)) || {};
       const merged = { ...current };
-      Object.entries(patch).forEach(([code, fields]) => { merged[code] = { ...merged[code], ...fields }; });
+      // Three shapes a per-store patch value can take: `null` deletes the
+      // store's entry entirely (clearing a manager); an object merges into
+      // whatever fields already exist there (store_goals/milestone_goals,
+      // each store's value is itself `{ field: value, ... }`); anything else
+      // (store_managers — a plain manager-name string) replaces the whole
+      // per-store value outright, since there's nothing to merge into.
+      Object.entries(patch).forEach(([code, value]) => {
+        if (value === null) { delete merged[code]; return; }
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+          merged[code] = { ...merged[code], ...value };
+        } else {
+          merged[code] = value;
+        }
+      });
       const { error: upsertError } = await supabase.from('weekly_report').upsert({ report_id: key, payload: merged }, { onConflict: 'report_id' });
       if (upsertError) throw new Error(upsertError.message);
       res.status(200).json({ ok: true, data: filterPayload(key, merged, employee) });

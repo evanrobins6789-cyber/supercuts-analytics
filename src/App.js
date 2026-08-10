@@ -5642,6 +5642,10 @@ export default function App() {
   // import's save resolved first.
   const goalsRef = useRef(goals);
   useEffect(() => { goalsRef.current = goals; }, [goals]);
+  const managersRef = useRef(managers);
+  useEffect(() => { managersRef.current = managers; }, [managers]);
+  const milestoneGoalsRef = useRef(milestoneGoals);
+  useEffect(() => { milestoneGoalsRef.current = milestoneGoals; }, [milestoneGoals]);
   const importChainRef = useRef(Promise.resolve());
   const [weeklyHistory, setWeeklyHistory] = useState({});
   const [dateRange, setDateRangeState] = useState({ start: null, end: null });
@@ -6057,14 +6061,18 @@ export default function App() {
     setManagers(prev => {
       const next = { ...prev };
       if (name) next[storeCode] = name; else delete next[storeCode];
-      saveData('store_managers', next).then(result => {
-        if (isConfigured() && !result.ok) {
-          showToast(`Manager saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
-        }
-      });
+      managersRef.current = next;
       return next;
     });
-  }, []);
+    saveScoped(currentUser.token, 'store_managers', { [storeCode]: name || null }).then(result => {
+      if (result.ok) {
+        setManagers(result.data || {});
+        managersRef.current = result.data || {};
+      } else {
+        showToast(`Manager saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      }
+    });
+  }, [currentUser]);
 
   // Keeps the MANAGER tag (Setup > Managers' `managers` map, matched by name
   // against report/history rows) in sync with Setup > Employee Access's
@@ -6076,8 +6084,10 @@ export default function App() {
   // the first time Employee Access is opened in a session.
   const reconcileManagerTagsFromRoster = useCallback((prevEmployees, nextEmployees) => {
     const prevById = new Map((prevEmployees || []).map(e => [e.id, e]));
+    let patch = null;
     setManagers(prevManagers => {
       let next = { ...prevManagers };
+      const localPatch = {};
       let changed = false;
       (nextEmployees || []).forEach(emp => {
         const prev = prevById.get(emp.id);
@@ -6088,25 +6098,34 @@ export default function App() {
           // don't stomp a name someone else typed into Setup > Managers.
           if (!nextCodes.includes(code) && prev && normalizeName(next[code] || '') === normalizeName(prev.name)) {
             delete next[code];
+            localPatch[code] = null;
             changed = true;
           }
         });
         nextCodes.forEach(code => {
           if (normalizeName(next[code] || '') !== normalizeName(emp.name)) {
             next[code] = emp.name;
+            localPatch[code] = emp.name;
             changed = true;
           }
         });
       });
       if (!changed) return prevManagers;
-      saveData('store_managers', next).then(result => {
-        if (isConfigured() && !result.ok) {
+      patch = localPatch;
+      managersRef.current = next;
+      return next;
+    });
+    if (patch) {
+      saveScoped(currentUser.token, 'store_managers', patch).then(result => {
+        if (result.ok) {
+          setManagers(result.data || {});
+          managersRef.current = result.data || {};
+        } else {
           showToast(`Manager tag saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
         }
       });
-      return next;
-    });
-  }, []);
+    }
+  }, [currentUser]);
 
   const handleOpenNews = useCallback(id => {
     setTab('News');
@@ -6326,14 +6345,18 @@ export default function App() {
   const handleSaveMilestoneGoal = useCallback((storeCode, field, value) => {
     setMilestoneGoals(prev => {
       const next = { ...prev, [storeCode]: { ...prev[storeCode], [field]: value } };
-      saveData('milestone_goals', next).then(result => {
-        if (isConfigured() && !result.ok) {
-          showToast(`Milestone goal saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
-        }
-      });
+      milestoneGoalsRef.current = next;
       return next;
     });
-  }, []);
+    saveScoped(currentUser.token, 'milestone_goals', { [storeCode]: { [field]: value } }).then(result => {
+      if (result.ok) {
+        setMilestoneGoals(result.data || {});
+        milestoneGoalsRef.current = result.data || {};
+      } else {
+        showToast(`Milestone goal saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      }
+    });
+  }, [currentUser]);
 
   // Queued through importChainRef (same serialization the Sales-Accrual/
   // Attendance/Reviews batches use) so importing more than one goal type
@@ -6377,55 +6400,75 @@ export default function App() {
     return queued;
   }, [currentUser]);
 
-  const handleImportManagers = useCallback(async file => {
-    try {
-      const parsed = await parseManagerFile(file);
-      const next = { ...managers };
-      let matched = 0;
-      const unmatched = [];
-      parsed.entries.forEach(e => {
-        const code = getCodeForStoreName(e.storeName);
-        if (code) { next[code] = e.managerName; matched++; }
-        else unmatched.push(e.storeName);
-      });
-      setManagers(next);
-      const result = await saveData('store_managers', next);
-      if (isConfigured() && !result.ok) {
-        showToast(`Imported ${matched} managers, but couldn't sync to Supabase (${result.error})`, 'error');
-      } else if (unmatched.length) {
-        showToast(`Imported ${matched} managers from ${file.name} — ${unmatched.length} store name${unmatched.length > 1 ? 's' : ''} not recognized: ${unmatched.slice(0, 3).join(', ')}${unmatched.length > 3 ? '…' : ''}`, 'error');
-      } else {
-        showToast(`Imported ${matched} managers from ${file.name}`);
+  // Queued through importChainRef and saved via saveScoped (only the touched
+  // store codes) for the same reason handleImportGoals is above — a local
+  // full-object overwrite from a non-owner's own (already scoped-down)
+  // state would silently delete every other store's manager.
+  const handleImportManagers = useCallback(file => {
+    const task = async () => {
+      try {
+        const parsed = await parseManagerFile(file);
+        const next = { ...managersRef.current };
+        const patch = {};
+        let matched = 0;
+        const unmatched = [];
+        parsed.entries.forEach(e => {
+          const code = getCodeForStoreName(e.storeName);
+          if (code) { next[code] = e.managerName; patch[code] = e.managerName; matched++; }
+          else unmatched.push(e.storeName);
+        });
+        managersRef.current = next;
+        setManagers(next);
+        const result = matched ? await saveScoped(currentUser.token, 'store_managers', patch) : { ok: true };
+        if (result.ok && result.data) { managersRef.current = result.data; setManagers(result.data); }
+        if (!result.ok) {
+          showToast(`Imported ${matched} managers, but couldn't sync to Supabase (${result.error})`, 'error');
+        } else if (unmatched.length) {
+          showToast(`Imported ${matched} managers from ${file.name} — ${unmatched.length} store name${unmatched.length > 1 ? 's' : ''} not recognized: ${unmatched.slice(0, 3).join(', ')}${unmatched.length > 3 ? '…' : ''}`, 'error');
+        } else {
+          showToast(`Imported ${matched} managers from ${file.name}`);
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
       }
-    } catch (err) {
-      showToast(err.message, 'error');
-    }
-  }, [managers]);
+    };
+    const queued = importChainRef.current.then(task, task);
+    importChainRef.current = queued.then(() => {}, () => {});
+    return queued;
+  }, [currentUser]);
 
-  const handleImportMilestoneGoals = useCallback(async file => {
-    try {
-      const parsed = await parseMilestoneGoalFile(file);
-      const next = { ...milestoneGoals };
-      let matched = 0;
-      const unmatched = [];
-      parsed.entries.forEach(e => {
-        const code = getCodeForStoreName(e.storeName);
-        if (code) { next[code] = { goal: e.goal, milestone: e.milestone }; matched++; }
-        else unmatched.push(e.storeName);
-      });
-      setMilestoneGoals(next);
-      const result = await saveData('milestone_goals', next);
-      if (isConfigured() && !result.ok) {
-        showToast(`Imported ${matched} milestone goals, but couldn't sync to Supabase (${result.error})`, 'error');
-      } else if (unmatched.length) {
-        showToast(`Imported ${matched} milestone goals from ${file.name} — ${unmatched.length} store name${unmatched.length > 1 ? 's' : ''} not recognized: ${unmatched.slice(0, 3).join(', ')}${unmatched.length > 3 ? '…' : ''}`, 'error');
-      } else {
-        showToast(`Imported ${matched} milestone goals from ${file.name}`);
+  const handleImportMilestoneGoals = useCallback(file => {
+    const task = async () => {
+      try {
+        const parsed = await parseMilestoneGoalFile(file);
+        const next = { ...milestoneGoalsRef.current };
+        const patch = {};
+        let matched = 0;
+        const unmatched = [];
+        parsed.entries.forEach(e => {
+          const code = getCodeForStoreName(e.storeName);
+          if (code) { next[code] = { goal: e.goal, milestone: e.milestone }; patch[code] = { goal: e.goal, milestone: e.milestone }; matched++; }
+          else unmatched.push(e.storeName);
+        });
+        milestoneGoalsRef.current = next;
+        setMilestoneGoals(next);
+        const result = matched ? await saveScoped(currentUser.token, 'milestone_goals', patch) : { ok: true };
+        if (result.ok && result.data) { milestoneGoalsRef.current = result.data; setMilestoneGoals(result.data); }
+        if (!result.ok) {
+          showToast(`Imported ${matched} milestone goals, but couldn't sync to Supabase (${result.error})`, 'error');
+        } else if (unmatched.length) {
+          showToast(`Imported ${matched} milestone goals from ${file.name} — ${unmatched.length} store name${unmatched.length > 1 ? 's' : ''} not recognized: ${unmatched.slice(0, 3).join(', ')}${unmatched.length > 3 ? '…' : ''}`, 'error');
+        } else {
+          showToast(`Imported ${matched} milestone goals from ${file.name}`);
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
       }
-    } catch (err) {
-      showToast(err.message, 'error');
-    }
-  }, [milestoneGoals]);
+    };
+    const queued = importChainRef.current.then(task, task);
+    importChainRef.current = queued.then(() => {}, () => {});
+    return queued;
+  }, [currentUser]);
 
   // A month's chunk for a large franchise (many stores, each with a full
   // per-employee sales/color/retail/haircuts breakdown) can be big enough
