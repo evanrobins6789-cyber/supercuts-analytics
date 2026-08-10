@@ -5635,6 +5635,13 @@ export default function App() {
   useEffect(() => { historyRef.current = history; }, [history]);
   const reviewsRef = useRef(reviews);
   useEffect(() => { reviewsRef.current = reviews; }, [reviews]);
+  // Same reasoning as historyRef above — the Goals tab shows four import
+  // buttons (Sales/Color/Bottle/Signature Service) side by side, and firing
+  // more than one in quick succession used to let them all read the same
+  // stale `goals` snapshot and race to save, silently dropping whichever
+  // import's save resolved first.
+  const goalsRef = useRef(goals);
+  useEffect(() => { goalsRef.current = goals; }, [goals]);
   const importChainRef = useRef(Promise.resolve());
   const [weeklyHistory, setWeeklyHistory] = useState({});
   const [dateRange, setDateRangeState] = useState({ start: null, end: null });
@@ -6317,31 +6324,42 @@ export default function App() {
     });
   }, []);
 
-  const handleImportGoals = useCallback(async (field, file) => {
-    try {
-      const parsed = await parseGoalFile(file);
-      const next = { ...goals };
-      let matched = 0;
-      const unmatched = [];
-      parsed.entries.forEach(e => {
-        const code = getCodeForStoreName(e.storeName);
-        if (code) { next[code] = { ...next[code], [field]: e.amount }; matched++; }
-        else unmatched.push(e.storeName);
-      });
-      setGoals(next);
-      const result = await saveData('store_goals', next);
-      const label = GOAL_FIELD_LABELS[field] || field;
-      if (isConfigured() && !result.ok) {
-        showToast(`Imported ${matched} ${label} goals, but couldn't sync to Supabase (${result.error})`, 'error');
-      } else if (unmatched.length) {
-        showToast(`Imported ${matched} ${label} goals from ${file.name} — ${unmatched.length} store name${unmatched.length > 1 ? 's' : ''} not recognized: ${unmatched.slice(0, 3).join(', ')}${unmatched.length > 3 ? '…' : ''}`, 'error');
-      } else {
-        showToast(`Imported ${matched} ${label} goals from ${file.name} (${parsed.periodLabel.trim()})`);
+  // Queued through importChainRef (same serialization the Sales-Accrual/
+  // Attendance/Reviews batches use) so importing more than one goal type
+  // back to back can't race — each import always starts from goalsRef's
+  // latest value instead of a snapshot that predates a still-in-flight
+  // sibling import.
+  const handleImportGoals = useCallback((field, file) => {
+    const task = async () => {
+      try {
+        const parsed = await parseGoalFile(file);
+        const next = { ...goalsRef.current };
+        let matched = 0;
+        const unmatched = [];
+        parsed.entries.forEach(e => {
+          const code = getCodeForStoreName(e.storeName);
+          if (code) { next[code] = { ...next[code], [field]: e.amount }; matched++; }
+          else unmatched.push(e.storeName);
+        });
+        goalsRef.current = next;
+        setGoals(next);
+        const result = await saveData('store_goals', next);
+        const label = GOAL_FIELD_LABELS[field] || field;
+        if (isConfigured() && !result.ok) {
+          showToast(`Imported ${matched} ${label} goals, but couldn't sync to Supabase (${result.error})`, 'error');
+        } else if (unmatched.length) {
+          showToast(`Imported ${matched} ${label} goals from ${file.name} — ${unmatched.length} store name${unmatched.length > 1 ? 's' : ''} not recognized: ${unmatched.slice(0, 3).join(', ')}${unmatched.length > 3 ? '…' : ''}`, 'error');
+        } else {
+          showToast(`Imported ${matched} ${label} goals from ${file.name} (${parsed.periodLabel.trim()})`);
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
       }
-    } catch (err) {
-      showToast(err.message, 'error');
-    }
-  }, [goals]);
+    };
+    const queued = importChainRef.current.then(task, task);
+    importChainRef.current = queued.then(() => {}, () => {});
+    return queued;
+  }, []);
 
   const handleImportManagers = useCallback(async file => {
     try {
