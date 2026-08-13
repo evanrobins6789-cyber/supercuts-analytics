@@ -1,5 +1,11 @@
 # Handoff — Supercuts Analytics
 
+**Open items for next session (from today, 2026-08-13 — three separate changes below, consolidated here):**
+- Open the Leases tab as the owner login and confirm it's actually owner-only, add/edit a real store's lease, and check the Upcoming Critical Dates list's sorting/urgency coloring with real dates.
+- Check whether any existing Sales Goals now look off now that "Sales" includes retail (a store that was borderline on-goal may now look ahead, since the baseline it's compared against got bigger).
+- Confirm the Signature Service tab now shows 1016/$12,142.36 for Aug 1–9 (already corrected directly in Supabase, not just in code) — and if you have a cleaner source for the 1017/$12,154.36 figure you originally gave me, worth checking where that extra unit/$12 comes from.
+- None of today's changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
+
 Last updated: 2026-08-13 (yet later same day). **Real bug found and fixed — Signature Service count/$ undercounted items whose name didn't literally say "Signature Service."** Pushed to `main`.
 - **The report**: user gave exact numbers — site showed 1002 done / $11,881, should be 1017 / $12,154.36 (from the same `Sales-Accrual(372).xlsx` used in the Sales-definition investigation above).
 - **Root cause**: `isSignatureServiceItem` (`src/parser.js`) matched by item NAME text containing "signature service" — its own comment claimed there was "no generic category for it the way there is for Color/Haircut Services." That's wrong for real exports: the file has an exact Item Category, `Conditioning Treatment Services`, which also covers "Awapuhi Treatment," "JPM Bond Rx Treatment"/"...Upcharge," "Tea Tree Escape" (with/without "with Buzz Cut"), and plain "Treatment" — none of which have "Signature Service" in the name, so all silently fell through as ordinary service revenue (correctly counted in `service`/overall Sales, just missing from the Signature Service count/$ specifically).
