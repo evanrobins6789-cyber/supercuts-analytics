@@ -777,8 +777,13 @@ function isColorItem(itemName) {
 
 // "Signature Service" — its own tracked $ figure (Setup > Historical Import
 // only; the routine weekly Stylist Report has no item-level detail to match
-// against). Matched by name rather than Item Category since there's no
-// generic category for it the way there is for Color/Haircut Services.
+// against). Real exports DO carry an Item Category for this ("Conditioning
+// Treatment Services", used directly above whenever present) — this
+// name-only regex is now just the fallback for the older export format
+// with no Item Type/Category columns at all, where category isn't an
+// option. It under-counts on its own (only matches items literally named
+// "Signature Service ...", not every item in the category), so don't use
+// it when a category column is available.
 function isSignatureServiceItem(itemName) {
   return /signature\s*service/i.test(itemName);
 }
@@ -885,7 +890,17 @@ export async function parseSalesAccrualFile(file) {
         const category = col.itemCategory !== -1 ? cellText(row[col.itemCategory]) : '';
         const isColor = category === 'Color Services';
         const isHaircut = category === 'Haircut Services';
-        const isSignature = isSignatureServiceItem(itemName);
+        // Item Category DOES cover Signature Service after all — real exports
+        // carry it as "Conditioning Treatment Services", contrary to the old
+        // assumption behind isSignatureServiceItem's name-only regex (see its
+        // comment below). That regex only matched items literally named
+        // "Signature Service ...", silently missing every other item in the
+        // same category (Awapuhi Treatment, JPM Bond Rx Treatment/Upcharge,
+        // Tea Tree Escape, plain "Treatment") — undercounting both the count
+        // and the $ total. Category is authoritative whenever it's present,
+        // exactly like isColor/isHaircut above; the name regex is now only a
+        // fallback for exports with no Item Category column at all (below).
+        const isSignature = category === 'Conditioning Treatment Services';
         if (isColor) rec.color += amount;
         if (isHaircut) rec.haircuts += qty;
         if (isSignature) { rec.signatureS += amount; rec.signatureSCount += qty; }
