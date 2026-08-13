@@ -152,20 +152,25 @@ export function getRangeTotals(history, weeklyHistory, startISO, endISO) {
 export function historyTotalsToReportShape(t) {
   const hours = t?.hours || 0;
   const service = t?.service || 0;
+  const retail = t?.retail || 0;
   const haircuts = t?.haircuts || 0;
+  // "Sales" = total revenue (service + retail combined) — matches the same
+  // combining rollup() (parser.js) does for live-report data, so historical
+  // and live-report-sourced "Sales" always mean the same thing.
+  const sales = service + retail;
   return {
-    sales: service,
+    sales,
     totalHours: hours,
     colorSales: t?.color || 0,
-    retail: t?.retail || 0,
+    retail,
     giftCards: t?.giftCards || 0,
     signatureS: t?.signatureS || 0,
     signatureSCount: t?.signatureSCount || 0,
     bottles: t?.bottles || 0,
     haircuts: haircuts || null,
-    tsth: hours > 0 ? service / hours : null,
+    tsth: hours > 0 ? sales / hours : null,
     cpc: haircuts > 0 ? (t.color || 0) / haircuts : null,
-    rpc: haircuts > 0 ? (t.retail || 0) / haircuts : null,
+    rpc: haircuts > 0 ? retail / haircuts : null,
     cph: hours > 0 ? haircuts / hours : null,
     employees: t?.employees || [],
     products: t?.products || {},

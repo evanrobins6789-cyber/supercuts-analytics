@@ -93,6 +93,9 @@ function readWorkbookSheetsByName(file, sheetNames) {
 // company-wide total already used, just over a smaller employee list).
 export function rollup(employees) {
   const sum = key => employees.reduce((s, e) => s + (e[key] || 0), 0);
+  // "Sales" = total revenue (service + retail combined) — each employee's
+  // own `sales` already includes their retail (see parseStylistReportFromGrid
+  // below), so summing it here is enough; no separate retail add needed.
   const totalSales = sum('sales');
   const totalHours = sum('totalHours');
   const totalColor = sum('colorSales');
@@ -100,6 +103,15 @@ export function rollup(employees) {
   const totalHaircuts = sum('haircuts');
   return {
     sales: Math.round(totalSales * 100) / 100,
+    // Raw service-only total, backed out of the combined `sales` above —
+    // buildWeeklyRecord needs this (not the combined figure) so the
+    // permanent weekly-history snapshot keeps service/retail as separate
+    // raw fields, the same shape Sales-Accrual history already uses.
+    // Combining only ever happens once, downstream, in
+    // historyTotalsToReportShape — never bake it into stored history, or a
+    // week sourced from a live report would double-count its own retail
+    // the next time that history is read back.
+    serviceSales: Math.round((totalSales - totalRetail) * 100) / 100,
     totalHours: Math.round(totalHours * 100) / 100,
     colorSales: Math.round(totalColor * 100) / 100,
     retail: Math.round(totalRetail * 100) / 100,
@@ -191,11 +203,16 @@ export function parseStylistReportFromGrid(grid, fileName) {
 
     const empHaircuts = numOf(row[col.haircuts]);
     const empHours = numOf(row[col.totalHours]);
+    const empServiceSales = numOf(row[col.sales]);
+    const empRetail = numOf(row[col.productNet]);
     current.employees.push({
       name: `${first} ${last}`.trim(),
-      sales: numOf(row[col.sales]),
+      // "Sales" = total revenue (service + retail), matching the same
+      // definition used everywhere else in the app (see rollup() above and
+      // historyTotalsToReportShape in metrics.js).
+      sales: empServiceSales + empRetail,
       colorSales: numOf(row[col.colorNet]),
-      retail: numOf(row[col.productNet]),
+      retail: empRetail,
       cpc: numOf(row[col.cpc]),
       rpc: numOf(row[col.rpc]),
       tsth: numOf(row[col.tsth]),
@@ -835,7 +852,11 @@ export async function parseSalesAccrualFile(file) {
     };
     const addRetail = name => {
       const emp = employeeFor(name);
-      if (emp) emp.retail += amount;
+      // Also counts toward this employee's own `sales` — "Sales" means
+      // total revenue (service + retail) app-wide now, same as the live
+      // Stylist Report parser above, so a store's per-employee Sales column
+      // always sums to the store's own combined Sales total.
+      if (emp) { emp.retail += amount; emp.sales += amount; }
     };
     // Per-product breakdown for the Retail tab's "Products" view — only
     // meaningful when this export has a real Item Type column (the "Product"
@@ -1010,7 +1031,12 @@ export function buildWeeklyRecord(report) {
   report.stores.forEach(s => {
     if (!s.code) return;
     stores[s.code] = {
-      service: s.totals.sales,
+      // Raw service-only figure, deliberately NOT s.totals.sales (which is
+      // now service+retail combined) — history must keep service/retail as
+      // separate raw fields, same shape Sales-Accrual already stores, or
+      // getRangeTotals would double-count this week's retail the next time
+      // it's read back (see rollup()'s serviceSales field in parser.js).
+      service: s.totals.serviceSales,
       retail: s.totals.retail,
       color: s.totals.colorSales,
       hours: s.totals.totalHours,

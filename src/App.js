@@ -3059,7 +3059,7 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, fallbackEmployeesB
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
-      <p className="section-hint">Set a weekly Sales, Color, Bottle, and Signature Service goal per store. Sales and Color goals track $ sold; Bottle and Signature Service goals track a unit count instead — bottles of retail product sold, and number of Signature Services performed. Color, Bottle, and Signature Service show up as "Goal"/"vs Goal" columns on their tabs; Sales goals show up on the Stores tab.</p>
+      <p className="section-hint">Set a weekly Sales, Color, Bottle, and Signature Service goal per store. Sales tracks total revenue (services + retail combined); Color goal tracks $ sold in color services specifically. Bottle and Signature Service goals track a unit count instead — bottles of retail product sold, and number of Signature Services performed. Color, Bottle, and Signature Service show up as "Goal"/"vs Goal" columns on their tabs; Sales goals show up on the Overview tab.</p>
 
       <p className="section-hint">Download a blank sheet listing your stores (grouped by DL), fill in the Goal column, then import it below with whichever button matches what you filled in.</p>
       <div className="goal-import-row">
@@ -4760,7 +4760,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     months.forEach(m => {
       const t = periodTotals(m.stores);
       const cph = t.hours > 0 ? t.haircuts / t.hours : null;
-      lines.push(`${m.month}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Bottles ${Math.round(t.bottles || 0)}, Gift Cards $${Math.round(t.giftCards)}, SS ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}, CPH ${cph != null ? cph.toFixed(2) : 'n/a'}`);
+      lines.push(`${m.month}: Sales $${Math.round(t.service + t.retail)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Bottles ${Math.round(t.bottles || 0)}, Gift Cards $${Math.round(t.giftCards)}, SS ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}, CPH ${cph != null ? cph.toFixed(2) : 'n/a'}`);
     });
 
     // Per-store breakdown + top employees, computed once per month from the
@@ -4778,7 +4778,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       lines.push(`${m.month}:`);
       Object.entries(monthlyTotals.get(m.month)).forEach(([code, t]) => {
         const name = STORE_CODE_TO_NAME[code] || `Store ${code}`;
-        lines.push(`  ${name}: Sales $${Math.round(t.service)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Bottles ${Math.round(t.bottles || 0)}, SS ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}`);
+        lines.push(`  ${name}: Sales $${Math.round(t.service + t.retail)}, Color $${Math.round(t.color)}, Retail $${Math.round(t.retail)}, Bottles ${Math.round(t.bottles || 0)}, SS ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}, Hours ${Math.round(t.hours)}, Cuts ${Math.round(t.haircuts || 0)}`);
       });
     });
 
@@ -4855,7 +4855,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
             rolled.hours += t.hours || 0;
             rolled.haircuts += t.haircuts || 0;
           });
-          if (any) leaderLines.push(`  ${l.name} — Sales $${Math.round(rolled.service)}, Color $${Math.round(rolled.color)}, Retail $${Math.round(rolled.retail)}, Hours ${Math.round(rolled.hours)}, Cuts ${Math.round(rolled.haircuts)}`);
+          if (any) leaderLines.push(`  ${l.name} — Sales $${Math.round(rolled.service + rolled.retail)}, Color $${Math.round(rolled.color)}, Retail $${Math.round(rolled.retail)}, Hours ${Math.round(rolled.hours)}, Cuts ${Math.round(rolled.haircuts)}`);
         });
       });
       if (leaderLines.length) { lines.push(`${m.month}:`); leaderLines.forEach(l => lines.push(l)); }
