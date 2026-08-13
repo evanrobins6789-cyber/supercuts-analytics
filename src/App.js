@@ -1571,6 +1571,235 @@ function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup, onA
   );
 }
 
+// ─── Leases tab (owner-only) ────────────────────────────────────────────────
+// Flattens every store's lease into one list of upcoming critical dates —
+// term end ("Lease Expires"), each renewal option's notice deadline, and any
+// ad hoc criticalDates row — shared by LeasesTab's own calendar view and
+// Tilly's context (buildAIContext, above) so the two never drift into
+// different orderings/labels for the same underlying data.
+function flattenLeaseCriticalDates(leases) {
+  const rows = [];
+  Object.entries(leases || {}).forEach(([code, record]) => {
+    const storeName = STORE_CODE_TO_NAME[code] || `Store ${code}`;
+    if (record.termEnd) rows.push({ id: `${code}-term-end`, code, storeName, label: 'Lease Expires', date: record.termEnd, notes: '' });
+    (record.renewalOptions || []).forEach(ro => {
+      if (ro.noticeByDate) rows.push({ id: ro.id, code, storeName, label: `Renewal Notice Deadline${ro.years ? ` (${ro.years}-yr option)` : ''}`, date: ro.noticeByDate, notes: ro.notes || '' });
+    });
+    (record.criticalDates || []).forEach(cd => {
+      if (cd.date) rows.push({ id: cd.id, code, storeName, label: cd.label || 'Critical Date', date: cd.date, notes: cd.notes || '' });
+    });
+  });
+  return rows.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// Add/edit form for one store's whole lease record — shared by the "+ Add
+// Lease" flow (blank) and each card's "✎ Edit" (pre-filled). Always submits
+// the complete record (including the renewalOptions/criticalDates arrays in
+// full, not a diff) since the server-side patch merge shallow-merges this
+// object into whatever's stored — see handleSaveLease.
+function LeaseForm({ initial, submitLabel, onSubmit, onCancel }) {
+  const [landlordName, setLandlordName] = useState(initial?.landlordName || '');
+  const [landlordContact, setLandlordContact] = useState(initial?.landlordContact || '');
+  const [baseRent, setBaseRent] = useState(initial?.baseRent ?? '');
+  const [rentEscalation, setRentEscalation] = useState(initial?.rentEscalation || '');
+  const [termStart, setTermStart] = useState(initial?.termStart || '');
+  const [termEnd, setTermEnd] = useState(initial?.termEnd || '');
+  const [notes, setNotes] = useState(initial?.notes || '');
+  const [renewalOptions, setRenewalOptions] = useState(initial?.renewalOptions || []);
+  const [criticalDates, setCriticalDates] = useState(initial?.criticalDates || []);
+
+  const addRenewalOption = () => setRenewalOptions(prev => [...prev, { id: genId(), years: '', noticeByDate: '', notes: '' }]);
+  const updateRenewalOption = (id, field, value) => setRenewalOptions(prev => prev.map(ro => ro.id === id ? { ...ro, [field]: value } : ro));
+  const removeRenewalOption = id => setRenewalOptions(prev => prev.filter(ro => ro.id !== id));
+
+  const addCriticalDate = () => setCriticalDates(prev => [...prev, { id: genId(), label: '', date: '', notes: '' }]);
+  const updateCriticalDate = (id, field, value) => setCriticalDates(prev => prev.map(cd => cd.id === id ? { ...cd, [field]: value } : cd));
+  const removeCriticalDate = id => setCriticalDates(prev => prev.filter(cd => cd.id !== id));
+
+  const submit = e => {
+    e.preventDefault();
+    onSubmit({
+      landlordName: landlordName.trim(),
+      landlordContact: landlordContact.trim(),
+      baseRent: baseRent === '' ? 0 : Number(baseRent),
+      rentEscalation: rentEscalation.trim(),
+      termStart, termEnd,
+      notes: notes.trim(),
+      // Drop a renewal-option/critical-date row the owner started but never
+      // finished (no date/label entered) rather than saving an empty entry.
+      renewalOptions: renewalOptions.filter(ro => ro.noticeByDate).map(ro => ({ ...ro, years: ro.years === '' ? null : Number(ro.years) })),
+      criticalDates: criticalDates.filter(cd => cd.date && cd.label.trim()).map(cd => ({ ...cd, label: cd.label.trim(), notes: cd.notes.trim() })),
+    });
+  };
+
+  return (
+    <form className="lease-form" onSubmit={submit}>
+      <input className="text-input" placeholder="Landlord name" value={landlordName} onChange={e => setLandlordName(e.target.value)} />
+      <input className="text-input" placeholder="Landlord contact (phone/email)" value={landlordContact} onChange={e => setLandlordContact(e.target.value)} />
+      <input className="text-input" type="number" min="0" placeholder="Base rent ($/mo)" value={baseRent} onChange={e => setBaseRent(e.target.value)} />
+      <input className="text-input" placeholder="Rent escalation (e.g. 3%/yr each Jan 1)" value={rentEscalation} onChange={e => setRentEscalation(e.target.value)} />
+      <label className="lease-form-label">Term start
+        <input className="text-input" type="date" value={termStart} onChange={e => setTermStart(e.target.value)} />
+      </label>
+      <label className="lease-form-label">Term end (lease expiration)
+        <input className="text-input" type="date" value={termEnd} onChange={e => setTermEnd(e.target.value)} />
+      </label>
+      <textarea className="text-input lease-form-notes" placeholder="Notes" value={notes} onChange={e => setNotes(e.target.value)} />
+
+      <div className="lease-form-subsection">
+        <p className="lease-form-subsection-title">Renewal options</p>
+        {renewalOptions.map(ro => (
+          <div key={ro.id} className="lease-form-row">
+            <input className="text-input" type="number" min="0" placeholder="Years" value={ro.years} onChange={e => updateRenewalOption(ro.id, 'years', e.target.value)} />
+            <input className="text-input" type="date" value={ro.noticeByDate} onChange={e => updateRenewalOption(ro.id, 'noticeByDate', e.target.value)} />
+            <input className="text-input" placeholder="Notes" value={ro.notes} onChange={e => updateRenewalOption(ro.id, 'notes', e.target.value)} />
+            <button type="button" className="btn-ghost btn-danger lease-form-remove" onClick={() => removeRenewalOption(ro.id)}>✕</button>
+          </div>
+        ))}
+        <button type="button" className="link-btn" onClick={addRenewalOption}>+ Add renewal option</button>
+      </div>
+
+      <div className="lease-form-subsection">
+        <p className="lease-form-subsection-title">Other critical dates (CAM reconciliation, insurance renewal, etc.)</p>
+        {criticalDates.map(cd => (
+          <div key={cd.id} className="lease-form-row">
+            <input className="text-input" placeholder="Label" value={cd.label} onChange={e => updateCriticalDate(cd.id, 'label', e.target.value)} />
+            <input className="text-input" type="date" value={cd.date} onChange={e => updateCriticalDate(cd.id, 'date', e.target.value)} />
+            <input className="text-input" placeholder="Notes" value={cd.notes} onChange={e => updateCriticalDate(cd.id, 'notes', e.target.value)} />
+            <button type="button" className="btn-ghost btn-danger lease-form-remove" onClick={() => removeCriticalDate(cd.id)}>✕</button>
+          </div>
+        ))}
+        <button type="button" className="link-btn" onClick={addCriticalDate}>+ Add critical date</button>
+      </div>
+
+      <div className="lease-form-actions">
+        <button type="submit" className="btn-primary">{submitLabel}</button>
+        <button type="button" className="btn-secondary" onClick={onCancel}>Cancel</button>
+      </div>
+    </form>
+  );
+}
+
+function LeaseCard({ storeCode, record, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const storeName = STORE_CODE_TO_NAME[storeCode] || `Store ${storeCode}`;
+  // Cheap enough (one store's data) to recompute every render rather than
+  // useMemo — keeps this above the editing early-return below without
+  // tripping the Rules of Hooks (a hook can't sit after a conditional return).
+  const dates = flattenLeaseCriticalDates({ [storeCode]: record });
+
+  if (editing) {
+    return (
+      <div className="lease-card lease-card--editing">
+        <p className="lease-card-title">{storeName}</p>
+        <LeaseForm initial={record} submitLabel="Save changes" onSubmit={rec => { onSave(rec); setEditing(false); }} onCancel={() => setEditing(false)} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="lease-card">
+      <div className="lease-card-head">
+        <p className="lease-card-title">{storeName}</p>
+        <button className="lease-edit" onClick={() => setEditing(true)}>✎ Edit</button>
+      </div>
+      <div className="lease-card-terms">
+        <p><strong>Landlord:</strong> {record.landlordName || '—'}{record.landlordContact ? ` (${record.landlordContact})` : ''}</p>
+        <p><strong>Base rent:</strong> {record.baseRent ? `${fmt$(record.baseRent)}/mo` : '—'}{record.rentEscalation ? ` · ${record.rentEscalation}` : ''}</p>
+        <p><strong>Term:</strong> {record.termStart ? fmtDateLong(record.termStart) : '—'} to {record.termEnd ? fmtDateLong(record.termEnd) : '—'}</p>
+        {record.notes && <p className="lease-card-notes">{record.notes}</p>}
+      </div>
+      {dates.length > 0 && (
+        <div className="lease-card-dates">
+          <p className="lease-card-dates-label">Critical dates</p>
+          <ul className="lease-card-dates-list">
+            {dates.map(d => <li key={d.id}>{fmtDateLong(d.date)} — {d.label}{d.notes ? ` (${d.notes})` : ''}</li>)}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LeasesTab({ leases, onSaveLease }) {
+  const [pickedStore, setPickedStore] = useState('');
+  const [addingStore, setAddingStore] = useState('');
+  const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
+
+  const storesWithoutLease = useMemo(
+    () => Object.keys(STORE_CODE_TO_NAME).filter(c => !leases[c]).sort((a, b) => STORE_CODE_TO_NAME[a].localeCompare(STORE_CODE_TO_NAME[b])),
+    [leases]
+  );
+  const storeCodesWithLease = useMemo(
+    () => Object.keys(leases).sort((a, b) => (STORE_CODE_TO_NAME[a] || a).localeCompare(STORE_CODE_TO_NAME[b] || b)),
+    [leases]
+  );
+  const upcoming = useMemo(() => flattenLeaseCriticalDates(leases).filter(d => d.date >= todayISO), [leases, todayISO]);
+
+  const daysUntil = date => Math.round((new Date(date) - new Date(todayISO)) / 86400000);
+  const urgencyClass = days => (days <= 30 ? 'lease-date-badge--urgent' : days <= 90 ? 'lease-date-badge--soon' : 'lease-date-badge--ok');
+
+  return (
+    <div className="tab-content">
+      <p className="section-hint">Owner-only lease tracker — key terms and critical dates per store. This data (rent, landlord contacts, dates) is never sent to any non-owner login.</p>
+
+      <div>
+        <p className="section-label">Upcoming Critical Dates</p>
+        {!upcoming.length ? (
+          <p className="empty-note">No upcoming critical dates on file yet — add a lease below.</p>
+        ) : (
+          <div className="lease-upcoming-list">
+            {upcoming.map(d => {
+              const days = daysUntil(d.date);
+              return (
+                <div key={d.id} className="lease-upcoming-row">
+                  <span className={`lease-date-badge ${urgencyClass(days)}`}>{days <= 0 ? 'Due' : `${days}d`}</span>
+                  <span className="lease-upcoming-date">{fmtDateLong(d.date)}</span>
+                  <span className="lease-upcoming-store">{d.storeName}</span>
+                  <span className="lease-upcoming-label">{d.label}{d.notes ? ` — ${d.notes}` : ''}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <p className="section-label">Leases by Store</p>
+        {storesWithoutLease.length > 0 && (
+          <div className="lease-add-tools">
+            {!addingStore ? (
+              <div className="lease-add-picker">
+                <select className="text-input" value={pickedStore} onChange={e => setPickedStore(e.target.value)}>
+                  <option value="">Select a store to add a lease…</option>
+                  {storesWithoutLease.map(c => <option key={c} value={c}>{STORE_CODE_TO_NAME[c]}</option>)}
+                </select>
+                <button className="btn-primary" disabled={!pickedStore} onClick={() => setAddingStore(pickedStore)}>+ Add Lease</button>
+              </div>
+            ) : (
+              <div className="lease-card lease-card--editing">
+                <p className="lease-card-title">New lease — {STORE_CODE_TO_NAME[addingStore]}</p>
+                <LeaseForm
+                  submitLabel="Add lease"
+                  onSubmit={record => { onSaveLease(addingStore, record); setAddingStore(''); setPickedStore(''); }}
+                  onCancel={() => setAddingStore('')}
+                />
+              </div>
+            )}
+          </div>
+        )}
+        {!storeCodesWithLease.length ? (
+          <p className="empty-note">No leases on file yet.</p>
+        ) : (
+          <div className="lease-card-list">
+            {storeCodesWithLease.map(code => <LeaseCard key={code} storeCode={code} record={leases[code]} onSave={rec => onSaveLease(code, rec)} />)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── News tab ───────────────────────────────────────────────────────────────
 // A grid of small tiles (reusing HomepageMediaCard in its `compact` form)
 // grouped under big, colorful headers driven by the manager-curated
@@ -4327,7 +4556,7 @@ function topEmployeeLine(employees, n = 5) {
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
-function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups) {
+function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases) {
   const employeesForCodeCtx = code => {
     if (report && !isReportStale(report)) return report.stores.find(st => st.code === code)?.employees || null;
     return fallbackEmployeesByStore?.[code] || null;
@@ -4419,6 +4648,18 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       const pctStr = g.milestone ? ` (${Math.round((actual / g.milestone) * 100)}% of milestone)` : '';
       lines.push(`${STORE_CODE_TO_NAME[code] || `Store ${code}`}: MTD Sales $${Math.round(actual)}, Goal ${g.goal != null ? `$${Math.round(g.goal)}` : 'n/a'}, Milestone ${g.milestone != null ? `$${Math.round(g.milestone)}` : 'n/a'}${pctStr}`);
     });
+    lines.push('');
+  }
+
+  // Leases — owner-only, so `leases` only arrives non-null when the caller
+  // is the owner (see AIChatWidget's call site); a non-owner's context
+  // never includes this section at all, matching the tab's own visibility.
+  if (leases && Object.keys(leases).length) {
+    const todayISO = new Date().toISOString().slice(0, 10);
+    const upcoming = flattenLeaseCriticalDates(leases).filter(d => d.date >= todayISO).slice(0, 8);
+    lines.push(`LEASES (${Object.keys(leases).length} store(s) on file): next upcoming critical dates —`);
+    if (upcoming.length) upcoming.forEach(d => lines.push(`${d.date} — ${d.storeName}: ${d.label}${d.notes ? ` (${d.notes})` : ''}`));
+    else lines.push('none upcoming.');
     lines.push('');
   }
 
@@ -4699,7 +4940,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   return lines.join('\n');
 }
 
-function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups }) {
+function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -4712,7 +4953,7 @@ function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups);
+      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases);
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -5680,7 +5921,7 @@ function RewardsSetupTab({ token, showToast }) {
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Setup'];
+const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Setup'];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
@@ -5689,6 +5930,7 @@ export default function App() {
   const [goals, setGoals] = useState({});
   const [managers, setManagers] = useState({});
   const [milestoneGoals, setMilestoneGoals] = useState({});
+  const [leases, setLeases] = useState({}); // owner-only: { [storeCode]: LeaseRecord }, see LeasesTab
   const [reviews, setReviews] = useState(null);
   const [reviewNotes, setReviewNotes] = useState({});
   const [goldCombs, setGoldCombs] = useState({});
@@ -5751,10 +5993,10 @@ export default function App() {
     const token = currentUser.token;
     Promise.all([
       loadScoped('stylist_report', token), loadData('employee_start_dates'), loadScoped('store_goals', token), loadScoped('store_managers', token), loadScoped('milestone_goals', token), loadScoped('reviews', token), loadData('review_notes'), loadData('review_gold_combs'),
-      loadData('homepage_news'), loadData('homepage_events'), loadData('homepage_news_groups'), loadData('hsa_signups'),
+      loadData('homepage_news'), loadData('homepage_events'), loadData('homepage_news_groups'), loadData('hsa_signups'), loadScoped('store_leases', token),
       loadScopedByPrefix('daily_history_', token), loadScopedByPrefix('weekly_history_', token),
       loadScoped('daily_history', token), loadScoped('weekly_history', token), // legacy single-row format, if anything was saved before chunking
-    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, hsaSignupsRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
+    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, hsaSignupsRes, leasesRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
       if (reportRes.data) setReport(ensureReportCph(reportRes.data)); else if (currentUser.role === 'owner') { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
@@ -5767,6 +6009,7 @@ export default function App() {
       if (newsRes.data) setNews(loadedNews);
       if (eventsRes.data) setEvents(eventsRes.data);
       if (hsaSignupsRes.data) setHsaSignups(hsaSignupsRes.data);
+      if (leasesRes.data) setLeases(leasesRes.data);
 
       // Groups are managed separately from the posts that reference them
       // (name/order/color), but a group name can be typed straight into a
@@ -5866,7 +6109,7 @@ export default function App() {
         const err = rosterRes.error || newsRes.error || eventsRes.error;
         showToast(`Couldn't reach Supabase (${err || 'unknown error'}) — showing this device's local data only`, 'error');
       } else {
-        const scopedError = reportRes.error || goalsRes.error || managersRes.error || milestoneGoalsRes.error || reviewsRes.error || dailyChunksRes.error || weeklyChunksRes.error;
+        const scopedError = reportRes.error || goalsRes.error || managersRes.error || milestoneGoalsRes.error || reviewsRes.error || leasesRes.error || dailyChunksRes.error || weeklyChunksRes.error;
         if (scopedError) showToast(`Couldn't load some data (${scopedError}) — try refreshing the page.`, 'error');
       }
 
@@ -6146,6 +6389,21 @@ export default function App() {
       } else {
         showToast(`Manager saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
       }
+    });
+  }, [currentUser]);
+
+  // The form always submits the full lease record for a store, not a
+  // per-field diff — the server's patch merge shallow-merges an object
+  // value into whatever's already there, so sending the whole record here
+  // correctly overwrites every field (including the renewalOptions/
+  // criticalDates arrays) with what's now in the form. Owner-only both
+  // client-side (Leases tab visibility) and server-side (api/scoped-data.js
+  // rejects a non-owner patch to store_leases outright).
+  const handleSaveLease = useCallback((storeCode, record) => {
+    setLeases(prev => ({ ...prev, [storeCode]: record }));
+    saveScoped(currentUser.token, 'store_leases', { [storeCode]: record }).then(result => {
+      if (result.ok) setLeases(result.data || {});
+      else showToast(`Lease saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
     });
   }, [currentUser]);
 
@@ -6794,13 +7052,13 @@ export default function App() {
   if (!currentUser) return <LoginScreen onLoggedIn={handleLoggedIn} />;
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
-  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee'));
+  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner'));
   // A live weekly Stylist Report upload is no longer the only way to power
   // these tabs — Sales-Accrual + Attendance historical imports feed the
   // exact same tables via each tab's own current-month fallback (see
   // getCurrentMonthRange). Only actually block on "nothing at all yet".
   const hasHistoricalData = Object.keys(history || {}).length > 0 || Object.keys(weeklyHistory || {}).length > 0;
-  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals';
+  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases';
 
   return (
     <div className="app">
@@ -6876,6 +7134,9 @@ export default function App() {
         {tab === 'Goals' && (
           <GoalsTab report={report} goals={goals} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} fallbackEmployeesByStore={fallbackEmployeesByStore} />
         )}
+        {tab === 'Leases' && (
+          <LeasesTab leases={leases} onSaveLease={handleSaveLease} />
+        )}
         {!needsReport && tab === 'DL' && (report || hasHistoricalData) && (
           <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} milestoneGoals={milestoneGoals} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
         )}
@@ -6921,7 +7182,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} milestoneGoals={milestoneGoals} news={news} events={events} points={pointsSummary} hsaSignups={hsaSignups} />
+      <AIChatWidget report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} milestoneGoals={milestoneGoals} news={news} events={events} points={pointsSummary} hsaSignups={hsaSignups} leases={currentUser.role === 'owner' ? leases : null} />
     </div>
   );
 }

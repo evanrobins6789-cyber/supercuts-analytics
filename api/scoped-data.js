@@ -12,14 +12,14 @@ import { createServiceClient, requireSession } from '../src/serverAuth.js';
 import { rollup } from '../src/parser.js';
 import { getCodeForStoreName } from '../src/storeDirectory.js';
 
-const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history']);
+const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases']);
 const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_'];
 
 // Subset of SENSITIVE_KEYS that are a flat { [storeCode]: {...fields} }
 // object and support scoped PATCH writes below — a merge-in for just the
 // codes in the patch, never a full-object overwrite. store_goals/
-// store_managers/milestone_goals all share this shape.
-const PATCHABLE_KEYS = new Set(['store_goals', 'store_managers', 'milestone_goals']);
+// store_managers/milestone_goals/store_leases all share this shape.
+const PATCHABLE_KEYS = new Set(['store_goals', 'store_managers', 'milestone_goals', 'store_leases']);
 
 function isAllowedKey(key) {
   return SENSITIVE_KEYS.has(key) || SENSITIVE_PREFIXES.some(p => key.startsWith(p));
@@ -78,6 +78,11 @@ function filterPayload(key, payload, employee) {
   if (key === 'stylist_report') return filterStylistReport(payload, allowed);
   if (key === 'reviews') return filterReviews(payload, allowed);
   if (key === 'store_goals' || key === 'store_managers' || key === 'milestone_goals') return filterCodeKeyedObject(payload, allowed);
+  // Leases (rent/landlord/critical-date data) are owner-only, full stop —
+  // unlike store_goals/store_managers/milestone_goals, no other role has a
+  // legitimate reason to see even their own store's entry, so this isn't a
+  // per-store scope-down, it's a blanket deny for anyone but the owner.
+  if (key === 'store_leases') return {};
   if (key === 'daily_history' || key.startsWith('daily_history_')) return filterDailyHistory(payload, allowed);
   if (key === 'weekly_history' || key.startsWith('weekly_history_')) return filterWeeklyHistory(payload, allowed);
   return payload;
@@ -125,6 +130,12 @@ export default async function handler(req, res) {
         return;
       }
       if (employee.role !== 'owner') {
+        // Leases have no per-store carve-out like store_goals does — a
+        // non-owner can't patch even their own store's lease entry.
+        if (key === 'store_leases') {
+          res.status(403).json({ error: 'Only the owner can modify lease data.' });
+          return;
+        }
         const allowed = new Set(employee.store_codes || []);
         const disallowed = Object.keys(patch).filter(code => !allowed.has(code));
         if (disallowed.length) {
