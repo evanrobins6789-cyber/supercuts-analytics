@@ -2645,6 +2645,198 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   );
 }
 
+// ─── Budgets tab ────────────────────────────────────────────────────────────
+// Unlike Goals, a store's Budget isn't a separately-entered target — it's
+// computed live from that same period's Retail/Color/Signature Service sales,
+// so there's nothing to import or save here, just the formula applied to
+// whatever rows StoreMetricTab-style tabs already derive (live report or
+// historical month-to-date, same shape either way).
+const EXETER_STORE_CODE = '80756'; // storeDirectory.js: "80756": "Exeter"
+function computeStoreBudget(row) {
+  const retailBudget = (row.retail || 0) * 0.40;
+  const supplyBudget = (row.colorSales || 0) * 0.10;
+  // Exeter gets a standing $35 bump to its SS budget on top of the usual
+  // 10% — a fixed dollar add, not a percentage, per the user's request.
+  const ssBudget = (row.signatureS || 0) * 0.10 + (row.code === EXETER_STORE_CODE ? 35 : 0);
+  return { retailBudget, supplyBudget, ssBudget, totalBudget: retailBudget + supplyBudget + ssBudget };
+}
+
+function BudgetsTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, isOwner }) {
+  const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
+  const [sortBy, setSortBy] = useState('totalBudget');
+  const [expandedLeader, setExpandedLeader] = useState({});
+  const usingDefaultRange = isReportStale(report) && !(dateRange?.start && dateRange?.end);
+  const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
+  const isHistorical = !!(effectiveRange?.start && effectiveRange?.end);
+
+  const rows = useMemo(() => {
+    const base = isHistorical
+      ? Object.entries(getRangeTotals(history, weeklyHistory, effectiveRange.start, effectiveRange.end))
+          .map(([code, t]) => ({ name: STORE_CODE_TO_NAME[code] || `Store ${code}`, code, ...historyTotalsToReportShape(t) }))
+      : report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals }));
+    return base.map(r => ({ ...r, ...computeStoreBudget(r) }));
+  }, [isHistorical, history, weeklyHistory, effectiveRange.start, effectiveRange.end, report]);
+
+  const groups = useMemo(() => groupStoresByLeader(rows), [rows]);
+  const toggleLeader = name => setExpandedLeader(prev => ({ ...prev, [name]: !prev[name] }));
+
+  const filteredGroups = useMemo(() => {
+    if (!query.trim()) return groups;
+    const q = query.trim().toLowerCase();
+    return groups
+      .map(g => {
+        const leaderMatches = g.leaderName.toLowerCase().includes(q);
+        const stores = leaderMatches ? g.stores : g.stores.filter(s => s.name.toLowerCase().includes(q));
+        return { ...g, stores };
+      })
+      .filter(g => g.stores.length > 0);
+  }, [groups, query]);
+
+  const filteredFlat = useMemo(() => {
+    if (!query.trim()) return rows;
+    const q = query.trim().toLowerCase();
+    return rows.filter(r => r.name.toLowerCase().includes(q));
+  }, [rows, query]);
+  const sortedFlat = useMemo(() => sortByMetric(filteredFlat, sortBy, 'desc'), [filteredFlat, sortBy]);
+
+  const sumBudgets = arr => arr.reduce((acc, r) => ({
+    retailBudget: acc.retailBudget + r.retailBudget,
+    supplyBudget: acc.supplyBudget + r.supplyBudget,
+    ssBudget: acc.ssBudget + r.ssBudget,
+    totalBudget: acc.totalBudget + r.totalBudget,
+  }), { retailBudget: 0, supplyBudget: 0, ssBudget: 0, totalBudget: 0 });
+
+  const companyTotals = useMemo(() => sumBudgets(rows), [rows]);
+  const totalStoresShown = viewMode === 'dl'
+    ? filteredGroups.reduce((n, g) => n + g.stores.length, 0)
+    : filteredFlat.length;
+
+  return (
+    <div className="tab-content">
+      {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
+      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
+      <p className="section-hint">Retail Budget is 40% of Retail sales, Supply is 10% of Color Sales, SS is 10% of Signature Service sales — Total adds those three together. Exeter's SS budget always includes an extra $35.</p>
+      <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
+
+      <div className="view-toggle">
+        <button className={`view-toggle-btn ${viewMode === 'dl' ? 'active' : ''}`} onClick={() => setViewMode('dl')}>Grouped by DL</button>
+        <button className={`view-toggle-btn ${viewMode === 'flat' ? 'active' : ''}`} onClick={() => setViewMode('flat')}>All Stores</button>
+      </div>
+
+      <div className="ledger-head-row">
+        <p className="section-label">Budgets — {totalStoresShown} stores{viewMode === 'dl' ? ', grouped by DL' : ''}{isHistorical ? ' (historical)' : ''}</p>
+        <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+          <option value="retailBudget">Sort: Retail Budget</option>
+          <option value="supplyBudget">Sort: Supply</option>
+          <option value="ssBudget">Sort: SS</option>
+          <option value="totalBudget">Sort: Total</option>
+          <option value="name">Sort: Name (A–Z)</option>
+        </select>
+      </div>
+
+      {viewMode === 'dl' && (
+        <div className="dl-list">
+          {filteredGroups.map(g => {
+            const groupTotals = sumBudgets(g.stores);
+            const sortedStores = sortByMetric(g.stores, sortBy, 'desc');
+            const isLeaderOpen = !!expandedLeader[g.leaderName];
+            return (
+              <div key={g.leaderName} className="dl-card">
+                <button className="dl-card-head" onClick={() => toggleLeader(g.leaderName)}>
+                  <div className="dl-card-name-wrap">
+                    <span className={`dl-chevron ${isLeaderOpen ? 'dl-chevron--open' : ''}`}>▸</span>
+                    <span className="dl-card-name">{g.leaderName}</span>
+                    <span className="dl-card-count">{g.role} · {g.stores.length} store{g.stores.length !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div className="dl-card-stats">
+                    <div className="dl-stat"><span className="dl-stat-label">Retail Budget</span><span className="dl-stat-value">{fmt$(groupTotals.retailBudget)}</span></div>
+                    <div className="dl-stat"><span className="dl-stat-label">Supply</span><span className="dl-stat-value">{fmt$(groupTotals.supplyBudget)}</span></div>
+                    <div className="dl-stat"><span className="dl-stat-label">SS</span><span className="dl-stat-value">{fmt$(groupTotals.ssBudget)}</span></div>
+                    <div className="dl-stat"><span className="dl-stat-label">Total</span><span className="dl-stat-value">{fmt$(groupTotals.totalBudget)}</span></div>
+                  </div>
+                </button>
+                {isLeaderOpen && (
+                  <div className="ledger-scroll dl-store-table">
+                    <table className="ledger-table">
+                      <thead>
+                        <tr>
+                          <th className="ledger-name-col">Store</th><th>Retail Budget</th><th>Supply</th><th>SS</th><th>Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedStores.map(s => (
+                          <tr key={s.code}>
+                            <td className="ledger-name-col">{s.name}</td>
+                            <td>{fmt$(s.retailBudget)}</td>
+                            <td>{fmt$(s.supplyBudget)}</td>
+                            <td>{fmt$(s.ssBudget)}</td>
+                            <td>{fmt$(s.totalBudget)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="ledger-avg-row">
+                          <td className="ledger-name-col">{g.leaderName} total</td>
+                          <td>{fmt$(groupTotals.retailBudget)}</td>
+                          <td>{fmt$(groupTotals.supplyBudget)}</td>
+                          <td>{fmt$(groupTotals.ssBudget)}</td>
+                          <td>{fmt$(groupTotals.totalBudget)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {viewMode === 'flat' && (
+        <div className="ledger-scroll">
+          <table className="ledger-table">
+            <thead>
+              <tr>
+                <th className="ledger-name-col">Store</th><th>Retail Budget</th><th>Supply</th><th>SS</th><th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedFlat.map(s => (
+                <tr key={s.code}>
+                  <td className="ledger-name-col">{s.name}</td>
+                  <td>{fmt$(s.retailBudget)}</td>
+                  <td>{fmt$(s.supplyBudget)}</td>
+                  <td>{fmt$(s.ssBudget)}</td>
+                  <td>{fmt$(s.totalBudget)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {viewMode === 'dl' && !filteredGroups.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
+      {viewMode === 'flat' && !sortedFlat.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
+
+      {viewMode === 'dl' && isOwner && (
+        <div className="ledger-scroll">
+          <table className="ledger-table">
+            <tfoot>
+              <tr className="ledger-avg-row">
+                <td className="ledger-name-col">Company total</td>
+                <td>{fmt$(companyTotals.retailBudget)}</td>
+                <td>{fmt$(companyTotals.supplyBudget)}</td>
+                <td>{fmt$(companyTotals.ssBudget)}</td>
+                <td>{fmt$(companyTotals.totalBudget)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── DL tab ─────────────────────────────────────────────────────────────────
 function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers, milestoneGoals, canAward, onAward }) {
   const [expanded, setExpanded] = useState({});
@@ -4721,6 +4913,21 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     });
   }
 
+  // Store Budgets — computed live from the CURRENT REPORT PERIOD's per-store
+  // rows above, same 40%/10%/10% formula as the Budgets tab (not a
+  // separately-entered target like Goals, so there's no "none set" case).
+  if (currentStoreRows.length) {
+    lines.push('');
+    lines.push("STORE BUDGETS for the CURRENT report period above (Retail Budget = 40% of Retail sales, Supply = 10% of Color Sales, SS = 10% of Signature Service sales, Total = those three added together; Exeter's SS budget always includes a standing extra $35):");
+    const companyBudget = { retailBudget: 0, supplyBudget: 0, ssBudget: 0, totalBudget: 0 };
+    currentStoreRows.forEach(s => {
+      const b = computeStoreBudget(s);
+      companyBudget.retailBudget += b.retailBudget; companyBudget.supplyBudget += b.supplyBudget; companyBudget.ssBudget += b.ssBudget; companyBudget.totalBudget += b.totalBudget;
+      lines.push(`${s.name}: Retail Budget $${Math.round(b.retailBudget)}, Supply $${Math.round(b.supplyBudget)}, SS $${Math.round(b.ssBudget)}, Total $${Math.round(b.totalBudget)}`);
+    });
+    lines.push(`Company totals — Retail Budget $${Math.round(companyBudget.retailBudget)}, Supply $${Math.round(companyBudget.supplyBudget)}, SS $${Math.round(companyBudget.ssBudget)}, Total $${Math.round(companyBudget.totalBudget)}`);
+  }
+
   // Employee roster (start dates) — company-wide, not just recent hires, so
   // "when did X start" works for anyone, not only people hired in the last
   // 60 days (that's just what the Employees tab's New Hires sort narrows to).
@@ -5921,7 +6128,7 @@ function RewardsSetupTab({ token, showToast }) {
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Setup'];
+const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Budgets', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Setup'];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
@@ -5978,7 +6185,7 @@ export default function App() {
   const [uploadingRoster, setUploadingRoster] = useState(false);
   const [uploadingReviews, setUploadingReviews] = useState(false);
   const [selectedMetric, setSelectedMetric] = useState('tsth');
-  const [queries, setQueries] = useState({ Overview: '', Employees: '', Retail: '', 'Color Sales': '', 'Signature Service': '', Goals: '', DL: '', Reviews: '' });
+  const [queries, setQueries] = useState({ Overview: '', Employees: '', Retail: '', 'Color Sales': '', 'Signature Service': '', Budgets: '', Goals: '', DL: '', Reviews: '' });
   const [pointsSummary, setPointsSummary] = useState(null);
 
   useEffect(() => {
@@ -7052,7 +7259,7 @@ export default function App() {
   if (!currentUser) return <LoginScreen onLoggedIn={handleLoggedIn} />;
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
-  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner'));
+  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner'));
   // A live weekly Stylist Report upload is no longer the only way to power
   // these tabs — Sales-Accrual + Attendance historical imports feed the
   // exact same tables via each tab's own current-month fallback (see
@@ -7129,6 +7336,13 @@ export default function App() {
             goalType="signatureSGoal" goals={goals} goalMetricKey="signatureSCount" goalFmt={fmtInt}
             history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
             managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
+          />
+        )}
+        {!needsReport && tab === 'Budgets' && (report || hasHistoricalData) && (
+          <BudgetsTab
+            report={report} query={queries.Budgets} onQuery={v => setQuery('Budgets', v)}
+            history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
+            isOwner={currentUser.role === 'owner'}
           />
         )}
         {tab === 'Goals' && (
