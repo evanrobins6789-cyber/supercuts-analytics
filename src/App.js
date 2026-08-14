@@ -2686,12 +2686,15 @@ function computeStoreBudget(row) {
   return { retailBudget, supplyBudget, ssBudget, totalBudget: retailBudget + supplyBudget + ssBudget };
 }
 
-function BudgetsTab({ query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, isOwner }) {
+function BudgetsTab({ query, onQuery, history, weeklyHistory, isOwner }) {
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
   const [sortBy, setSortBy] = useState('totalBudget');
   const [expandedLeader, setExpandedLeader] = useState({});
-  const usingDefaultRange = !(dateRange?.start && dateRange?.end);
-  const effectiveRange = usingDefaultRange ? getCurrentBudgetPeriodRange() : dateRange;
+  // No manual date-range override here, unlike every other main tab — the
+  // budget period is fixed by the calendar (see getCurrentBudgetPeriodRange)
+  // and stays exactly the same from the 1st to the 15th, and again from the
+  // 16th to month-end, only ever changing on those two rollover days.
+  const effectiveRange = getCurrentBudgetPeriodRange();
 
   const rows = useMemo(() => {
     const totals = getRangeTotals(history, weeklyHistory, effectiveRange.start, effectiveRange.end);
@@ -2735,8 +2738,7 @@ function BudgetsTab({ query, onQuery, history, weeklyHistory, dateRange, onDateR
 
   return (
     <div className="tab-content">
-      {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
-      {usingDefaultRange && <p className="section-hint">Current budget period: {fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}. Budgets reset on the 1st (using the 16th–end of last month) and the 16th (using the 1st–15th of this month). Pick a different range above to check another period.</p>}
+      <p className="section-hint">Current budget period: {fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}. Budgets reset automatically on the 1st (using the 16th–end of last month) and the 16th (using the 1st–15th of this month) — they don't change in between.</p>
       <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
 
       <div className="view-toggle">
@@ -7368,7 +7370,7 @@ export default function App() {
         {!needsReport && tab === 'Budgets' && (report || hasHistoricalData) && (
           <BudgetsTab
             query={queries.Budgets} onQuery={v => setQuery('Budgets', v)}
-            history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
+            history={history} weeklyHistory={weeklyHistory}
             isOwner={currentUser.role === 'owner'}
           />
         )}
