@@ -2737,7 +2737,6 @@ function BudgetsTab({ query, onQuery, history, weeklyHistory, dateRange, onDateR
     <div className="tab-content">
       {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
       {usingDefaultRange && <p className="section-hint">Current budget period: {fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}. Budgets reset on the 1st (using the 16th–end of last month) and the 16th (using the 1st–15th of this month). Pick a different range above to check another period.</p>}
-      <p className="section-hint">Retail Budget is 40% of Retail sales, Supply is 10% of Color Sales, SS is 10% of Signature Service sales — Total adds those three together. Exeter's SS budget always includes an extra $35.</p>
       <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
 
       <div className="view-toggle">
