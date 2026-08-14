@@ -301,9 +301,15 @@ const STORE_METRICS = [
   { key: 'tsth', label: 'TSTH', fmt: fmtRate },
   { key: 'totalHours', label: 'Total Hours', fmt: n => fmtNum(n, 0) },
   { key: 'colorSales', label: 'Color Sales', fmt: fmt$ },
-  { key: 'cpc', label: 'CPC', fmt: fmtNum },
+  // Wrapped (not the bare `fmtNum` reference) because every caller here
+  // renders `m.fmt(value, row)` — the shared 2-arg column convention every
+  // metric in this list needs, since e.g. SS's fmt below reads `row` for the
+  // count. fmtNum is the one formatter with a real 2nd param (`d`, decimal
+  // places) — passed bare, that `row` object lands in `d` and
+  // `Number(n).toFixed(row)` silently coerces to 0 decimals (1.08 -> "1").
+  { key: 'cpc', label: 'CPC', fmt: n => fmtNum(n) },
   { key: 'retail', label: 'Retail', fmt: fmt$ },
-  { key: 'rpc', label: 'RPC', fmt: fmtNum },
+  { key: 'rpc', label: 'RPC', fmt: n => fmtNum(n) },
   { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
   { key: 'cph', label: 'CPH', fmt: n => fmtNum(n, 2) },
   { key: 'signatureS', label: 'SS', fmt: (v, row) => fmtSS(row?.signatureSCount, v) },
@@ -315,8 +321,10 @@ const EMPLOYEE_METRICS = [
   { key: 'sales', label: 'Sales', fmt: fmt$ },
   { key: 'colorSales', label: 'Color Sales', fmt: fmt$ },
   { key: 'retail', label: 'Retail', fmt: fmt$ },
-  { key: 'cpc', label: 'CPC', fmt: fmtNum },
-  { key: 'rpc', label: 'RPC', fmt: fmtNum },
+  // See STORE_METRICS above — fmtNum wrapped for the same reason (this list
+  // is rendered the same `m.fmt(value, row)` way).
+  { key: 'cpc', label: 'CPC', fmt: n => fmtNum(n) },
+  { key: 'rpc', label: 'RPC', fmt: n => fmtNum(n) },
   { key: 'tsth', label: 'TSTH', fmt: fmtRate },
   { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
   { key: 'cph', label: 'CPH', fmt: n => fmtNum(n, 2) },
