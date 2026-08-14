@@ -435,6 +435,27 @@ function getCurrentMonthRange() {
   return { start: toISO(first), end: toISO(now) };
 }
 
+// The Budgets tab's period, not the same as month-to-date — budgets recompute
+// twice a month rather than accumulating all month long. From the 1st through
+// the 15th, budgets are set from the PREVIOUS month's 16th-through-end sales
+// (that half-month just closed and hasn't been budgeted from yet). From the
+// 16th through month-end, budgets are set from THIS month's 1st-through-15th
+// sales instead. Either way it's always the most recently *completed*
+// half-month, same "look back at what just finished" idea as
+// getLastFullWeekRange, just on a half-month cadence instead of weekly.
+function getCurrentBudgetPeriodRange() {
+  const now = new Date();
+  const toISO = d => d.toISOString().slice(0, 10);
+  if (now.getDate() >= 16) {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const end = new Date(now.getFullYear(), now.getMonth(), 15);
+    return { start: toISO(start), end: toISO(end) };
+  }
+  const start = new Date(now.getFullYear(), now.getMonth() - 1, 16);
+  const end = new Date(now.getFullYear(), now.getMonth(), 0); // day 0 = last day of the previous month
+  return { start: toISO(start), end: toISO(end) };
+}
+
 // A live `report` object never expires on its own — it's whatever Stylist
 // Report was last uploaded, however long ago, and Supabase just keeps
 // serving it. A weekly report is only ever meant to represent about a
@@ -2647,10 +2668,14 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
 
 // ─── Budgets tab ────────────────────────────────────────────────────────────
 // Unlike Goals, a store's Budget isn't a separately-entered target — it's
-// computed live from that same period's Retail/Color/Signature Service sales,
-// so there's nothing to import or save here, just the formula applied to
-// whatever rows StoreMetricTab-style tabs already derive (live report or
-// historical month-to-date, same shape either way).
+// computed from that store's Retail/Color/Signature Service sales over the
+// semi-monthly period getCurrentBudgetPeriodRange() defines, so there's
+// nothing to import or save here, just the formula applied to whatever
+// getRangeTotals returns for that period. Deliberately NOT tied to whatever
+// live weekly Stylist Report happens to be current (unlike every other main
+// tab's default) — a budget period is a fixed calendar half-month, not
+// "whichever week was last uploaded", so this always sources from history
+// via getRangeTotals rather than ever reading report.stores directly.
 const EXETER_STORE_CODE = '80756'; // storeDirectory.js: "80756": "Exeter"
 function computeStoreBudget(row) {
   const retailBudget = (row.retail || 0) * 0.40;
@@ -2661,21 +2686,18 @@ function computeStoreBudget(row) {
   return { retailBudget, supplyBudget, ssBudget, totalBudget: retailBudget + supplyBudget + ssBudget };
 }
 
-function BudgetsTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, isOwner }) {
+function BudgetsTab({ query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, isOwner }) {
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
   const [sortBy, setSortBy] = useState('totalBudget');
   const [expandedLeader, setExpandedLeader] = useState({});
-  const usingDefaultRange = isReportStale(report) && !(dateRange?.start && dateRange?.end);
-  const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
-  const isHistorical = !!(effectiveRange?.start && effectiveRange?.end);
+  const usingDefaultRange = !(dateRange?.start && dateRange?.end);
+  const effectiveRange = usingDefaultRange ? getCurrentBudgetPeriodRange() : dateRange;
 
   const rows = useMemo(() => {
-    const base = isHistorical
-      ? Object.entries(getRangeTotals(history, weeklyHistory, effectiveRange.start, effectiveRange.end))
-          .map(([code, t]) => ({ name: STORE_CODE_TO_NAME[code] || `Store ${code}`, code, ...historyTotalsToReportShape(t) }))
-      : report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals }));
+    const totals = getRangeTotals(history, weeklyHistory, effectiveRange.start, effectiveRange.end);
+    const base = Object.entries(totals).map(([code, t]) => ({ name: STORE_CODE_TO_NAME[code] || `Store ${code}`, code, ...historyTotalsToReportShape(t) }));
     return base.map(r => ({ ...r, ...computeStoreBudget(r) }));
-  }, [isHistorical, history, weeklyHistory, effectiveRange.start, effectiveRange.end, report]);
+  }, [history, weeklyHistory, effectiveRange.start, effectiveRange.end]);
 
   const groups = useMemo(() => groupStoresByLeader(rows), [rows]);
   const toggleLeader = name => setExpandedLeader(prev => ({ ...prev, [name]: !prev[name] }));
@@ -2714,7 +2736,7 @@ function BudgetsTab({ report, query, onQuery, history, weeklyHistory, dateRange,
   return (
     <div className="tab-content">
       {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
-      {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
+      {usingDefaultRange && <p className="section-hint">Current budget period: {fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}. Budgets reset on the 1st (using the 16th–end of last month) and the 16th (using the 1st–15th of this month). Pick a different range above to check another period.</p>}
       <p className="section-hint">Retail Budget is 40% of Retail sales, Supply is 10% of Color Sales, SS is 10% of Signature Service sales — Total adds those three together. Exeter's SS budget always includes an extra $35.</p>
       <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
 
@@ -2724,7 +2746,7 @@ function BudgetsTab({ report, query, onQuery, history, weeklyHistory, dateRange,
       </div>
 
       <div className="ledger-head-row">
-        <p className="section-label">Budgets — {totalStoresShown} stores{viewMode === 'dl' ? ', grouped by DL' : ''}{isHistorical ? ' (historical)' : ''}</p>
+        <p className="section-label">Budgets — {totalStoresShown} stores{viewMode === 'dl' ? ', grouped by DL' : ''} ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)})</p>
         <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
           <option value="retailBudget">Sort: Retail Budget</option>
           <option value="supplyBudget">Sort: Supply</option>
@@ -4913,19 +4935,25 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     });
   }
 
-  // Store Budgets — computed live from the CURRENT REPORT PERIOD's per-store
-  // rows above, same 40%/10%/10% formula as the Budgets tab (not a
-  // separately-entered target like Goals, so there's no "none set" case).
-  if (currentStoreRows.length) {
-    lines.push('');
-    lines.push("STORE BUDGETS for the CURRENT report period above (Retail Budget = 40% of Retail sales, Supply = 10% of Color Sales, SS = 10% of Signature Service sales, Total = those three added together; Exeter's SS budget always includes a standing extra $35):");
-    const companyBudget = { retailBudget: 0, supplyBudget: 0, ssBudget: 0, totalBudget: 0 };
-    currentStoreRows.forEach(s => {
-      const b = computeStoreBudget(s);
-      companyBudget.retailBudget += b.retailBudget; companyBudget.supplyBudget += b.supplyBudget; companyBudget.ssBudget += b.ssBudget; companyBudget.totalBudget += b.totalBudget;
-      lines.push(`${s.name}: Retail Budget $${Math.round(b.retailBudget)}, Supply $${Math.round(b.supplyBudget)}, SS $${Math.round(b.ssBudget)}, Total $${Math.round(b.totalBudget)}`);
-    });
-    lines.push(`Company totals — Retail Budget $${Math.round(companyBudget.retailBudget)}, Supply $${Math.round(companyBudget.supplyBudget)}, SS $${Math.round(companyBudget.ssBudget)}, Total $${Math.round(companyBudget.totalBudget)}`);
+  // Store Budgets — NOT the CURRENT REPORT PERIOD above; budgets run on
+  // their own semi-monthly cycle (getCurrentBudgetPeriodRange), same as the
+  // Budgets tab, so this always recomputes its own range independently
+  // rather than reusing currentStoreRows.
+  {
+    const budgetRange = getCurrentBudgetPeriodRange();
+    const budgetTotals = getRangeTotals(history, weeklyHistory, budgetRange.start, budgetRange.end);
+    const budgetRows = Object.entries(budgetTotals).map(([code, t]) => ({ name: STORE_CODE_TO_NAME[code] || `Store ${code}`, code, ...historyTotalsToReportShape(t) }));
+    if (budgetRows.length) {
+      lines.push('');
+      lines.push(`STORE BUDGETS for the current budget period, ${fmtDateLong(budgetRange.start)}–${fmtDateLong(budgetRange.end)} (budgets reset on the 1st, using the 16th–end of the previous month, and on the 16th, using the 1st–15th of the current month; Retail Budget = 40% of Retail sales, Supply = 10% of Color Sales, SS = 10% of Signature Service sales, Total = those three added together; Exeter's SS budget always includes a standing extra $35):`);
+      const companyBudget = { retailBudget: 0, supplyBudget: 0, ssBudget: 0, totalBudget: 0 };
+      budgetRows.forEach(s => {
+        const b = computeStoreBudget(s);
+        companyBudget.retailBudget += b.retailBudget; companyBudget.supplyBudget += b.supplyBudget; companyBudget.ssBudget += b.ssBudget; companyBudget.totalBudget += b.totalBudget;
+        lines.push(`${s.name}: Retail Budget $${Math.round(b.retailBudget)}, Supply $${Math.round(b.supplyBudget)}, SS $${Math.round(b.ssBudget)}, Total $${Math.round(b.totalBudget)}`);
+      });
+      lines.push(`Company totals — Retail Budget $${Math.round(companyBudget.retailBudget)}, Supply $${Math.round(companyBudget.supplyBudget)}, SS $${Math.round(companyBudget.ssBudget)}, Total $${Math.round(companyBudget.totalBudget)}`);
+    }
   }
 
   // Employee roster (start dates) — company-wide, not just recent hires, so
@@ -7340,7 +7368,7 @@ export default function App() {
         )}
         {!needsReport && tab === 'Budgets' && (report || hasHistoricalData) && (
           <BudgetsTab
-            report={report} query={queries.Budgets} onQuery={v => setQuery('Budgets', v)}
+            query={queries.Budgets} onQuery={v => setQuery('Budgets', v)}
             history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
             isOwner={currentUser.role === 'owner'}
           />
