@@ -1387,10 +1387,10 @@ function NewsPostModal({ post, onClose }) {
 // everyone sees the full roster for every class, live off the same
 // `hsaSignups` state everyone else's page loads. The owner can remove a
 // mis-entered sign-up.
-function HsaSignUpForm({ onSubmit, defaultName }) {
-  const [name, setName] = useState(defaultName || '');
-  const [phone, setPhone] = useState('');
-  const [store, setStore] = useState('');
+function HsaSignUpForm({ onSubmit, initial, submitLabel = 'Confirm', onCancel }) {
+  const [name, setName] = useState(initial?.name || '');
+  const [phone, setPhone] = useState(initial?.phone || '');
+  const [store, setStore] = useState(initial?.store || '');
   const storeNames = useMemo(() => [...new Set(Object.values(STORE_CODE_TO_NAME))].sort(), []);
   // DL is derived from the store, not a fifth thing to type — the app
   // already has an authoritative store → DL mapping (LEADER_ROSTER_SECTIONS)
@@ -1417,7 +1417,8 @@ function HsaSignUpForm({ onSubmit, defaultName }) {
         {storeNames.map(n => <option key={n} value={n}>{n}</option>)}
       </select>
       <span className="hsa-dl-preview">{store ? `DL: ${dl}` : ''}</span>
-      <button type="submit" className="btn-primary" disabled={!valid}>Confirm</button>
+      <button type="submit" className="btn-primary" disabled={!valid}>{submitLabel}</button>
+      {onCancel && <button type="button" className="btn-ghost" onClick={onCancel}>Cancel</button>}
       <p className="hsa-signup-privacy-note">Your phone number is kept private — only the owner can see it.</p>
     </form>
   );
@@ -1455,9 +1456,10 @@ function HsaClassForm({ initial, existingEventTypes, submitLabel, onSubmit, onCa
   );
 }
 
-function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemoveSignup, onEditClass, existingEventTypes }) {
+function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemoveSignup, onEditSignup, onEditClass, existingEventTypes }) {
   const [signingUp, setSigningUp] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [editingSignupId, setEditingSignupId] = useState(null);
   const alreadyIn = currentUserName && signups.some(s => normalizeName(s.name) === normalizeName(currentUserName));
   // Editing only ever changes this class's own date/type/location/time —
   // its `id` is passed through untouched by the caller (onEditClass), so
@@ -1493,7 +1495,7 @@ function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemo
       </div>
       {signingUp && (
         <HsaSignUpForm
-          defaultName={currentUserName}
+          initial={{ name: currentUserName }}
           onSubmit={(name, phone, store, dl) => { onSignUp(cls, name, phone, store, dl); setSigningUp(false); }}
         />
       )}
@@ -1501,12 +1503,34 @@ function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemo
         <p className="hsa-roster-label">{signups.length ? `Signed up (${signups.length})` : 'No one signed up yet'}</p>
         {signups.length > 0 && (
           <ul className="hsa-roster-list">
-            {signups.map(s => (
-              <li key={s.id}>
-                <strong>{s.name}</strong>{s.store ? ` — ${s.store}` : ''}{s.dl ? ` (DL: ${s.dl})` : ''}{isOwner && s.phone ? ` · 📞 ${s.phone}` : ''}
-                {isOwner && <button className="btn-ghost btn-danger hsa-roster-remove" onClick={() => onRemoveSignup(s.id)}>✕</button>}
-              </li>
-            ))}
+            {signups.map(s => {
+              // Whoever submitted the entry can edit it later — matched
+              // against `enteredBy` (the logged-in user who filled out the
+              // form, which can differ from `name` if they signed someone
+              // else up). Entries from before this field existed fall back
+              // to matching on `name` itself. Owner can always edit/remove.
+              const submitter = s.enteredBy || s.name;
+              const canEdit = isOwner || (currentUserName && normalizeName(submitter) === normalizeName(currentUserName));
+              if (editingSignupId === s.id) {
+                return (
+                  <li key={s.id} className="hsa-roster-editing">
+                    <HsaSignUpForm
+                      initial={{ name: s.name, phone: s.phone, store: s.store }}
+                      submitLabel="Save changes"
+                      onCancel={() => setEditingSignupId(null)}
+                      onSubmit={(name, phone, store, dl) => { onEditSignup(s.id, name, phone, store, dl); setEditingSignupId(null); }}
+                    />
+                  </li>
+                );
+              }
+              return (
+                <li key={s.id}>
+                  <strong>{s.name}</strong>{s.store ? ` — ${s.store}` : ''}{s.dl ? ` (DL: ${s.dl})` : ''}{isOwner && s.phone ? ` · 📞 ${s.phone}` : ''}
+                  {canEdit && <button className="btn-ghost hsa-roster-edit" onClick={() => setEditingSignupId(s.id)}>✎</button>}
+                  {isOwner && <button className="btn-ghost btn-danger hsa-roster-remove" onClick={() => onRemoveSignup(s.id)}>✕</button>}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
@@ -1514,7 +1538,7 @@ function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemo
   );
 }
 
-function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup, onAddClass, onEditClass }) {
+function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup, onEditSignup, onAddClass, onEditClass }) {
   const [query, setQuery] = useState('');
   const [showPast, setShowPast] = useState(false);
   const [groupByType, setGroupByType] = useState(false);
@@ -1551,7 +1575,7 @@ function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup, onA
       key={cls.id} cls={cls}
       signups={hsaSignups.filter(s => s.classId === cls.id)}
       isOwner={isOwner} currentUserName={currentUser.name}
-      onSignUp={onSignUp} onRemoveSignup={onRemoveSignup}
+      onSignUp={onSignUp} onRemoveSignup={onRemoveSignup} onEditSignup={onEditSignup}
       onEditClass={onEditClass} existingEventTypes={existingEventTypes}
     />
   );
@@ -6952,7 +6976,10 @@ export default function App() {
   // export (hsaSheetSync) is a secondary, best-effort mirror on top, never
   // something a failure here should roll back or alarm the user about.
   const handleHsaSignUp = useCallback((classInfo, name, phone, store, dl) => {
-    const entry = { id: genId(), classId: classInfo.id, name: name.trim(), phone: phone.trim(), store: store || '', dl: dl || '', signedUpAt: new Date().toISOString() };
+    // `enteredBy` is whoever is actually logged in and filling out the form
+    // (a DL signing up a stylist, say) — distinct from `name`, the person
+    // being signed up. It's how a later edit is scoped to "your own entry".
+    const entry = { id: genId(), classId: classInfo.id, name: name.trim(), phone: phone.trim(), store: store || '', dl: dl || '', enteredBy: currentUser?.name || '', signedUpAt: new Date().toISOString() };
     setHsaSignups(prev => {
       const next = [...prev, entry];
       saveData('hsa_signups', next).then(result => {
@@ -6971,6 +6998,21 @@ export default function App() {
       const next = prev.filter(s => s.id !== id);
       saveData('hsa_signups', next).then(result => {
         if (isConfigured() && !result.ok) showToast(`Removed locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+  }, []);
+
+  // Lets whoever originally submitted a sign-up (or the owner) fix a typo'd
+  // name/phone/store later, without needing the owner to remove and re-add
+  // it. `id`/`classId`/`enteredBy`/`signedUpAt` are left untouched — only
+  // the editable fields change. Not re-synced to the Google Sheet mirror
+  // (hsaSheetSync is append-only); the original row there just goes stale.
+  const handleEditHsaSignup = useCallback((id, name, phone, store, dl) => {
+    setHsaSignups(prev => {
+      const next = prev.map(s => s.id === id ? { ...s, name: name.trim(), phone: phone.trim(), store: store || '', dl: dl || '' } : s);
+      saveData('hsa_signups', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Updated locally, but couldn't sync to Supabase (${result.error})`, 'error');
       });
       return next;
     });
@@ -7337,7 +7379,7 @@ export default function App() {
           <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} />
         )}
         {tab === 'HSA' && (
-          <HsaTab events={events} hsaSignups={hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} onAddClass={handleAddHsaClass} onEditClass={handleEditHsaClass} />
+          <HsaTab events={events} hsaSignups={hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} onEditSignup={handleEditHsaSignup} onAddClass={handleAddHsaClass} onEditClass={handleEditHsaClass} />
         )}
         {!needsReport && tab === 'Overview' && (report || hasHistoricalData) && (
           <OverviewTab report={report} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'} goals={goals} />
