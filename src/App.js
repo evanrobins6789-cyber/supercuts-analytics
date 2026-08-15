@@ -1526,7 +1526,7 @@ function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemo
               return (
                 <li key={s.id}>
                   <strong>{s.name}</strong>{s.store ? ` — ${s.store}` : ''}{s.dl ? ` (DL: ${s.dl})` : ''}{isOwner && s.phone ? ` · 📞 ${s.phone}` : ''}
-                  {canEdit && <button className="btn-ghost hsa-roster-edit" onClick={() => setEditingSignupId(s.id)}>✎</button>}
+                  {canEdit && <button className="hsa-roster-edit" onClick={() => setEditingSignupId(s.id)}>✎</button>}
                   {isOwner && <button className="btn-ghost btn-danger hsa-roster-remove" onClick={() => onRemoveSignup(s.id)}>✕</button>}
                 </li>
               );

@@ -832,10 +832,15 @@
 .hsa-roster-list li { font-size: 13px; color: var(--navy); display: flex; align-items: center; gap: 8px; }
 .hsa-roster-list li.hsa-roster-editing { align-items: stretch; }
 .hsa-roster-remove { padding: 1px 7px; font-size: 11px; }
-/* Not `.btn-ghost` alone — same near-invisible-on-white-card issue noted
-   above for `.hsa-class-edit`, just not the danger-red case. */
+/* Standalone, not layered on `.btn-ghost` — same near-invisible-on-white-
+   card bug already hit twice in this file (`.hsa-class-edit`, `.lease-edit`
+   below), both fixed the same way: don't inherit `.btn-ghost`'s white-on-
+   transparent styling meant for the dark header bar, define every property
+   this button needs directly so a future `.btn-ghost` change can't silently
+   wash this back out. */
 .hsa-roster-edit {
-  padding: 1px 7px; font-size: 11px; background: transparent; color: var(--navy);
+  padding: 1px 7px; font-size: 11px; font-family: 'Inter', sans-serif;
+  background: transparent; color: var(--navy);
   border: 1px solid var(--navy); border-radius: 20px; cursor: pointer;
 }
 .hsa-roster-edit:hover { background: var(--navy); color: #fff; }
