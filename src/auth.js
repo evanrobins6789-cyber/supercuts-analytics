@@ -86,6 +86,24 @@ export function saveScoped(token, key, patch) {
   return postJson('/api/scoped-data', { token, key, patch });
 }
 
+// Owner-only Supabase Storage access for lease documents (api/lease-files.js).
+// Returns a signed upload URL/token for one file — the actual bytes go
+// straight from the browser to Supabase Storage (via supabase-js's
+// uploadToSignedUrl), never through this endpoint's request body.
+export function leaseUploadUrl(token, storeCode, fileName) {
+  return postJson('/api/lease-files', { token, action: 'uploadUrl', storeCode, fileName });
+}
+
+// Short-lived (10 min) signed read URL for a stored lease document, since
+// the bucket itself is private.
+export function leaseViewUrl(token, path) {
+  return postJson('/api/lease-files', { token, action: 'viewUrl', path });
+}
+
+export function leaseDeleteFile(token, path) {
+  return postJson('/api/lease-files', { token, action: 'delete', path });
+}
+
 export function rosterList(token) {
   return postJson('/api/roster', { action: 'list', token });
 }

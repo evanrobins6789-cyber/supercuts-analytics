@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip } from 'chart.js';
 import { Bar } from 'react-chartjs-2';
-import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDataByPrefix } from './db';
+import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDataByPrefix, supabase } from './db';
 import {
   parseStylistReport, parseEmployeeStartDates, parseGoalFile, downloadGoalTemplate, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
   parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory,
@@ -12,9 +12,11 @@ import {
   loadScoped, loadScopedByPrefix, saveScoped, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
   pointsBalance, pointsAward, pointsAllBalances, pointsTransactions, pointsDeleteTransaction,
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled, hsaSheetSync,
+  leaseUploadUrl, leaseViewUrl, leaseDeleteFile,
 } from './auth';
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
+import { LEASE_STORE_CODE_TO_NAME, LEASE_INACTIVE_CODES, leaseStoreName, matchStoreCodeFromPath, extractTermDatesFromFilename } from './leaseStoreDirectory';
 import {
   EMPTY_RANGE_TOTALS, addRangeInto, expandDateRangeDays, mergeEmployeesInto, finalizeEmployee,
   getRangeTotals, historyTotalsToReportShape, rollupRows, addDaysISO, isoWeekStart, getLastFullWeekRange, sortByMetric,
@@ -1633,7 +1635,7 @@ function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup, onE
 function flattenLeaseCriticalDates(leases) {
   const rows = [];
   Object.entries(leases || {}).forEach(([code, record]) => {
-    const storeName = STORE_CODE_TO_NAME[code] || `Store ${code}`;
+    const storeName = leaseStoreName(code);
     if (record.termEnd) rows.push({ id: `${code}-term-end`, code, storeName, label: 'Lease Expires', date: record.termEnd, notes: '' });
     (record.renewalOptions || []).forEach(ro => {
       if (ro.noticeByDate) rows.push({ id: ro.id, code, storeName, label: `Renewal Notice Deadline${ro.years ? ` (${ro.years}-yr option)` : ''}`, date: ro.noticeByDate, notes: ro.notes || '' });
@@ -1643,6 +1645,35 @@ function flattenLeaseCriticalDates(leases) {
     });
   });
   return rows.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+// The headline list the owner actually wants at the top of this tab: leases
+// (term end specifically, not renewal deadlines/ad hoc dates too) expiring
+// within a fixed 18-month window — distinct from flattenLeaseCriticalDates
+// above, which has no time cutoff and covers every kind of critical date.
+const LEASE_EXPIRING_WINDOW_DAYS = 548; // ~18 months
+function getExpiringLeases(leases, todayISO) {
+  const cutoff = new Date(todayISO);
+  cutoff.setDate(cutoff.getDate() + LEASE_EXPIRING_WINDOW_DAYS);
+  const cutoffISO = cutoff.toISOString().slice(0, 10);
+  return Object.entries(leases || {})
+    .filter(([, record]) => record.termEnd && record.termEnd >= todayISO && record.termEnd <= cutoffISO)
+    .map(([code, record]) => ({ code, storeName: leaseStoreName(code), termEnd: record.termEnd, landlordName: record.landlordName }))
+    .sort((a, b) => a.termEnd.localeCompare(b.termEnd));
+}
+
+// Shared by the per-store "+ Add documents" control and the bulk-upload
+// modal below. Gets a one-time signed upload URL from api/lease-files.js
+// (owner-only, service-role-gated) then uploads the actual file bytes
+// straight from the browser to Supabase Storage — the file never passes
+// through our own serverless function, so Vercel's request-body size limit
+// never applies here.
+async function uploadLeaseFile(token, storeCode, file) {
+  const urlRes = await leaseUploadUrl(token, storeCode, file.name);
+  if (!urlRes.ok) throw new Error(urlRes.error || 'Could not get an upload URL.');
+  const { error } = await supabase.storage.from('lease-documents').uploadToSignedUrl(urlRes.path, urlRes.uploadToken, file);
+  if (error) throw new Error(error.message);
+  return { id: genId(), name: file.name, path: urlRes.path, size: file.size, uploadedAt: new Date().toISOString() };
 }
 
 // Add/edit form for one store's whole lease record — shared by the "+ Add
@@ -1733,73 +1764,374 @@ function LeaseForm({ initial, submitLabel, onSubmit, onCancel }) {
   );
 }
 
-function LeaseCard({ storeCode, record, onSave }) {
-  const [editing, setEditing] = useState(false);
-  const storeName = STORE_CODE_TO_NAME[storeCode] || `Store ${storeCode}`;
-  // Cheap enough (one store's data) to recompute every render rather than
-  // useMemo — keeps this above the editing early-return below without
-  // tripping the Rules of Hooks (a hook can't sit after a conditional return).
-  const dates = flattenLeaseCriticalDates({ [storeCode]: record });
+function LeaseFileRow({ file, onView, onDelete }) {
+  const kb = file.size ? Math.round(file.size / 1024) : null;
+  const sizeLabel = kb == null ? '' : kb < 1024 ? `${kb} KB` : `${(kb / 1024).toFixed(1)} MB`;
+  return (
+    <li className="lease-file-row">
+      <span className="lease-file-name">{file.name}</span>
+      {sizeLabel && <span className="lease-file-size">{sizeLabel}</span>}
+      <span className="lease-file-actions">
+        <button type="button" className="link-btn" onClick={() => onView(file.path)}>View</button>
+        <button type="button" className="link-btn lease-file-remove" onClick={() => onDelete(file)}>Remove</button>
+      </span>
+    </li>
+  );
+}
 
-  if (editing) {
-    return (
-      <div className="lease-card lease-card--editing">
-        <p className="lease-card-title">{storeName}</p>
-        <LeaseForm initial={record} submitLabel="Save changes" onSubmit={rec => { onSave(rec); setEditing(false); }} onCancel={() => setEditing(false)} />
-      </div>
-    );
-  }
+// Per-store document list + uploader — used inside LeaseDetailModal. Kept
+// separate from the bulk-upload flow (BulkLeaseUploadModal below) since this
+// one always has exactly one destination store, so it can upload and save
+// immediately with no store-matching/review step.
+function LeaseFilesPanel({ storeCode, files, token, onFilesChange, onView, onDelete, showToast }) {
+  const [uploading, setUploading] = useState(false);
+  const inputRef = useRef(null);
+
+  const handlePick = async e => {
+    const picked = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (!picked.length) return;
+    setUploading(true);
+    const uploaded = [];
+    const failed = [];
+    for (const file of picked) {
+      try {
+        uploaded.push(await uploadLeaseFile(token, storeCode, file));
+      } catch (err) {
+        failed.push(`${file.name} (${err.message})`);
+      }
+    }
+    setUploading(false);
+    if (uploaded.length) onFilesChange([...(files || []), ...uploaded]);
+    if (failed.length) showToast(`${failed.length} file(s) failed to upload: ${failed.join(', ')}`, 'error');
+  };
 
   return (
-    <div className="lease-card">
-      <div className="lease-card-head">
-        <p className="lease-card-title">{storeName}</p>
-        <button className="lease-edit" onClick={() => setEditing(true)}>✎ Edit</button>
-      </div>
-      <div className="lease-card-terms">
-        <p><strong>Landlord:</strong> {record.landlordName || '—'}{record.landlordContact ? ` (${record.landlordContact})` : ''}</p>
-        <p><strong>Base rent:</strong> {record.baseRent ? `${fmt$(record.baseRent)}/mo` : '—'}{record.rentEscalation ? ` · ${record.rentEscalation}` : ''}</p>
-        <p><strong>Term:</strong> {record.termStart ? fmtDateLong(record.termStart) : '—'} to {record.termEnd ? fmtDateLong(record.termEnd) : '—'}</p>
-        {record.notes && <p className="lease-card-notes">{record.notes}</p>}
-      </div>
-      {dates.length > 0 && (
-        <div className="lease-card-dates">
-          <p className="lease-card-dates-label">Critical dates</p>
-          <ul className="lease-card-dates-list">
-            {dates.map(d => <li key={d.id}>{fmtDateLong(d.date)} — {d.label}{d.notes ? ` (${d.notes})` : ''}</li>)}
-          </ul>
-        </div>
+    <div className="lease-files-panel">
+      <p className="lease-form-subsection-title">Documents ({(files || []).length})</p>
+      {!files?.length ? (
+        <p className="empty-note">No documents on file for this store yet.</p>
+      ) : (
+        <ul className="lease-file-list">
+          {files.map(f => <LeaseFileRow key={f.id} file={f} onView={onView} onDelete={onDelete} />)}
+        </ul>
       )}
+      <input ref={inputRef} type="file" multiple style={{ display: 'none' }} onChange={handlePick} />
+      <button type="button" className="btn-secondary" disabled={uploading} onClick={() => inputRef.current?.click()}>
+        {uploading ? 'Uploading…' : '+ Add documents'}
+      </button>
     </div>
   );
 }
 
-function LeasesTab({ leases, onSaveLease }) {
-  const [pickedStore, setPickedStore] = useState('');
-  const [addingStore, setAddingStore] = useState('');
+// One store's full detail — term info (editable) plus its document list.
+// Opened by clicking any cell in the LeaseCake-style store grid below,
+// including a store with no lease/files on file yet (record is undefined),
+// so this doubles as the "add a lease" flow the old picker used to be.
+function LeaseDetailModal({ storeCode, record, token, onClose, onSaveLease, onSaveFiles, onViewFile, onDeleteFile, showToast }) {
+  const [editing, setEditing] = useState(!record);
+  const storeName = leaseStoreName(storeCode);
+  const dates = useMemo(() => flattenLeaseCriticalDates({ [storeCode]: record || {} }), [storeCode, record]);
+
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="news-modal-overlay" onClick={onClose}>
+      <div className="news-modal-panel lease-modal-panel" onClick={e => e.stopPropagation()}>
+        <button type="button" className="news-modal-close" onClick={onClose} aria-label="Close">✕</button>
+        <p className="lease-card-title">{storeName} <span className="lease-modal-code">#{storeCode}</span></p>
+
+        {editing ? (
+          <LeaseForm
+            initial={record}
+            submitLabel={record ? 'Save changes' : 'Add lease'}
+            onSubmit={rec => { onSaveLease(storeCode, rec); setEditing(false); }}
+            onCancel={() => setEditing(false)}
+          />
+        ) : (
+          <>
+            <div className="lease-card-terms">
+              <p><strong>Landlord:</strong> {record.landlordName || '—'}{record.landlordContact ? ` (${record.landlordContact})` : ''}</p>
+              <p><strong>Base rent:</strong> {record.baseRent ? `${fmt$(record.baseRent)}/mo` : '—'}{record.rentEscalation ? ` · ${record.rentEscalation}` : ''}</p>
+              <p><strong>Term:</strong> {record.termStart ? fmtDateLong(record.termStart) : '—'} to {record.termEnd ? fmtDateLong(record.termEnd) : '—'}</p>
+              {record.notes && <p className="lease-card-notes">{record.notes}</p>}
+            </div>
+            <button type="button" className="lease-edit" onClick={() => setEditing(true)}>✎ Edit Terms</button>
+            {dates.length > 0 && (
+              <div className="lease-card-dates">
+                <p className="lease-card-dates-label">Critical dates</p>
+                <ul className="lease-card-dates-list">
+                  {dates.map(d => <li key={d.id}>{fmtDateLong(d.date)} — {d.label}{d.notes ? ` (${d.notes})` : ''}</li>)}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
+
+        <LeaseFilesPanel
+          storeCode={storeCode} files={record?.files} token={token}
+          onFilesChange={files => onSaveFiles(storeCode, files)}
+          onView={onViewFile}
+          onDelete={file => onDeleteFile(storeCode, file)}
+          showToast={showToast}
+        />
+      </div>
+    </div>
+  );
+}
+
+function LeaseStoreCell({ code, record, onClick }) {
+  const name = leaseStoreName(code);
+  const inactive = LEASE_INACTIVE_CODES.has(code);
+  const fileCount = record?.files?.length || 0;
+  return (
+    <button type="button" className={`lease-store-cell ${inactive ? 'lease-store-cell--inactive' : ''}`} onClick={onClick}>
+      <span className="lease-store-cell-name">{name}</span>
+      <span className="lease-store-cell-code">#{code}{inactive ? ' · closed' : ''}</span>
+      <span className="lease-store-cell-meta">{record?.termEnd ? `Expires ${fmtDateLong(record.termEnd)}` : 'No lease on file'}</span>
+      {fileCount > 0 && <span className="lease-store-cell-files">📄 {fileCount}</span>}
+    </button>
+  );
+}
+
+// ─── Bulk lease document upload (owner-only) ───────────────────────────────
+// Lets the owner point at a whole exported folder (or a loose batch of
+// files) and have every file matched to its store automatically via
+// matchStoreCodeFromPath (leaseStoreDirectory.js) — real Leasecake exports
+// always carry the numeric store code somewhere in the file/folder name, in
+// every format actually seen (see that file's header comment). Always shows
+// a review step before anything uploads, since auto-matching ~300+ files at
+// once is exactly the kind of bulk operation that deserves a confirm step
+// rather than trusting it silently.
+const LEASE_UPLOAD_CONCURRENCY = 4;
+
+function BulkLeaseUploadModal({ leases, token, onClose, onApply, showToast }) {
+  const [rows, setRows] = useState([]);
+  const [phase, setPhase] = useState('pick'); // pick | review | uploading | done
+  const [progress, setProgress] = useState({ done: 0, total: 0, failed: [] });
+  const [fillDates, setFillDates] = useState(true);
+  const folderInputRef = useRef(null);
+  const filesInputRef = useRef(null);
+
+  const storeOptions = useMemo(
+    () => Object.keys(LEASE_STORE_CODE_TO_NAME).sort((a, b) => LEASE_STORE_CODE_TO_NAME[a].localeCompare(LEASE_STORE_CODE_TO_NAME[b])),
+    []
+  );
+
+  const handlePicked = fileList => {
+    const picked = Array.from(fileList || []);
+    if (!picked.length) return;
+    const built = picked.map((file, i) => {
+      const relPath = file.webkitRelativePath || file.name;
+      const storeCode = matchStoreCodeFromPath(relPath) || '';
+      const dates = extractTermDatesFromFilename(file.name);
+      return { key: `${i}-${file.name}-${file.size}`, file, relPath, storeCode, dates };
+    });
+    setRows(built);
+    setPhase('review');
+  };
+
+  const setRowStore = (key, code) => setRows(prev => prev.map(r => r.key === key ? { ...r, storeCode: code } : r));
+  const removeRow = key => setRows(prev => prev.filter(r => r.key !== key));
+
+  const assignedRows = rows.filter(r => r.storeCode);
+  const unassignedCount = rows.length - assignedRows.length;
+  const dateHitCount = rows.filter(r => r.dates).length;
+
+  const startUpload = async () => {
+    setPhase('uploading');
+    setProgress({ done: 0, total: assignedRows.length, failed: [] });
+    const results = [];
+    const failed = [];
+    let idx = 0;
+    async function worker() {
+      while (idx < assignedRows.length) {
+        const row = assignedRows[idx++];
+        try {
+          const uploaded = await uploadLeaseFile(token, row.storeCode, row.file);
+          results.push({ storeCode: row.storeCode, uploadedFile: uploaded, dates: row.dates });
+        } catch (err) {
+          failed.push(`${row.relPath} (${err.message})`);
+        }
+        setProgress(p => ({ done: p.done + 1, total: p.total, failed: [...failed] }));
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(LEASE_UPLOAD_CONCURRENCY, assignedRows.length) }, worker));
+
+    // One patch per store: existing files (from the `leases` snapshot this
+    // modal was opened with) plus every newly uploaded file, plus a
+    // term-date fill-in — but ONLY when that store currently has no dates on
+    // file at all, and never overwriting something the owner already
+    // entered. A store whose batch contains more than one detected range
+    // (multiple lease-history documents) takes the one with the furthest-out
+    // end date, on the theory that's the most recent amendment/renewal.
+    const patch = {};
+    const bestDatesByStore = {};
+    results.forEach(({ storeCode, uploadedFile, dates }) => {
+      if (!patch[storeCode]) patch[storeCode] = { files: [...((leases[storeCode] || {}).files || [])] };
+      patch[storeCode].files.push(uploadedFile);
+      if (fillDates && dates) {
+        const current = bestDatesByStore[storeCode];
+        if (!current || dates.termEnd > current.termEnd) bestDatesByStore[storeCode] = dates;
+      }
+    });
+    let datesApplied = 0;
+    Object.entries(bestDatesByStore).forEach(([code, dates]) => {
+      const existing = leases[code] || {};
+      if (!existing.termStart && !existing.termEnd) {
+        patch[code].termStart = dates.termStart;
+        patch[code].termEnd = dates.termEnd;
+        datesApplied++;
+      }
+    });
+
+    const result = await onApply(patch);
+    setProgress(p => ({ ...p, failed }));
+    setPhase('done');
+    const okCount = results.length;
+    if (result?.ok !== false) {
+      showToast(`Uploaded ${okCount} file(s) to ${Object.keys(patch).length} store(s)${datesApplied ? `, filled in lease dates for ${datesApplied} of them` : ''}.`);
+    }
+  };
+
+  return (
+    <div className="news-modal-overlay" onClick={phase === 'uploading' ? undefined : onClose}>
+      <div className="news-modal-panel lease-modal-panel" onClick={e => e.stopPropagation()}>
+        {phase !== 'uploading' && <button type="button" className="news-modal-close" onClick={onClose} aria-label="Close">✕</button>}
+        <p className="lease-card-title">Bulk Upload Lease Documents</p>
+
+        {phase === 'pick' && (
+          <div className="lease-bulk-pick">
+            <p className="section-hint">
+              Pick a whole folder (e.g. an extracted Leasecake export, one subfolder per store) or select loose files directly.
+              Each file is matched to a store automatically from the store code already in its name or folder — you'll get to fix anything that doesn't match before anything actually uploads.
+            </p>
+            <div className="lease-bulk-pick-buttons">
+              <button type="button" className="btn-primary" onClick={() => folderInputRef.current?.click()}>Choose a folder…</button>
+              <button type="button" className="btn-secondary" onClick={() => filesInputRef.current?.click()}>Choose files…</button>
+            </div>
+            <input ref={folderInputRef} type="file" webkitdirectory="" directory="" multiple style={{ display: 'none' }} onChange={e => handlePicked(e.target.files)} />
+            <input ref={filesInputRef} type="file" multiple style={{ display: 'none' }} onChange={e => handlePicked(e.target.files)} />
+          </div>
+        )}
+
+        {phase === 'review' && (
+          <div className="lease-bulk-review">
+            <p className="section-hint">
+              {rows.length} file(s) picked — {assignedRows.length} matched to a store{unassignedCount ? `, ${unassignedCount} need a store picked below` : ''}.
+              {dateHitCount > 0 ? ` ${dateHitCount} file(s) have a lease term date range in their name.` : ''}
+            </p>
+            {dateHitCount > 0 && (
+              <label className="lease-bulk-fill-toggle">
+                <input type="checkbox" checked={fillDates} onChange={e => setFillDates(e.target.checked)} />
+                Fill in blank lease start/end dates detected from filenames (never overwrites a date already on file)
+              </label>
+            )}
+            <div className="lease-bulk-table">
+              {rows.map(r => (
+                <div key={r.key} className={`lease-bulk-row ${!r.storeCode ? 'lease-bulk-row--unmatched' : ''}`}>
+                  <span className="lease-bulk-row-name" title={r.relPath}>{r.file.name}</span>
+                  <select className="text-input" value={r.storeCode} onChange={e => setRowStore(r.key, e.target.value)}>
+                    <option value="">— no store —</option>
+                    {storeOptions.map(c => <option key={c} value={c}>{LEASE_STORE_CODE_TO_NAME[c]} (#{c})</option>)}
+                  </select>
+                  {r.dates && <span className="lease-bulk-row-dates">{r.dates.termStart} → {r.dates.termEnd}</span>}
+                  <button type="button" className="btn-ghost btn-danger lease-form-remove" onClick={() => removeRow(r.key)}>✕</button>
+                </div>
+              ))}
+            </div>
+            <div className="lease-form-actions">
+              <button type="button" className="btn-primary" disabled={!assignedRows.length} onClick={startUpload}>
+                Upload {assignedRows.length} file(s){unassignedCount ? ` (skip ${unassignedCount} unmatched)` : ''}
+              </button>
+              <button type="button" className="btn-secondary" onClick={() => setPhase('pick')}>Start over</button>
+            </div>
+          </div>
+        )}
+
+        {phase === 'uploading' && (
+          <div className="lease-bulk-progress">
+            <p>Uploading {progress.done} / {progress.total}…</p>
+            <div className="lease-bulk-progress-bar"><div className="lease-bulk-progress-fill" style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }} /></div>
+          </div>
+        )}
+
+        {phase === 'done' && (
+          <div className="lease-bulk-done">
+            <p>Done — {progress.done - progress.failed.length} of {progress.total} file(s) uploaded successfully.</p>
+            {progress.failed.length > 0 && (
+              <div className="lease-bulk-failed">
+                <p className="section-label">Failed ({progress.failed.length})</p>
+                <ul>{progress.failed.map(f => <li key={f}>{f}</li>)}</ul>
+              </div>
+            )}
+            <button type="button" className="btn-primary" onClick={onClose}>Close</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LeasesTab({ leases, token, onSaveLease, onBulkSaveLeaseUpdates, onDeleteLeaseFile, onViewFile, showToast }) {
+  const [query, setQuery] = useState('');
+  const [openStoreCode, setOpenStoreCode] = useState(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
-  const storesWithoutLease = useMemo(
-    () => Object.keys(STORE_CODE_TO_NAME).filter(c => !leases[c]).sort((a, b) => STORE_CODE_TO_NAME[a].localeCompare(STORE_CODE_TO_NAME[b])),
-    [leases]
+  const allCodes = useMemo(
+    () => Object.keys(LEASE_STORE_CODE_TO_NAME).sort((a, b) => LEASE_STORE_CODE_TO_NAME[a].localeCompare(LEASE_STORE_CODE_TO_NAME[b])),
+    []
   );
-  const storeCodesWithLease = useMemo(
-    () => Object.keys(leases).sort((a, b) => (STORE_CODE_TO_NAME[a] || a).localeCompare(STORE_CODE_TO_NAME[b] || b)),
-    [leases]
-  );
+  const filteredCodes = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return allCodes;
+    return allCodes.filter(c => LEASE_STORE_CODE_TO_NAME[c].toLowerCase().includes(q) || c.includes(q));
+  }, [allCodes, query]);
+
+  const expiring = useMemo(() => getExpiringLeases(leases, todayISO), [leases, todayISO]);
   const upcoming = useMemo(() => flattenLeaseCriticalDates(leases).filter(d => d.date >= todayISO), [leases, todayISO]);
 
   const daysUntil = date => Math.round((new Date(date) - new Date(todayISO)) / 86400000);
   const urgencyClass = days => (days <= 30 ? 'lease-date-badge--urgent' : days <= 90 ? 'lease-date-badge--soon' : 'lease-date-badge--ok');
+  // Wider tiers than the general critical-dates list above — this section
+  // spans a full 18 months, not the next few weeks, so "urgent" here means
+  // within a quarter, not within 30 days.
+  const expiryUrgencyClass = days => (days <= 90 ? 'lease-date-badge--urgent' : days <= 365 ? 'lease-date-badge--soon' : 'lease-date-badge--ok');
 
   return (
     <div className="tab-content">
-      <p className="section-hint">Owner-only lease tracker — key terms and critical dates per store. This data (rent, landlord contacts, dates) is never sent to any non-owner login.</p>
+      <p className="section-hint">Owner-only lease tracker — key terms, critical dates, and documents per store. This data is never sent to any non-owner login.</p>
 
       <div>
-        <p className="section-label">Upcoming Critical Dates</p>
+        <p className="section-label">Leases Expiring in the Next 18 Months</p>
+        {!expiring.length ? (
+          <p className="empty-note">No leases on file are expiring in the next 18 months.</p>
+        ) : (
+          <div className="lease-upcoming-list">
+            {expiring.map(e => {
+              const days = daysUntil(e.termEnd);
+              return (
+                <button key={e.code} type="button" className="lease-upcoming-row lease-upcoming-row--clickable" onClick={() => setOpenStoreCode(e.code)}>
+                  <span className={`lease-date-badge ${expiryUrgencyClass(days)}`}>{days <= 0 ? 'Due' : `${days}d`}</span>
+                  <span className="lease-upcoming-date">{fmtDateLong(e.termEnd)}</span>
+                  <span className="lease-upcoming-store">{e.storeName}</span>
+                  <span className="lease-upcoming-label">{e.landlordName ? `Landlord: ${e.landlordName}` : 'Lease expires'}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <p className="section-label">Other Upcoming Critical Dates</p>
         {!upcoming.length ? (
-          <p className="empty-note">No upcoming critical dates on file yet — add a lease below.</p>
+          <p className="empty-note">No other upcoming critical dates on file.</p>
         ) : (
           <div className="lease-upcoming-list">
             {upcoming.map(d => {
@@ -1818,37 +2150,39 @@ function LeasesTab({ leases, onSaveLease }) {
       </div>
 
       <div>
-        <p className="section-label">Leases by Store</p>
-        {storesWithoutLease.length > 0 && (
-          <div className="lease-add-tools">
-            {!addingStore ? (
-              <div className="lease-add-picker">
-                <select className="text-input" value={pickedStore} onChange={e => setPickedStore(e.target.value)}>
-                  <option value="">Select a store to add a lease…</option>
-                  {storesWithoutLease.map(c => <option key={c} value={c}>{STORE_CODE_TO_NAME[c]}</option>)}
-                </select>
-                <button className="btn-primary" disabled={!pickedStore} onClick={() => setAddingStore(pickedStore)}>+ Add Lease</button>
-              </div>
-            ) : (
-              <div className="lease-card lease-card--editing">
-                <p className="lease-card-title">New lease — {STORE_CODE_TO_NAME[addingStore]}</p>
-                <LeaseForm
-                  submitLabel="Add lease"
-                  onSubmit={record => { onSaveLease(addingStore, record); setAddingStore(''); setPickedStore(''); }}
-                  onCancel={() => setAddingStore('')}
-                />
-              </div>
-            )}
-          </div>
-        )}
-        {!storeCodesWithLease.length ? (
-          <p className="empty-note">No leases on file yet.</p>
-        ) : (
-          <div className="lease-card-list">
-            {storeCodesWithLease.map(code => <LeaseCard key={code} storeCode={code} record={leases[code]} onSave={rec => onSaveLease(code, rec)} />)}
-          </div>
-        )}
+        <div className="lease-stores-head">
+          <p className="section-label">Stores</p>
+          <button type="button" className="btn-primary" onClick={() => setBulkOpen(true)}>⬆ Bulk Upload Documents</button>
+        </div>
+        <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
+        <div className="lease-store-grid">
+          {filteredCodes.map(code => (
+            <LeaseStoreCell key={code} code={code} record={leases[code]} onClick={() => setOpenStoreCode(code)} />
+          ))}
+        </div>
+        {!filteredCodes.length && <p className="empty-note">No stores match your search.</p>}
       </div>
+
+      {openStoreCode && (
+        <LeaseDetailModal
+          storeCode={openStoreCode} record={leases[openStoreCode]} token={token}
+          onClose={() => setOpenStoreCode(null)}
+          onSaveLease={onSaveLease}
+          onSaveFiles={(code, files) => onBulkSaveLeaseUpdates({ [code]: { files } })}
+          onViewFile={onViewFile}
+          onDeleteFile={onDeleteLeaseFile}
+          showToast={showToast}
+        />
+      )}
+
+      {bulkOpen && (
+        <BulkLeaseUploadModal
+          leases={leases} token={token}
+          onClose={() => setBulkOpen(false)}
+          onApply={onBulkSaveLeaseUpdates}
+          showToast={showToast}
+        />
+      )}
     </div>
   );
 }
@@ -4904,9 +5238,12 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   if (leases && Object.keys(leases).length) {
     const todayISO = new Date().toISOString().slice(0, 10);
     const upcoming = flattenLeaseCriticalDates(leases).filter(d => d.date >= todayISO).slice(0, 8);
-    lines.push(`LEASES (${Object.keys(leases).length} store(s) on file): next upcoming critical dates —`);
+    const expiringSoon = getExpiringLeases(leases, todayISO);
+    const fileCount = Object.values(leases).reduce((sum, r) => sum + (r.files?.length || 0), 0);
+    lines.push(`LEASES (${Object.keys(leases).length} store(s) on file, ${fileCount} document(s) uploaded): next upcoming critical dates —`);
     if (upcoming.length) upcoming.forEach(d => lines.push(`${d.date} — ${d.storeName}: ${d.label}${d.notes ? ` (${d.notes})` : ''}`));
     else lines.push('none upcoming.');
+    if (expiringSoon.length) lines.push(`Leases expiring within 18 months: ${expiringSoon.map(e => `${e.storeName} (${e.termEnd})`).join(', ')}.`);
     lines.push('');
   }
 
@@ -6231,6 +6568,10 @@ export default function App() {
   useEffect(() => { managersRef.current = managers; }, [managers]);
   const milestoneGoalsRef = useRef(milestoneGoals);
   useEffect(() => { milestoneGoalsRef.current = milestoneGoals; }, [milestoneGoals]);
+  // Read by handleDeleteLeaseFile to compute a store's remaining files
+  // without a stale closure over `leases`.
+  const leasesRef = useRef(leases);
+  useEffect(() => { leasesRef.current = leases; }, [leases]);
   const importChainRef = useRef(Promise.resolve());
   const [weeklyHistory, setWeeklyHistory] = useState({});
   const [dateRange, setDateRangeState] = useState({ start: null, end: null });
@@ -6668,10 +7009,51 @@ export default function App() {
   // client-side (Leases tab visibility) and server-side (api/scoped-data.js
   // rejects a non-owner patch to store_leases outright).
   const handleSaveLease = useCallback((storeCode, record) => {
-    setLeases(prev => ({ ...prev, [storeCode]: record }));
+    // Local optimistic update merges rather than replaces — `record` here
+    // is only ever LeaseForm's fields (term/landlord/etc.), never `files`,
+    // so a naive replace would flash "no documents" until the server's
+    // merged response (below) corrects it a moment later.
+    setLeases(prev => {
+      const next = { ...prev, [storeCode]: { ...prev[storeCode], ...record } };
+      leasesRef.current = next;
+      return next;
+    });
     saveScoped(currentUser.token, 'store_leases', { [storeCode]: record }).then(result => {
-      if (result.ok) setLeases(result.data || {});
+      if (result.ok) { setLeases(result.data || {}); leasesRef.current = result.data || {}; }
       else showToast(`Lease saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+    });
+  }, [currentUser]);
+
+  // Shared by per-store document add/remove (LeaseFilesPanel, one store at a
+  // time) and the bulk-upload modal (many stores in one call) — `patch` is
+  // `{ [storeCode]: { files: [...], termStart?, termEnd? } }`, merged
+  // server-side the same shallow per-field way handleSaveLease's patch is.
+  const handleBulkSaveLeaseUpdates = useCallback(patch => {
+    setLeases(prev => {
+      const next = { ...prev };
+      Object.entries(patch).forEach(([code, val]) => { next[code] = { ...next[code], ...val }; });
+      leasesRef.current = next;
+      return next;
+    });
+    return saveScoped(currentUser.token, 'store_leases', patch).then(result => {
+      if (result.ok) { setLeases(result.data || {}); leasesRef.current = result.data || {}; }
+      else showToast(`Some lease changes saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      return result;
+    });
+  }, [currentUser]);
+
+  const handleDeleteLeaseFile = useCallback((storeCode, file) => {
+    leaseDeleteFile(currentUser.token, file.path).then(result => {
+      if (!result.ok) { showToast(`Couldn't delete "${file.name}": ${result.error}`, 'error'); return; }
+      const remaining = (leasesRef.current[storeCode]?.files || []).filter(f => f.id !== file.id);
+      handleBulkSaveLeaseUpdates({ [storeCode]: { files: remaining } });
+    });
+  }, [currentUser, handleBulkSaveLeaseUpdates]);
+
+  const handleViewLeaseFile = useCallback(path => {
+    leaseViewUrl(currentUser.token, path).then(result => {
+      if (result.ok) window.open(result.url, '_blank', 'noopener');
+      else showToast(`Couldn't open file: ${result.error}`, 'error');
     });
   }, [currentUser]);
 
@@ -7428,7 +7810,11 @@ export default function App() {
           <GoalsTab report={report} goals={goals} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} fallbackEmployeesByStore={fallbackEmployeesByStore} />
         )}
         {tab === 'Leases' && (
-          <LeasesTab leases={leases} onSaveLease={handleSaveLease} />
+          <LeasesTab
+            leases={leases} token={currentUser.token} onSaveLease={handleSaveLease}
+            onBulkSaveLeaseUpdates={handleBulkSaveLeaseUpdates} onDeleteLeaseFile={handleDeleteLeaseFile}
+            onViewFile={handleViewLeaseFile} showToast={showToast}
+          />
         )}
         {!needsReport && tab === 'DL' && (report || hasHistoricalData) && (
           <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} milestoneGoals={milestoneGoals} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />

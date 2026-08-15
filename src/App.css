@@ -919,6 +919,69 @@
 .lease-form-remove { flex: none; padding: 5px 10px; }
 .lease-form-actions { display: flex; gap: 8px; margin-top: 4px; }
 
+/* Expiring-soon / critical-date rows doubling as buttons (clickable straight
+   into that store's detail modal) — same visual as the plain row, just with
+   button reset + a hover cue. */
+.lease-upcoming-row--clickable {
+  border: none; background: transparent; width: 100%; text-align: left; cursor: pointer;
+  border-radius: 6px; transition: background 0.1s ease;
+}
+.lease-upcoming-row--clickable:hover { background: rgba(20,42,74,0.05); }
+
+.lease-stores-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+
+/* LeaseCake-style store grid — every known store is a cell, whether or not
+   it has a lease/document on file yet, so clicking one doubles as "add". */
+.lease-store-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; margin-top: 10px;
+}
+.lease-store-cell {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+  cursor: pointer; box-shadow: var(--shadow); transition: border-color 0.12s ease, transform 0.12s ease;
+}
+.lease-store-cell:hover { border-color: var(--gold); transform: translateY(-1px); }
+.lease-store-cell--inactive { opacity: 0.62; }
+.lease-store-cell-name { font-family: 'Barlow Condensed', sans-serif; font-size: 16px; font-weight: 700; color: var(--navy); }
+.lease-store-cell-code { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); }
+.lease-store-cell-meta { font-size: 12px; color: var(--ink-soft); }
+.lease-store-cell-files { font-size: 11.5px; color: var(--navy); margin-top: 2px; }
+
+.lease-modal-panel { max-width: 620px; }
+.lease-modal-code { font-family: 'IBM Plex Mono', monospace; font-size: 13px; color: var(--ink-soft); font-weight: 400; }
+
+/* Per-store document list inside the detail modal */
+.lease-files-panel { border-top: 1px dashed var(--line); padding-top: 10px; margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.lease-file-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.lease-file-row {
+  display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--navy);
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px;
+}
+.lease-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lease-file-size { color: var(--ink-soft); font-size: 11px; white-space: nowrap; }
+.lease-file-actions { display: flex; gap: 10px; flex: none; }
+.lease-file-remove { color: var(--red-deep); }
+
+/* Bulk-upload modal */
+.lease-bulk-pick { display: flex; flex-direction: column; gap: 12px; }
+.lease-bulk-pick-buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+.lease-bulk-review { display: flex; flex-direction: column; gap: 10px; }
+.lease-bulk-fill-toggle { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-soft); }
+.lease-bulk-table {
+  display: flex; flex-direction: column; gap: 6px; max-height: 42vh; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px;
+}
+.lease-bulk-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0; }
+.lease-bulk-row--unmatched { background: rgba(194,59,59,0.06); border-radius: 6px; }
+.lease-bulk-row-name { flex: 1; min-width: 160px; font-size: 12.5px; color: var(--navy); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lease-bulk-row select.text-input { flex: none; width: 220px; margin: 0; }
+.lease-bulk-row-dates { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--ink-soft); white-space: nowrap; }
+.lease-bulk-progress { display: flex; flex-direction: column; gap: 10px; }
+.lease-bulk-progress-bar { height: 8px; border-radius: 6px; background: var(--paper); overflow: hidden; }
+.lease-bulk-progress-fill { height: 100%; background: var(--gold); transition: width 0.15s ease; }
+.lease-bulk-done { display: flex; flex-direction: column; gap: 10px; }
+.lease-bulk-failed ul { margin: 4px 0 0; padding-left: 18px; font-size: 12px; color: var(--red-deep); }
+
 /* ─── Retail "Products" view ─────────────────────────────────────────────── */
 .product-view { display: flex; flex-direction: column; gap: 14px; }
 .product-group-body { padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 10px; }
