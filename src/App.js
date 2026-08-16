@@ -5949,6 +5949,7 @@ const SETUP_SECTIONS = [
   { key: 'employeeAccess', label: 'Employee Access' },
   { key: 'rewards', label: 'Rewards' },
   { key: 'hsa', label: 'HSA' },
+  { key: 'leases', label: 'Leases' },
 ];
 
 // Owner-only roster of who can log in — Employee Name | Employee Code |
@@ -6497,8 +6498,68 @@ function doPost(e) {
 }
 
 const SETUP_PASSWORD = 'sc4310';
+const LEASE_CLEAR_PASSWORD = '102Ironstone!';
 
-function SetupTab({ configured, section, onSection, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps, employeeAccessProps, rewardsProps, hsaProps }) {
+// Owner-only "clear all leases" tool — a second, dedicated password gate
+// layered on top of the whole-Setup-tab password, since wiping every
+// store's lease record (rent, landlord, term dates, renewal options, and
+// other critical dates) is destructive enough to want a deliberate extra
+// step, not just "already inside Setup." Uploaded documents are NOT deleted
+// from Supabase Storage by this — only unlinked from each store's record,
+// since a bulk file-delete isn't what "clear the leases" was asked for and
+// adds real risk if this button is ever hit by mistake.
+function LeaseAdminSetupTab({ leaseCount, onClearAll }) {
+  const [unlocked, setUnlocked] = useState(false);
+  const [pwInput, setPwInput] = useState('');
+  const [pwError, setPwError] = useState(false);
+  const [clearing, setClearing] = useState(false);
+
+  const tryUnlock = () => {
+    if (pwInput === LEASE_CLEAR_PASSWORD) { setUnlocked(true); setPwError(false); }
+    else { setPwError(true); }
+  };
+
+  if (!unlocked) {
+    return (
+      <div className="setup-section">
+        <div className="password-gate">
+          <p className="password-gate-title">🔒 Leases</p>
+          <p className="password-gate-hint">Clearing lease data needs its own password. Enter it to continue.</p>
+          <input
+            type="password" className="password-input" placeholder="Password" value={pwInput}
+            onChange={e => { setPwInput(e.target.value); setPwError(false); }}
+            onKeyDown={e => { if (e.key === 'Enter') tryUnlock(); }}
+            autoFocus
+          />
+          <button className="btn-primary" onClick={tryUnlock}>Unlock</button>
+          {pwError && <p className="password-error">Incorrect password.</p>}
+        </div>
+      </div>
+    );
+  }
+
+  const handleClear = async () => {
+    if (!window.confirm(`Clear ALL ${leaseCount} store lease record(s) — rent, landlord, term dates, renewal options, and critical dates? Uploaded documents stay in storage but will show as unlinked. This cannot be undone.`)) return;
+    setClearing(true);
+    await onClearAll();
+    setClearing(false);
+  };
+
+  return (
+    <div className="setup-section">
+      <div className="setup-sql-card">
+        <p className="chart-title">Clear all lease data</p>
+        <p className="step-body">Wipes every store's lease record — rent, landlord, term dates, renewal options, and other critical dates — for all {leaseCount} store(s) currently on file. Uploaded documents are not deleted from storage, just unlinked from each store's record.</p>
+      </div>
+      <button type="button" className="btn-ghost btn-danger" disabled={clearing || !leaseCount} onClick={handleClear}>
+        {clearing ? 'Clearing…' : `Clear all leases (${leaseCount})`}
+      </button>
+      {!leaseCount && <p className="empty-note">No lease records on file to clear.</p>}
+    </div>
+  );
+}
+
+function SetupTab({ configured, section, onSection, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps, employeeAccessProps, rewardsProps, hsaProps, leaseAdminProps }) {
   const [unlocked, setUnlocked] = useState(false);
   const [pwInput, setPwInput] = useState('');
   const [pwError, setPwError] = useState(false);
@@ -6560,6 +6621,7 @@ function SetupTab({ configured, section, onSection, managersProps, milestoneGoal
       {section === 'employeeAccess' && <EmployeeAccessSetupTab {...employeeAccessProps} />}
       {section === 'rewards' && <RewardsSetupTab {...rewardsProps} />}
       {section === 'hsa' && <HsaSetupTab {...hsaProps} />}
+      {section === 'leases' && <LeaseAdminSetupTab {...leaseAdminProps} />}
 
       {section === 'guide' && <>
       <div className="setup-section">
@@ -7377,6 +7439,28 @@ export default function App() {
     return saveScoped(currentUser.token, 'store_leases', patch).then(result => {
       if (result.ok) { setLeases(result.data || {}); leasesRef.current = result.data || {}; }
       else showToast(`Some lease changes saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      return result;
+    });
+  }, [currentUser]);
+
+  // Full wipe — sends `null` for every store code currently on file, which
+  // api/scoped-data.js's per-store patch handling treats as "delete this
+  // store's entry entirely" (same mechanism handleSaveManager already uses
+  // to clear a single store's manager). Optimistically clears local state
+  // immediately rather than going through handleBulkSaveLeaseUpdates'
+  // shallow-merge helper, since merging `null` into an existing record
+  // wouldn't actually remove it from local state before the server's
+  // authoritative response comes back.
+  const handleClearAllLeases = useCallback(() => {
+    const codes = Object.keys(leasesRef.current || {});
+    if (!codes.length) return Promise.resolve({ ok: true });
+    const patch = {};
+    codes.forEach(code => { patch[code] = null; });
+    setLeases({});
+    leasesRef.current = {};
+    return saveScoped(currentUser.token, 'store_leases', patch).then(result => {
+      if (result.ok) { setLeases(result.data || {}); leasesRef.current = result.data || {}; }
+      else showToast(`Couldn't clear leases in Supabase (${result.error}) — they may reappear next load.`, 'error');
       return result;
     });
   }, [currentUser]);
@@ -8213,6 +8297,7 @@ export default function App() {
               classCount: events.filter(ev => ev.source === 'hsa').length,
               uploading: uploadingHsaSchedule, onFile: handleImportHsaSchedule, onClear: handleClearHsaSchedule,
             }}
+            leaseAdminProps={{ leaseCount: Object.keys(leases).length, onClearAll: handleClearAllLeases }}
           />
         )}
       </main>
