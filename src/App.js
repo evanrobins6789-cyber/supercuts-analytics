@@ -12,7 +12,7 @@ import {
   loadScoped, loadScopedByPrefix, saveScoped, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
   pointsBalance, pointsAward, pointsAllBalances, pointsTransactions, pointsDeleteTransaction,
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled, hsaSheetSync,
-  leaseUploadUrl, leaseViewUrl, leaseDeleteFile,
+  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates,
 } from './auth';
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
@@ -1919,6 +1919,8 @@ function LeaseFilesPanel({ storeCode, files, token, onFilesChange, onView, onDel
 // so this doubles as the "add a lease" flow the old picker used to be.
 function LeaseDetailModal({ storeCode, record, token, onClose, onSaveLease, onSaveFiles, onViewFile, onDeleteFile, showToast }) {
   const [editing, setEditing] = useState(!record);
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState(null);
   const storeName = leaseStoreName(storeCode);
   const dates = useMemo(() => flattenLeaseCriticalDates({ [storeCode]: record || {} }), [storeCode, record]);
 
@@ -1928,6 +1930,26 @@ function LeaseDetailModal({ storeCode, record, token, onClose, onSaveLease, onSa
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  const handleScan = async () => {
+    if (!record?.files?.length) return;
+    setScanning(true);
+    const result = await scanLeaseDates(token, storeCode, storeName, record.files);
+    setScanning(false);
+    if (!result.ok) { showToast(`Couldn't scan documents: ${result.error}`, 'error'); return; }
+    if (result.message && !result.result) { showToast(result.message, 'error'); return; }
+    const parsed = result.result;
+    if (!parsed || (!parsed.termStart && !parsed.termEnd)) {
+      showToast(parsed?.reasoning ? `No reliable lease term found: ${parsed.reasoning}` : 'No reliable lease term found in these documents.', 'error');
+      return;
+    }
+    setScanResult(parsed);
+    setEditing(true);
+  };
+
+  const formInitial = scanResult
+    ? { ...(record || {}), termStart: scanResult.termStart || record?.termStart || '', termEnd: scanResult.termEnd || record?.termEnd || '' }
+    : record;
+
   return (
     <div className="news-modal-overlay" onClick={onClose}>
       <div className="news-modal-panel lease-modal-panel" onClick={e => e.stopPropagation()}>
@@ -1935,12 +1957,21 @@ function LeaseDetailModal({ storeCode, record, token, onClose, onSaveLease, onSa
         <p className="lease-card-title">{storeName} <span className="lease-modal-code">#{storeCode}</span></p>
 
         {editing ? (
-          <LeaseForm
-            initial={record}
-            submitLabel={record ? 'Save changes' : 'Add lease'}
-            onSubmit={rec => { onSaveLease(storeCode, rec); setEditing(false); }}
-            onCancel={() => setEditing(false)}
-          />
+          <>
+            {scanResult && (
+              <div className="lease-scan-banner">
+                <p>🔍 Scanned from documents (confidence: {scanResult.confidence}){scanResult.sourceDocument ? ` — source: ${scanResult.sourceDocument}` : ''}. {scanResult.reasoning}</p>
+                <button type="button" className="link-btn" onClick={() => setScanResult(null)}>Discard scan, keep dates as typed</button>
+              </div>
+            )}
+            <LeaseForm
+              key={scanResult ? 'scanned' : 'plain'}
+              initial={formInitial}
+              submitLabel={record ? 'Save changes' : 'Add lease'}
+              onSubmit={rec => { onSaveLease(storeCode, rec); setEditing(false); setScanResult(null); }}
+              onCancel={() => { setEditing(false); setScanResult(null); }}
+            />
+          </>
         ) : (
           <>
             <div className="lease-card-terms">
@@ -1949,7 +1980,14 @@ function LeaseDetailModal({ storeCode, record, token, onClose, onSaveLease, onSa
               <p><strong>Term:</strong> {record.termStart ? fmtDateLong(record.termStart) : '—'} to {record.termEnd ? fmtDateLong(record.termEnd) : '—'}</p>
               {record.notes && <p className="lease-card-notes">{record.notes}</p>}
             </div>
-            <button type="button" className="lease-edit" onClick={() => setEditing(true)}>✎ Edit Terms</button>
+            <div className="lease-card-actions">
+              <button type="button" className="lease-edit" onClick={() => setEditing(true)}>✎ Edit Terms</button>
+              {record?.files?.length > 0 && (
+                <button type="button" className="btn-secondary" disabled={scanning} onClick={handleScan}>
+                  {scanning ? 'Scanning…' : '🔍 Scan documents for dates'}
+                </button>
+              )}
+            </div>
             {dates.length > 0 && (
               <div className="lease-card-dates">
                 <p className="lease-card-dates-label">Critical dates</p>
@@ -2166,10 +2204,146 @@ function BulkLeaseUploadModal({ leases, token, onClose, onApply, showToast }) {
   );
 }
 
+// Owner-triggered "read every store's already-uploaded documents and fill
+// in whatever dates are missing" flow — the answer to bulk-upload's filename
+// dates not being available for real Leasecake "Export" folder documents
+// (see api/scan-lease-dates.js). Scans sequentially (bounded concurrency)
+// since each scan is its own Claude call reading a store's whole PDF set;
+// always shows a review step before writing anything, same as bulk upload.
+const LEASE_SCAN_CONCURRENCY = 2;
+
+function BulkLeaseScanModal({ leases, token, onClose, onApply, showToast }) {
+  const candidates = useMemo(
+    () => Object.entries(leases || {})
+      .filter(([, rec]) => rec?.files?.length && (!rec.termStart || !rec.termEnd))
+      .map(([code]) => code)
+      .sort((a, b) => leaseStoreName(a).localeCompare(leaseStoreName(b))),
+    [leases]
+  );
+
+  const [phase, setPhase] = useState('pick'); // pick | scanning | review | done
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const [rows, setRows] = useState([]);
+
+  const startScan = async () => {
+    setPhase('scanning');
+    setProgress({ done: 0, total: candidates.length });
+    const built = [];
+    let idx = 0;
+    async function worker() {
+      while (idx < candidates.length) {
+        const code = candidates[idx++];
+        const rec = leases[code];
+        const storeName = leaseStoreName(code);
+        try {
+          const res = await scanLeaseDates(token, code, storeName, rec.files);
+          if (res.ok && res.result && (res.result.termStart || res.result.termEnd)) {
+            built.push({ code, storeName, current: { termStart: rec.termStart, termEnd: rec.termEnd }, scanned: res.result, include: true });
+          } else {
+            built.push({ code, storeName, current: { termStart: rec.termStart, termEnd: rec.termEnd }, scanned: null, error: res.error || res.message || 'No reliable term found', include: false });
+          }
+        } catch (err) {
+          built.push({ code, storeName, current: { termStart: rec.termStart, termEnd: rec.termEnd }, scanned: null, error: err.message, include: false });
+        }
+        setProgress(p => ({ done: p.done + 1, total: p.total }));
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(LEASE_SCAN_CONCURRENCY, candidates.length) }, worker));
+    setRows(built.sort((a, b) => a.storeName.localeCompare(b.storeName)));
+    setPhase('review');
+  };
+
+  const toggleRow = code => setRows(prev => prev.map(r => r.code === code ? { ...r, include: !r.include } : r));
+  const includedRows = rows.filter(r => r.scanned && r.include);
+
+  const applyResults = async () => {
+    const patch = {};
+    includedRows.forEach(r => {
+      patch[r.code] = {
+        termStart: r.scanned.termStart || r.current.termStart,
+        termEnd: r.scanned.termEnd || r.current.termEnd,
+      };
+    });
+    const result = await onApply(patch);
+    setPhase('done');
+    if (result?.ok !== false) showToast(`Applied scanned lease dates to ${includedRows.length} store(s).`);
+  };
+
+  return (
+    <div className="news-modal-overlay" onClick={phase === 'scanning' ? undefined : onClose}>
+      <div className="news-modal-panel lease-modal-panel" onClick={e => e.stopPropagation()}>
+        {phase !== 'scanning' && <button type="button" className="news-modal-close" onClick={onClose} aria-label="Close">✕</button>}
+        <p className="lease-card-title">Scan Documents for Lease Dates</p>
+
+        {phase === 'pick' && (
+          <div className="lease-bulk-pick">
+            <p className="section-hint">
+              Has Claude read through each store's already-uploaded lease documents and fill in a missing term start/end date, reasoning across renewals and amendments to find the current term. Never overwrites a date already on file — only fills in what's blank.
+            </p>
+            {!candidates.length ? (
+              <p className="empty-note">No stores currently have documents on file with a missing term start or end date.</p>
+            ) : (
+              <button type="button" className="btn-primary" onClick={startScan}>Scan {candidates.length} store(s)</button>
+            )}
+          </div>
+        )}
+
+        {phase === 'scanning' && (
+          <div className="lease-bulk-progress">
+            <p>Scanning {progress.done} / {progress.total}…</p>
+            <div className="lease-bulk-progress-bar"><div className="lease-bulk-progress-fill" style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }} /></div>
+          </div>
+        )}
+
+        {phase === 'review' && (
+          <div className="lease-bulk-review">
+            <p className="section-hint">
+              {rows.filter(r => r.scanned).length} of {rows.length} store(s) yielded a term — review before applying. Unchecked rows won't be saved.
+            </p>
+            <div className="lease-bulk-table">
+              {rows.map(r => (
+                <div key={r.code} className={`lease-bulk-row ${!r.scanned ? 'lease-bulk-row--unmatched' : ''}`}>
+                  {r.scanned ? (
+                    <label className="lease-scan-row-check">
+                      <input type="checkbox" checked={r.include} onChange={() => toggleRow(r.code)} />
+                    </label>
+                  ) : <span className="lease-scan-row-check" />}
+                  <span className="lease-bulk-row-name">{r.storeName} <span className="lease-modal-code">#{r.code}</span></span>
+                  {r.scanned ? (
+                    <span className="lease-bulk-row-dates" title={r.scanned.reasoning}>
+                      {r.scanned.termStart || r.current.termStart || '—'} → {r.scanned.termEnd || r.current.termEnd || '—'} ({r.scanned.confidence})
+                    </span>
+                  ) : (
+                    <span className="lease-bulk-row-dates lease-scan-row-error">{r.error}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="lease-form-actions">
+              <button type="button" className="btn-primary" disabled={!includedRows.length} onClick={applyResults}>
+                Apply {includedRows.length} store(s)
+              </button>
+              <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {phase === 'done' && (
+          <div className="lease-bulk-done">
+            <p>Done — applied scanned dates to {includedRows.length} store(s).</p>
+            <button type="button" className="btn-primary" onClick={onClose}>Close</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function LeasesTab({ leases, token, onSaveLease, onBulkSaveLeaseUpdates, onDeleteLeaseFile, onViewFile, showToast }) {
   const [query, setQuery] = useState('');
   const [openStoreCode, setOpenStoreCode] = useState(null);
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [scanOpen, setScanOpen] = useState(false);
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const allCodes = useMemo(
@@ -2241,6 +2415,7 @@ function LeasesTab({ leases, token, onSaveLease, onBulkSaveLeaseUpdates, onDelet
       <div>
         <div className="lease-stores-head">
           <p className="section-label">Stores</p>
+          <button type="button" className="btn-secondary" onClick={() => setScanOpen(true)}>🔍 Scan Documents for Dates</button>
           <button type="button" className="btn-primary" onClick={() => setBulkOpen(true)}>⬆ Bulk Upload Documents</button>
         </div>
         <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
@@ -2268,6 +2443,15 @@ function LeasesTab({ leases, token, onSaveLease, onBulkSaveLeaseUpdates, onDelet
         <BulkLeaseUploadModal
           leases={leases} token={token}
           onClose={() => setBulkOpen(false)}
+          onApply={onBulkSaveLeaseUpdates}
+          showToast={showToast}
+        />
+      )}
+
+      {scanOpen && (
+        <BulkLeaseScanModal
+          leases={leases} token={token}
+          onClose={() => setScanOpen(false)}
           onApply={onBulkSaveLeaseUpdates}
           showToast={showToast}
         />
