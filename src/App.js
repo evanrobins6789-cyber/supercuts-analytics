@@ -1459,7 +1459,7 @@ function NewsPostModal({ post, onClose, hasSignedOff, onSignOff }) {
         {post.requireSignoff && (
           <label className={`news-signoff-check news-signoff-confirm ${hasSignedOff ? 'news-signoff-confirm--done' : ''}`}>
             <input type="checkbox" checked={!!hasSignedOff} disabled={hasSignedOff} onChange={() => onSignOff && onSignOff(post.id)} />
-            <span>{hasSignedOff ? '✅ You confirmed you read this' : 'Check to confirm you’ve read this — tracked for the owner in Setup'}</span>
+            <span>{hasSignedOff ? '✅ You confirmed you read this' : 'Check to confirm you’ve read this'}</span>
           </label>
         )}
       </div>
