@@ -1,51 +1,82 @@
 // Vercel serverless function — owner-only. Reads a store's already-uploaded
-// lease documents straight out of Supabase Storage, sends them to Claude as
-// native PDF input, and asks it to determine the CURRENT lease term
-// (start/end) by reasoning across renewals/amendments — the piece the bulk
-// upload's filename-based date extraction can't do for real Leasecake
-// "Export" folder documents (raw filenames like "8150 2nd Renewal 2003.pdf",
-// no dates encoded — see the 2026-08-16 Leases entry in HANDOFF.md).
+// lease documents straight out of Supabase Storage and tries to pull the
+// current lease term (start/end) out of their text with pattern matching —
+// no Claude/Anthropic call, no API spend. This replaced an earlier version
+// that sent PDFs to Claude for the same job; the user asked for a free
+// alternative, so this trades the LLM's cross-document reasoning for plain
+// keyword-proximity + date-regex heuristics against each PDF's extracted
+// text (`pdf-parse`, pure JS, no native deps — safe on Vercel's Node
+// runtime). Real limitation, stated plainly in the result: any document
+// that's a scanned image with no text layer (common for pre-2000s leases)
+// yields nothing here — those still need manual entry.
 import { createServiceClient, requireSession } from '../src/serverAuth.js';
+import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 
 const BUCKET = 'lease-documents';
-// Stay comfortably under Claude's 32MB request limit — base64 inflates each
-// file ~33%, and multiple documents plus prompt text share one request.
-const MAX_TOTAL_ENCODED_BYTES = 24 * 1024 * 1024;
+// Guard against a pathological huge file spiking function memory/time —
+// generous, since there's no Claude request-size limit to respect anymore.
+const MAX_FILE_BYTES = 30 * 1024 * 1024;
 
-const RESULT_SCHEMA = {
-  type: 'object',
-  properties: {
-    termStart: {
-      anyOf: [{ type: 'string' }, { type: 'null' }],
-      description: 'Current lease term commencement date, ISO 8601 (YYYY-MM-DD), or null if not determinable from these documents.',
-    },
-    termEnd: {
-      anyOf: [{ type: 'string' }, { type: 'null' }],
-      description: 'Current lease term expiration date, ISO 8601 (YYYY-MM-DD), or null if not determinable from these documents.',
-    },
-    confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
-    reasoning: {
-      type: 'string',
-      description: 'One or two sentences on how the term was determined — especially which document (renewal/amendment/extension) set the CURRENT term, and why it supersedes any earlier one.',
-    },
-    sourceDocument: {
-      anyOf: [{ type: 'string' }, { type: 'null' }],
-      description: 'The filename of the document that established the current term, or null if none clearly did.',
-    },
-  },
-  required: ['termStart', 'termEnd', 'confidence', 'reasoning', 'sourceDocument'],
-  additionalProperties: false,
+const MONTH_PATTERN = '(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept|Sep|Oct|Nov|Dec)\\.?';
+// Three date shapes: "Month Day, Year", "Day (of) Month, Year", "MM/DD/YYYY"
+// — all requiring a 4-digit year, so there's no 2-digit-year century
+// ambiguity to guess at.
+const DATE_REGEX = new RegExp(
+  `${MONTH_PATTERN}\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})` +
+  `|(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:day\\s+of\\s+)?${MONTH_PATTERN}\\.?,?\\s+(\\d{4})` +
+  `|(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})`,
+  'gi'
+);
+
+const MONTH_INDEX = {
+  january: 0, jan: 0, february: 1, feb: 1, march: 2, mar: 2, april: 3, apr: 3,
+  may: 4, june: 5, jun: 5, july: 6, jul: 6, august: 7, aug: 7,
+  september: 8, sep: 8, sept: 8, october: 9, oct: 9, november: 10, nov: 10, december: 11, dec: 11,
 };
+
+function isoFromParts(year, monthIdx, day) {
+  if (monthIdx < 0 || monthIdx > 11 || day < 1 || day > 31 || year < 1900 || year > 2100) return null;
+  return `${year}-${String(monthIdx + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+// One match of DATE_REGEX → ISO date, or null if the parts don't make sense
+// (e.g. day 32, month 13 from a false-positive numeric match).
+function matchToISO(m) {
+  if (m[3]) return isoFromParts(Number(m[3]), MONTH_INDEX[m[1].toLowerCase().replace('.', '')] ?? -1, Number(m[2]));
+  if (m[6]) return isoFromParts(Number(m[6]), MONTH_INDEX[m[5].toLowerCase().replace('.', '')] ?? -1, Number(m[4]));
+  if (m[9]) return isoFromParts(Number(m[9]), Number(m[7]) - 1, Number(m[8]));
+  return null;
+}
+
+const START_KEYWORDS = /commenc\w*|effective\s+date|term\s+shall\s+begin|lease\s+shall\s+begin/i;
+const END_KEYWORDS = /expir\w*|terminat\w*|end\s+of\s+(?:the\s+)?term|shall\s+continue\s+(?:until|through)|extend\w*\s+(?:the\s+term\s+)?(?:through|until|to)/i;
+const KEYWORD_WINDOW = 70; // chars of context checked on each side of a date match
+
+// Scans one document's text for start/end lease-term date candidates,
+// classified by whatever start/end keyword appears within KEYWORD_WINDOW
+// characters of the date. A date with no nearby keyword is dropped —
+// documents are full of unrelated dates (signature blocks, notarization,
+// recording stamps) and an unclassified date is just noise.
+function findDateCandidates(text) {
+  const starts = [];
+  const ends = [];
+  let m;
+  DATE_REGEX.lastIndex = 0;
+  while ((m = DATE_REGEX.exec(text))) {
+    const iso = matchToISO(m);
+    if (!iso) continue;
+    const from = Math.max(0, m.index - KEYWORD_WINDOW);
+    const to = Math.min(text.length, m.index + m[0].length + KEYWORD_WINDOW);
+    const context = text.slice(from, to);
+    if (END_KEYWORDS.test(context)) ends.push(iso);
+    else if (START_KEYWORDS.test(context)) starts.push(iso);
+  }
+  return { starts, ends };
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
-    return;
-  }
-
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    res.status(500).json({ error: 'AI is not configured yet — the ANTHROPIC_API_KEY environment variable is missing on this deployment.' });
     return;
   }
 
@@ -55,7 +86,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  const { token, storeCode, storeName, files } = req.body || {};
+  const { token, storeCode, files } = req.body || {};
   const { employee, error: sessionError } = await requireSession(supabase, token);
   if (!employee) {
     res.status(401).json({ error: sessionError });
@@ -72,9 +103,15 @@ export default async function handler(req, res) {
   }
 
   try {
-    const docBlocks = [];
     const skipped = [];
-    let totalEncodedBytes = 0;
+    const noTextDocs = [];
+    // Best end candidate = furthest-out date found anywhere (a later
+    // renewal/amendment always pushes expiration further into the future,
+    // same "furthest end date wins" rule the filename-based bulk-upload
+    // fill already uses). Best start candidate = earliest date found
+    // (the original commencement date isn't reset by later amendments).
+    let bestEnd = null; // { date, doc }
+    let bestStart = null; // { date, doc }
 
     for (const file of files) {
       if (!file?.path || !file?.name) continue;
@@ -85,62 +122,53 @@ export default async function handler(req, res) {
       if (!fileResp.ok) { skipped.push({ name: file.name, reason: `download failed (${fileResp.status})` }); continue; }
 
       const buf = Buffer.from(await fileResp.arrayBuffer());
-      const encodedSize = Math.ceil(buf.length * 4 / 3); // base64 inflation
-      if (totalEncodedBytes + encodedSize > MAX_TOTAL_ENCODED_BYTES) {
-        skipped.push({ name: file.name, reason: 'skipped — over the per-scan size budget' });
+      if (buf.length > MAX_FILE_BYTES) { skipped.push({ name: file.name, reason: 'skipped — file too large to scan' }); continue; }
+
+      let text = '';
+      try {
+        const parsed = await pdfParse(buf);
+        text = parsed.text || '';
+      } catch (err) {
+        skipped.push({ name: file.name, reason: `couldn't read PDF (${err.message})` });
         continue;
       }
-      totalEncodedBytes += encodedSize;
-      docBlocks.push({
-        type: 'document',
-        source: { type: 'base64', media_type: 'application/pdf', data: buf.toString('base64') },
-        title: file.name,
-      });
+
+      if (text.trim().length < 20) {
+        // No real text layer — almost always a scanned image page with no OCR.
+        noTextDocs.push(file.name);
+        continue;
+      }
+
+      const { starts, ends } = findDateCandidates(text);
+      ends.forEach(date => { if (!bestEnd || date > bestEnd.date) bestEnd = { date, doc: file.name }; });
+      starts.forEach(date => { if (!bestStart || date < bestStart.date) bestStart = { date, doc: file.name }; });
     }
 
-    if (!docBlocks.length) {
-      res.status(200).json({ ok: true, result: null, skipped, message: 'None of this store’s documents could be read.' });
+    if (!bestStart && !bestEnd) {
+      const reason = noTextDocs.length
+        ? `No lease-term dates could be located — ${noTextDocs.length} of ${files.length} document(s) had no extractable text (likely scanned images), and the rest didn't contain a recognizable commencement/expiration date near a date.`
+        : `No lease-term dates could be located in these documents' text.`;
+      res.status(200).json({ ok: true, result: null, skipped, noTextDocs, message: reason });
       return;
     }
 
-    const promptText = `These are all the real-estate lease documents on file for the ${storeName || `store ${storeCode}`} location (a retail salon lease) — they may include the original lease, amendments, renewals, extensions, and assignments, in no particular order, with filenames as they came from the source export (not necessarily descriptive of contents). Determine the CURRENT effective lease term: the commencement/start date and the expiration/end date that apply RIGHT NOW, accounting for any renewal, amendment, or extension that supersedes an earlier term. If documents conflict, prefer whichever renewal/amendment/extension is dated latest or explicitly extends the term furthest into the future. If you cannot determine a reliable current term from these documents, return null for both dates rather than guessing.`;
+    const parts = [];
+    if (bestStart) parts.push(`commencement date found in "${bestStart.doc}"`);
+    if (bestEnd) parts.push(`expiration date found in "${bestEnd.doc}" (the furthest-out end date across all documents, on the theory that's the most recent renewal/amendment)`);
+    if (noTextDocs.length) parts.push(`${noTextDocs.length} document(s) had no extractable text and weren't scanned`);
 
-    const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
+    res.status(200).json({
+      ok: true,
+      skipped,
+      noTextDocs,
+      result: {
+        termStart: bestStart ? bestStart.date : null,
+        termEnd: bestEnd ? bestEnd.date : null,
+        confidence: 'low',
+        reasoning: `Pattern-matched from document text, not read by a person or AI — double-check against the source document before trusting it. ${parts.join('; ')}.`,
+        sourceDocument: bestEnd ? bestEnd.doc : (bestStart ? bestStart.doc : null),
       },
-      body: JSON.stringify({
-        model: 'claude-opus-5',
-        max_tokens: 4096,
-        output_config: { format: { type: 'json_schema', schema: RESULT_SCHEMA } },
-        messages: [{
-          role: 'user',
-          content: [...docBlocks, { type: 'text', text: promptText }],
-        }],
-      }),
     });
-
-    if (!anthropicRes.ok) {
-      const errText = await anthropicRes.text();
-      res.status(502).json({ error: `The AI service returned an error: ${errText.slice(0, 300)}` });
-      return;
-    }
-
-    const data = await anthropicRes.json();
-    if (data.stop_reason === 'refusal') {
-      res.status(200).json({ ok: true, result: null, skipped, message: 'The AI declined to process these documents.' });
-      return;
-    }
-
-    const textBlock = (data.content || []).find(b => b.type === 'text');
-    let result = null;
-    if (textBlock) {
-      try { result = JSON.parse(textBlock.text); } catch { result = null; }
-    }
-    res.status(200).json({ ok: true, result, skipped });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

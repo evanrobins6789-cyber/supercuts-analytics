@@ -104,11 +104,13 @@ export function leaseDeleteFile(token, path) {
   return postJson('/api/lease-files', { token, action: 'delete', path });
 }
 
-// Has Claude read a store's already-uploaded lease documents (native PDF
-// input) and determine the current lease term by reasoning across
-// renewals/amendments — for real Leasecake exports whose filenames carry no
-// dates, this is the only way to auto-fill term dates (see api/scan-lease-dates.js).
-// `files` is that store's `record.files` array ({ path, name }).
+// Pulls a store's already-uploaded lease documents' text (free, local
+// pdf-parse + regex — no AI/API cost) and looks for a commencement/
+// expiration date near the right keywords — for real Leasecake exports
+// whose filenames carry no dates, this is the only automated way to fill
+// term dates short of hand-entry (see api/scan-lease-dates.js). `files` is
+// that store's `record.files` array ({ path, name }). `storeName` isn't
+// used server-side anymore but is harmless to keep passing.
 export function scanLeaseDates(token, storeCode, storeName, files) {
   return postJson('/api/scan-lease-dates', { token, storeCode, storeName, files });
 }

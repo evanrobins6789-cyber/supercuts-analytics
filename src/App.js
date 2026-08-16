@@ -2278,7 +2278,7 @@ function BulkLeaseScanModal({ leases, token, onClose, onApply, showToast }) {
         {phase === 'pick' && (
           <div className="lease-bulk-pick">
             <p className="section-hint">
-              Has Claude read through each store's already-uploaded lease documents and fill in a missing term start/end date, reasoning across renewals and amendments to find the current term. Never overwrites a date already on file — only fills in what's blank.
+              Scans each store's already-uploaded lease documents for a commencement/expiration date near the term end that's blank — free, local text matching, no AI involved. Picks the furthest-out expiration date found (the most recent renewal/amendment) and the earliest commencement date. Documents that are scanned images with no text layer can't be read this way. Never overwrites a date already on file — only fills in what's blank, and always leaves you a review step before saving.
             </p>
             {!candidates.length ? (
               <p className="empty-note">No stores currently have documents on file with a missing term start or end date.</p>

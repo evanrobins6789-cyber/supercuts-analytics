@@ -3,14 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "bcryptjs": "^2.4.3",
+    "chart.js": "^4.4.1",
+    "pdf-parse": "^1.1.1",
     "react": "^18.2.0",
+    "react-chartjs-2": "^5.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",
-    "chart.js": "^4.4.1",
-    "react-chartjs-2": "^5.2.0",
-    "xlsx": "^0.18.5",
-    "@supabase/supabase-js": "^2.39.0",
-    "bcryptjs": "^2.4.3"
+    "xlsx": "^0.18.5"
   },
   "scripts": {
     "start": "react-scripts start",
@@ -18,7 +19,13 @@
     "preview": "serve -s build"
   },
   "browserslist": {
-    "production": [">0.2%", "not dead", "not op_mini all"],
-    "development": ["last 1 chrome version"]
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version"
+    ]
   }
 }
