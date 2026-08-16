@@ -894,10 +894,21 @@ function NewsComposer({ initial, onSubmit, onCancel, onImageError, existingGroup
   const [group, setGroup] = useState(initial?.group || '');
   const [link, setLink] = useState(initial?.link || '');
   const [requireSignoff, setRequireSignoff] = useState(initial?.requireSignoff || false);
+  // A pasted link like "engage.attensi.com/…" has no scheme — used to get
+  // rejected outright by the field's old `type="url"` browser validation
+  // ("please enter a URL"). Now plain text, normalized here instead: a
+  // scheme-less value is treated as https (also needed for the href to
+  // actually be absolute wherever the link is rendered as a real <a>, not
+  // just to satisfy validation).
+  const normalizeLink = raw => {
+    const trimmed = (raw || '').trim();
+    if (!trimmed) return null;
+    return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  };
   const submit = e => {
     e.preventDefault();
     if (!title.trim()) return;
-    onSubmit({ title: title.trim(), body: body.trim(), headerImage: image, pdf, group: group.trim() || null, link: link.trim() || null, requireSignoff });
+    onSubmit({ title: title.trim(), body: body.trim(), headerImage: image, pdf, group: group.trim() || null, link: normalizeLink(link), requireSignoff });
     if (!initial) { setTitle(''); setBody(''); setImage(null); setPdf(null); setGroup(''); setLink(''); setRequireSignoff(false); }
   };
   return (
@@ -908,7 +919,7 @@ function NewsComposer({ initial, onSubmit, onCancel, onImageError, existingGroup
       <datalist id="news-group-options">
         {(existingGroups || []).map(g => <option key={g} value={g} />)}
       </datalist>
-      <input className="homepage-input" type="url" placeholder="Website link (optional) — e.g. https://…" value={link} onChange={e => setLink(e.target.value)} />
+      <input className="homepage-input" type="text" placeholder="Website link (optional) — e.g. https://… or just the address" value={link} onChange={e => setLink(e.target.value)} onBlur={() => setLink(l => normalizeLink(l) || '')} />
       <ImageUploadField value={image} onChange={setImage} onError={onImageError} label="Header image (optional)" />
       <PdfUploadField value={pdf} onChange={setPdf} onError={onImageError} />
       <label className="news-signoff-check">
