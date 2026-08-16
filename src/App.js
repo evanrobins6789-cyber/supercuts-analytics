@@ -287,6 +287,14 @@ function fmtMonthLong(monthKey) {
   if (!y || !m) return monthKey;
   return `${MONTH_NAMES[m - 1]} ${y}`;
 }
+// True if `iso` (a date or full timestamp) is within the last `days` days —
+// used to badge recently-posted news as "New" on the Homepage carousel.
+function isWithinDays(iso, days) {
+  if (!iso) return false;
+  const then = new Date(iso.length <= 10 ? `${iso}T00:00:00` : iso);
+  if (isNaN(then)) return false;
+  return (Date.now() - then.getTime()) / 86400000 <= days;
+}
 // "2026-05-01" + "2026-05-07" -> "May 1 – May 7, 2026" (or across months/years, spells both out)
 function fmtDateRangeLong(startISO, endISO) {
   if (!startISO || !endISO) return '';
@@ -884,11 +892,13 @@ function NewsComposer({ initial, onSubmit, onCancel, onImageError, existingGroup
   const [image, setImage] = useState(initial?.headerImage || null);
   const [pdf, setPdf] = useState(initial?.pdf || null);
   const [group, setGroup] = useState(initial?.group || '');
+  const [link, setLink] = useState(initial?.link || '');
+  const [requireSignoff, setRequireSignoff] = useState(initial?.requireSignoff || false);
   const submit = e => {
     e.preventDefault();
     if (!title.trim()) return;
-    onSubmit({ title: title.trim(), body: body.trim(), headerImage: image, pdf, group: group.trim() || null });
-    if (!initial) { setTitle(''); setBody(''); setImage(null); setPdf(null); setGroup(''); }
+    onSubmit({ title: title.trim(), body: body.trim(), headerImage: image, pdf, group: group.trim() || null, link: link.trim() || null, requireSignoff });
+    if (!initial) { setTitle(''); setBody(''); setImage(null); setPdf(null); setGroup(''); setLink(''); setRequireSignoff(false); }
   };
   return (
     <form className="homepage-composer" onSubmit={submit}>
@@ -898,8 +908,13 @@ function NewsComposer({ initial, onSubmit, onCancel, onImageError, existingGroup
       <datalist id="news-group-options">
         {(existingGroups || []).map(g => <option key={g} value={g} />)}
       </datalist>
+      <input className="homepage-input" type="url" placeholder="Website link (optional) — e.g. https://…" value={link} onChange={e => setLink(e.target.value)} />
       <ImageUploadField value={image} onChange={setImage} onError={onImageError} label="Header image (optional)" />
       <PdfUploadField value={pdf} onChange={setPdf} onError={onImageError} />
+      <label className="news-signoff-check">
+        <input type="checkbox" checked={requireSignoff} onChange={e => setRequireSignoff(e.target.checked)} />
+        <span>Require District Leader sign-off (they must check a box confirming they read it — tracked in Setup → Homepage)</span>
+      </label>
       <div className="homepage-composer-actions">
         <button type="submit" className="btn-primary homepage-post-btn" disabled={!title.trim()}>{initial ? 'Save changes' : 'Post update'}</button>
         {initial && <button type="button" className="homepage-cancel-btn" onClick={onCancel}>Cancel</button>}
@@ -966,7 +981,7 @@ function EventComposer({ initial, onSubmit, onCancel, onImageError }) {
 // `onClick` (e.g. "open this post on the News tab") takes priority over
 // `onImageClick` (the image lightbox, used by Events) — a card is one or the
 // other, never both, so there's no ambiguity about what a tap does.
-function HomepageMediaCard({ image, badge, title, date, desc, onImageClick, onClick, compact }) {
+function HomepageMediaCard({ image, badge, title, date, desc, onImageClick, onClick, compact, link, isNew }) {
   const clickable = !!(onClick || (image && onImageClick));
   const handleClick = onClick ? onClick : (image ? () => onImageClick(image) : undefined);
   return (
@@ -978,6 +993,7 @@ function HomepageMediaCard({ image, badge, title, date, desc, onImageClick, onCl
       tabIndex={clickable ? 0 : undefined}
       onKeyDown={clickable ? e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(); } } : undefined}
     >
+      {isNew && <span className="homepage-featured-new">🆕 New</span>}
       <div className="homepage-featured-overlay">
         {badge && <span className="homepage-featured-badge">{badge}</span>}
         <p className="homepage-featured-title">{title}</p>
@@ -985,6 +1001,11 @@ function HomepageMediaCard({ image, badge, title, date, desc, onImageClick, onCl
         {desc && <p className="homepage-featured-desc">{desc}</p>}
         {onClick && <span className="homepage-featured-zoom-hint">📖 Tap to read full post</span>}
         {!onClick && clickable && <span className="homepage-featured-zoom-hint">🔍 Tap to view image</span>}
+        {link && (
+          <a className="homepage-featured-link" href={link} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>
+            🔗 Visit link
+          </a>
+        )}
       </div>
     </div>
   );
@@ -1238,6 +1259,54 @@ const HOMEPAGE_BITMOJI_SLOTS = [
   { key: 'corevalues', corner: 'bottom-right', pool: 'curious' },
 ];
 
+// Cycles through every news post 3-at-a-time, sliding one at a time (so a
+// full advance shows 2 of the previous 3 plus 1 new one) — wraps around
+// forever rather than stopping at the end. Auto-advances on a timer, with
+// manual prev/next for anyone who doesn't want to wait for the next slide.
+const NEWS_CAROUSEL_WINDOW = 3;
+const NEWS_CAROUSEL_INTERVAL_MS = 7000;
+function NewsCarousel({ news, onOpenPost }) {
+  const [index, setIndex] = useState(0);
+  const total = news.length;
+  const canCycle = total > NEWS_CAROUSEL_WINDOW;
+
+  useEffect(() => {
+    if (!canCycle) return;
+    const id = setInterval(() => setIndex(i => (i + 1) % total), NEWS_CAROUSEL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [canCycle, total]);
+
+  // Index can outlive a shrinking list (a post gets deleted mid-cycle) —
+  // clamp back in range rather than reading past the end.
+  useEffect(() => { if (index >= total && total > 0) setIndex(0); }, [index, total]);
+
+  if (!total) return null;
+  const windowSize = Math.min(NEWS_CAROUSEL_WINDOW, total);
+  const visible = Array.from({ length: windowSize }, (_, k) => news[(index + k) % total]);
+
+  return (
+    <div className="news-carousel">
+      {canCycle && (
+        <button type="button" className="news-carousel-nav news-carousel-nav--prev" onClick={() => setIndex(i => (i - 1 + total) % total)} aria-label="Previous">‹</button>
+      )}
+      <div className={`news-carousel-track news-carousel-track--${windowSize}`}>
+        {visible.map(n => (
+          <HomepageMediaCard
+            key={n.id} image={n.headerImage}
+            badge={n.pdf ? '📄 PDF' : undefined}
+            isNew={isWithinDays(n.createdAt || n.date, 10)}
+            title={n.title} date={fmtDateLong(n.date)} desc={n.body} link={n.link}
+            onClick={() => onOpenPost(n.id)}
+          />
+        ))}
+      </div>
+      {canCycle && (
+        <button type="button" className="news-carousel-nav news-carousel-nav--next" onClick={() => setIndex(i => (i + 1) % total)} aria-label="Next">›</button>
+      )}
+    </div>
+  );
+}
+
 function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore, news, events, reviews, onOpenNews, canAward, onAward }) {
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
@@ -1293,11 +1362,7 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
           <div className="homepage-section">
             <p className="section-label">📣 News &amp; Updates</p>
             {sortedNews.length ? (
-              <div className="homepage-card-grid">
-                {sortedNews.map(n => (
-                  <HomepageMediaCard key={n.id} image={n.headerImage} badge={n.pdf ? '📄 PDF' : undefined} title={n.title} date={fmtDateLong(n.date)} desc={n.body} onClick={() => onOpenNews(n.id)} />
-                ))}
-              </div>
+              <NewsCarousel news={sortedNews} onOpenPost={onOpenNews} />
             ) : <p className="empty-note">No news posted yet — post one from Setup → Homepage.</p>}
             <BitmojiPeek img={bitmojiImg} active={bitmojiKey === 'news'} corner="top-right" />
           </div>
@@ -1355,7 +1420,7 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
 // Full-post overlay opened from a News tile tap (or a Homepage card deep
 // link) — the tiles themselves are compact, so this is where the full
 // header image, body text, and PDF actually get read.
-function NewsPostModal({ post, onClose }) {
+function NewsPostModal({ post, onClose, hasSignedOff, onSignOff }) {
   useEffect(() => {
     if (!post) return;
     const onKey = e => { if (e.key === 'Escape') onClose(); };
@@ -1371,11 +1436,20 @@ function NewsPostModal({ post, onClose }) {
         <p className="news-post-date">{fmtDateLong(post.date)}{post.group ? ` · 🏷 ${post.group}` : ''}</p>
         <p className="news-post-title">{post.title}</p>
         {post.body && <p className="news-post-text">{post.body}</p>}
+        {post.link && (
+          <a className="news-post-pdf-link" href={post.link} target="_blank" rel="noopener noreferrer">🔗 Visit link</a>
+        )}
         {post.pdf && (
           <div className="news-post-pdf">
             <iframe className="news-post-pdf-frame" src={post.pdf.dataUrl} title={post.pdf.name} />
             <a className="news-post-pdf-link" href={post.pdf.dataUrl} download={post.pdf.name}>⬇ Download {post.pdf.name}</a>
           </div>
+        )}
+        {post.requireSignoff && (
+          <label className={`news-signoff-check news-signoff-confirm ${hasSignedOff ? 'news-signoff-confirm--done' : ''}`}>
+            <input type="checkbox" checked={!!hasSignedOff} disabled={hasSignedOff} onChange={() => onSignOff && onSignOff(post.id)} />
+            <span>{hasSignedOff ? '✅ You confirmed you read this' : 'Check to confirm you’ve read this — tracked for the owner in Setup'}</span>
+          </label>
         )}
       </div>
     </div>
@@ -1458,7 +1532,7 @@ function HsaClassForm({ initial, existingEventTypes, submitLabel, onSubmit, onCa
   );
 }
 
-function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemoveSignup, onEditSignup, onEditClass, existingEventTypes }) {
+function HsaClassCard({ cls, signups, isOwner, canEditAny, currentUserName, onSignUp, onRemoveSignup, onEditSignup, onEditClass, existingEventTypes }) {
   const [signingUp, setSigningUp] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editingSignupId, setEditingSignupId] = useState(null);
@@ -1510,9 +1584,10 @@ function HsaClassCard({ cls, signups, isOwner, currentUserName, onSignUp, onRemo
               // against `enteredBy` (the logged-in user who filled out the
               // form, which can differ from `name` if they signed someone
               // else up). Entries from before this field existed fall back
-              // to matching on `name` itself. Owner can always edit/remove.
+              // to matching on `name` itself. Owner and District Leaders can
+              // always edit any entry, not just their own.
               const submitter = s.enteredBy || s.name;
-              const canEdit = isOwner || (currentUserName && normalizeName(submitter) === normalizeName(currentUserName));
+              const canEdit = canEditAny || (currentUserName && normalizeName(submitter) === normalizeName(currentUserName));
               if (editingSignupId === s.id) {
                 return (
                   <li key={s.id} className="hsa-roster-editing">
@@ -1547,6 +1622,9 @@ function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup, onE
   const [addingClass, setAddingClass] = useState(false);
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const isOwner = currentUser.role === 'owner';
+  // District Leaders can edit any sign-up entry too, not just ones they
+  // personally submitted — same privilege as owner for this one action.
+  const canEditAny = isOwner || currentUser.role === 'district_leader';
 
   const allHsaEvents = useMemo(() => events.filter(ev => ev.source === 'hsa'), [events]);
   const existingEventTypes = useMemo(() => [...new Set(allHsaEvents.map(ev => ev.eventType))].sort(), [allHsaEvents]);
@@ -1576,7 +1654,7 @@ function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup, onE
     <HsaClassCard
       key={cls.id} cls={cls}
       signups={hsaSignups.filter(s => s.classId === cls.id)}
-      isOwner={isOwner} currentUserName={currentUser.name}
+      isOwner={isOwner} canEditAny={canEditAny} currentUserName={currentUser.name}
       onSignUp={onSignUp} onRemoveSignup={onRemoveSignup} onEditSignup={onEditSignup}
       onEditClass={onEditClass} existingEventTypes={existingEventTypes}
     />
@@ -2196,8 +2274,9 @@ function LeasesTab({ leases, token, onSaveLease, onBulkSaveLeaseUpdates, onDelet
 // post's modal directly — immediately consumed via `onConsumeOpenNews` so
 // leaving and returning to this tab (which remounts it) doesn't see a
 // still-set `openNews` and reopen the same post uninvited.
-function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews }) {
+function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews, currentUser, newsReads, onSignOff }) {
   const [selectedPost, setSelectedPost] = useState(null);
+  const hasSignedOff = selectedPost && (newsReads || []).some(r => r.newsId === selectedPost.id && normalizeName(r.userName) === normalizeName(currentUser?.name || ''));
 
   useEffect(() => {
     if (!openNews?.id) return;
@@ -2245,13 +2324,14 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews }) {
             {b.posts.map(n => (
               <HomepageMediaCard
                 key={n.id} compact image={n.headerImage} badge={n.pdf ? '📄 PDF' : undefined}
+                isNew={isWithinDays(n.createdAt || n.date, 10)}
                 title={n.title} date={fmtDateLong(n.date)} onClick={() => setSelectedPost(n)}
               />
             ))}
           </div>
         </div>
       )) : <p className="empty-note">No news posted yet — post one from Setup → Homepage.</p>}
-      <NewsPostModal post={selectedPost} onClose={() => setSelectedPost(null)} />
+      <NewsPostModal post={selectedPost} onClose={() => setSelectedPost(null)} hasSignedOff={hasSignedOff} onSignOff={onSignOff} />
     </div>
   );
 }
@@ -3830,7 +3910,7 @@ function NewsGroupManager({ groups, news, onRename, onDelete, onReorder, onSetCo
 // landing page stays read-only and can't be edited by accident — same split
 // as Goals/Managers (edit in Setup, display everywhere else).
 function HomepageAdminTab({
-  news, events, newsGroups, onAddNews, onUpdateNews, onDeleteNews, onAddEvent, onUpdateEvent, onDeleteEvent,
+  news, events, newsGroups, newsReads, onAddNews, onUpdateNews, onDeleteNews, onAddEvent, onUpdateEvent, onDeleteEvent,
   onRenameNewsGroup, onDeleteNewsGroup, onReorderNewsGroup, onSetNewsGroupColor, onImageError,
 }) {
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '')), [news]);
@@ -3877,7 +3957,7 @@ function HomepageAdminTab({
                 {n.headerImage && <img className="homepage-admin-thumb" src={n.headerImage} alt="" />}
                 <div className="homepage-admin-row-body">
                   <p className="homepage-admin-row-title">{n.title}</p>
-                  <p className="homepage-admin-row-date">{fmtDateLong(n.date)}{n.group ? ` · 🏷 ${n.group}` : ''}{n.pdf ? ' · 📄 PDF attached' : ''}</p>
+                  <p className="homepage-admin-row-date">{fmtDateLong(n.date)}{n.group ? ` · 🏷 ${n.group}` : ''}{n.pdf ? ' · 📄 PDF attached' : ''}{n.link ? ' · 🔗 Link' : ''}{n.requireSignoff ? ' · ✅ Sign-off required' : ''}</p>
                 </div>
                 <button className="homepage-edit-btn" onClick={() => setEditingNewsId(n.id)} title="Edit">✎</button>
                 <button className="homepage-delete-btn" onClick={() => onDeleteNews(n.id)} title="Delete">✕</button>
@@ -3910,6 +3990,49 @@ function HomepageAdminTab({
             {!sortedEvents.length && <p className="empty-note">No events logged yet.</p>}
           </div>
         </div>
+      </div>
+
+      <NewsSignoffTracker news={news} newsReads={newsReads} />
+    </div>
+  );
+}
+
+// Owner-facing readout, for posts marked "Require District Leader sign-off"
+// on the News composer — who's confirmed reading it (any role, since anyone
+// can check the box) plus, specifically, which of the current District
+// Leaders (LEADER_ROSTER_SECTIONS, the curated DL list — not the login
+// roster, which can include people who've left) haven't yet.
+function NewsSignoffTracker({ news, newsReads }) {
+  const trackedPosts = useMemo(
+    () => [...(news || [])].filter(n => n.requireSignoff).sort((a, b) => (b.date || '').localeCompare(a.date || '')),
+    [news]
+  );
+  const dlNames = useMemo(
+    () => LEADER_ROSTER_SECTIONS.find(sec => sec.role === 'District Leaders')?.leaders.map(l => l.name) || [],
+    []
+  );
+  if (!trackedPosts.length) return null;
+  return (
+    <div className="homepage-section">
+      <p className="section-label">✅ Sign-off Tracking</p>
+      <p className="section-hint">Posts marked "Require District Leader sign-off" — who has checked the box confirming they read it.</p>
+      <div className="signoff-tracker-list">
+        {trackedPosts.map(n => {
+          const reads = (newsReads || []).filter(r => r.newsId === n.id).sort((a, b) => (a.readAt || '').localeCompare(b.readAt || ''));
+          const confirmedNames = new Set(reads.map(r => normalizeName(r.userName)));
+          const pendingDLs = dlNames.filter(name => !confirmedNames.has(normalizeName(name)));
+          return (
+            <div className="signoff-post-row" key={n.id}>
+              <p className="signoff-post-title">{n.title} <span className="section-hint">({fmtDateLong(n.date)})</span></p>
+              <p className="signoff-confirmed">
+                ✅ Confirmed ({reads.length}): {reads.length ? reads.map(r => `${r.userName}${ROLE_LABELS[r.role] ? ` (${ROLE_LABELS[r.role]})` : ''}`).join(', ') : '—'}
+              </p>
+              <p className="signoff-pending">
+                {pendingDLs.length ? `⏳ Still waiting on: ${pendingDLs.join(', ')}` : '🎉 Every District Leader has confirmed.'}
+              </p>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -5137,7 +5260,7 @@ function topEmployeeLine(employees, n = 5) {
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
-function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases) {
+function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads) {
   const employeesForCodeCtx = code => {
     if (report && !isReportStale(report)) return report.stores.find(st => st.code === code)?.employees || null;
     return fallbackEmployeesByStore?.[code] || null;
@@ -5172,7 +5295,14 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   if (news && news.length) {
     lines.push('NEWS & UPDATES posted on the Homepage/News tab (most recent first):');
     [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '')).forEach(n => {
-      lines.push(`${n.date}: ${n.title}${n.group ? ` [group: ${n.group}]` : ''}${n.body ? ` — ${n.body}` : ''}${n.pdf ? ' [has a PDF attachment]' : ''}`);
+      let signoffNote = '';
+      if (n.requireSignoff) {
+        const dlNames = LEADER_ROSTER_SECTIONS.find(sec => sec.role === 'District Leaders')?.leaders.map(l => l.name) || [];
+        const confirmed = new Set((newsReads || []).filter(r => r.newsId === n.id).map(r => normalizeName(r.userName)));
+        const pending = dlNames.filter(name => !confirmed.has(normalizeName(name)));
+        signoffNote = ` [requires DL sign-off — ${pending.length ? `still waiting on ${pending.join(', ')}` : 'all DLs confirmed'}]`;
+      }
+      lines.push(`${n.date}: ${n.title}${n.group ? ` [group: ${n.group}]` : ''}${n.body ? ` — ${n.body}` : ''}${n.pdf ? ' [has a PDF attachment]' : ''}${n.link ? ` [link: ${n.link}]` : ''}${signoffNote}`);
     });
     lines.push('');
   }
@@ -5545,7 +5675,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   return lines.join('\n');
 }
 
-function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases }) {
+function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -5558,7 +5688,7 @@ function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases);
+      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads);
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -6541,6 +6671,7 @@ export default function App() {
   const [goldCombs, setGoldCombs] = useState({});
   const [news, setNews] = useState([]);
   const [newsGroups, setNewsGroups] = useState([]); // [{name, color}], manager-curated order
+  const [newsReads, setNewsReads] = useState([]); // [{id, newsId, userName, role, readAt}] — sign-off confirmations for posts with requireSignoff
   const [events, setEvents] = useState([]);
   const [hsaSignups, setHsaSignups] = useState([]); // [{id, classId, name, store, signedUpAt}]
   const [uploadingHsaSchedule, setUploadingHsaSchedule] = useState(false);
@@ -6602,10 +6733,10 @@ export default function App() {
     const token = currentUser.token;
     Promise.all([
       loadScoped('stylist_report', token), loadData('employee_start_dates'), loadScoped('store_goals', token), loadScoped('store_managers', token), loadScoped('milestone_goals', token), loadScoped('reviews', token), loadData('review_notes'), loadData('review_gold_combs'),
-      loadData('homepage_news'), loadData('homepage_events'), loadData('homepage_news_groups'), loadData('hsa_signups'), loadScoped('store_leases', token),
+      loadData('homepage_news'), loadData('homepage_events'), loadData('homepage_news_groups'), loadData('homepage_news_reads'), loadData('hsa_signups'), loadScoped('store_leases', token),
       loadScopedByPrefix('daily_history_', token), loadScopedByPrefix('weekly_history_', token),
       loadScoped('daily_history', token), loadScoped('weekly_history', token), // legacy single-row format, if anything was saved before chunking
-    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, hsaSignupsRes, leasesRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
+    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, newsReadsRes, hsaSignupsRes, leasesRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
       if (reportRes.data) setReport(ensureReportCph(reportRes.data)); else if (currentUser.role === 'owner') { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
@@ -6616,6 +6747,7 @@ export default function App() {
       if (goldCombsRes.data) setGoldCombs(goldCombsRes.data);
       const loadedNews = newsRes.data || [];
       if (newsRes.data) setNews(loadedNews);
+      if (newsReadsRes.data) setNewsReads(newsReadsRes.data);
       if (eventsRes.data) setEvents(eventsRes.data);
       if (hsaSignupsRes.data) setHsaSignups(hsaSignupsRes.data);
       if (leasesRes.data) setLeases(leasesRes.data);
@@ -7228,6 +7360,22 @@ export default function App() {
     });
   }, []);
 
+  // Records that the current user confirmed reading a requireSignoff post —
+  // one entry per (newsId, user), idempotent (a second click is a no-op, the
+  // checkbox is already disabled once checked anyway). Read by Setup →
+  // Homepage's sign-off tracker to show the owner who has/hasn't confirmed.
+  const handleSignOffNews = useCallback(newsId => {
+    if (!currentUser) return;
+    setNewsReads(prev => {
+      if (prev.some(r => r.newsId === newsId && normalizeName(r.userName) === normalizeName(currentUser.name))) return prev;
+      const next = [...prev, { id: genId(), newsId, userName: currentUser.name, role: currentUser.role, readAt: new Date().toISOString() }];
+      saveData('homepage_news_reads', next).then(result => {
+        if (isConfigured() && !result.ok) showToast(`Saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      });
+      return next;
+    });
+  }, [currentUser]);
+
   const handleAddEvent = useCallback(fields => {
     const item = { id: genId(), ...fields, createdAt: new Date().toISOString() };
     setEvents(prev => {
@@ -7758,7 +7906,7 @@ export default function App() {
           <HomepageTab report={report} history={history} weeklyHistory={weeklyHistory} fallbackEmployeesByStore={fallbackEmployeesByStore} news={news} events={events} reviews={reviews} onOpenNews={handleOpenNews} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
         )}
         {tab === 'News' && (
-          <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} />
+          <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={currentUser} newsReads={newsReads} onSignOff={handleSignOffNews} />
         )}
         {tab === 'HSA' && (
           <HsaTab events={events} hsaSignups={hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} onEditSignup={handleEditHsaSignup} onAddClass={handleAddHsaClass} onEditClass={handleEditHsaClass} />
@@ -7839,7 +7987,7 @@ export default function App() {
             managersProps={{ report, managers, onSaveManager: handleSaveManager, onImportManagers: handleImportManagers }}
             milestoneGoalsProps={{ report, milestoneGoals, onSaveMilestoneGoal: handleSaveMilestoneGoal, onImportMilestoneGoals: handleImportMilestoneGoals }}
             homepageAdminProps={{
-              news, events, newsGroups,
+              news, events, newsGroups, newsReads,
               onAddNews: handleAddNews, onUpdateNews: handleUpdateNews, onDeleteNews: handleDeleteNews,
               onAddEvent: handleAddEvent, onUpdateEvent: handleUpdateEvent, onDeleteEvent: handleDeleteEvent,
               onRenameNewsGroup: handleRenameNewsGroup, onDeleteNewsGroup: handleDeleteNewsGroup,
@@ -7861,7 +8009,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} milestoneGoals={milestoneGoals} news={news} events={events} points={pointsSummary} hsaSignups={hsaSignups} leases={currentUser.role === 'owner' ? leases : null} />
+      <AIChatWidget report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} milestoneGoals={milestoneGoals} news={news} events={events} points={pointsSummary} hsaSignups={hsaSignups} leases={currentUser.role === 'owner' ? leases : null} newsReads={newsReads} />
     </div>
   );
 }

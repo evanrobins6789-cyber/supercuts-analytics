@@ -605,6 +605,34 @@
   align-self: flex-start; font-family: 'Inter', sans-serif; font-size: 10px; font-weight: 600;
   color: #fff; background: rgba(20,42,74,0.55); border-radius: 12px; padding: 2px 8px; margin-top: 6px;
 }
+.homepage-featured-new {
+  position: absolute; top: 10px; right: 10px; z-index: 1; font-family: 'Inter', sans-serif;
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+  color: #142A4A; background: var(--gold); border-radius: 20px; padding: 3px 9px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+}
+.homepage-featured-link {
+  align-self: flex-start; font-family: 'Inter', sans-serif; font-size: 10px; font-weight: 600;
+  color: #fff; background: rgba(194,59,59,0.75); border-radius: 12px; padding: 2px 8px; margin-top: 6px;
+  text-decoration: none;
+}
+.homepage-featured-link:hover { background: var(--red); }
+
+/* News carousel — shows NEWS_CAROUSEL_WINDOW (3) cards, slides one at a
+   time so a full advance shows 2 of the previous 3 plus 1 new one, cycling
+   forever through every post. */
+.news-carousel { position: relative; display: flex; align-items: center; gap: 8px; }
+.news-carousel-track { flex: 1; min-width: 0; display: grid; gap: 12px; }
+.news-carousel-track--1 { grid-template-columns: 1fr; }
+.news-carousel-track--2 { grid-template-columns: repeat(2, 1fr); }
+.news-carousel-track--3 { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 760px) { .news-carousel-track { grid-template-columns: 1fr !important; } }
+.news-carousel-nav {
+  flex: none; background: var(--navy); color: #fff; border: none; width: 32px; height: 32px;
+  border-radius: 50%; font-size: 17px; line-height: 1; cursor: pointer; display: flex;
+  align-items: center; justify-content: center;
+}
+.news-carousel-nav:hover { background: var(--navy-2); }
 
 /* Compact variant — News tab tiles, a quarter the footprint of a normal
    featured card. Description and the zoom hint are dropped entirely rather
@@ -617,6 +645,7 @@
 .homepage-featured-card--compact .homepage-featured-badge { font-size: 9px; padding: 2px 7px; margin-bottom: 3px; }
 .homepage-featured-card--compact .homepage-featured-desc,
 .homepage-featured-card--compact .homepage-featured-zoom-hint { display: none; }
+.homepage-featured-card--compact .homepage-featured-new { font-size: 8.5px; padding: 2px 6px; top: 6px; right: 6px; }
 
 /* Full-screen image viewer — opens a card's header image at full size */
 .homepage-lightbox {
@@ -680,6 +709,26 @@
   color: var(--navy); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; text-decoration: none;
 }
 .news-post-pdf-link:hover { border-color: var(--red); color: var(--red-deep); }
+
+/* Sign-off checkbox — the composer's "require sign-off" toggle, and the
+   reader-facing confirmation checkbox shown in the full post modal. */
+.news-signoff-check {
+  display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: var(--ink-soft);
+  cursor: pointer; line-height: 1.4;
+}
+.news-signoff-check input { margin-top: 2px; flex: none; }
+.news-signoff-confirm {
+  margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+  font-size: 13px; color: var(--navy); font-weight: 600;
+}
+.news-signoff-confirm--done { border-color: var(--green); color: var(--green); background: rgba(46,125,79,0.08); }
+
+/* Setup → Homepage sign-off tracker */
+.signoff-tracker-list { display: flex; flex-direction: column; gap: 12px; }
+.signoff-post-row { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--paper); }
+.signoff-post-title { font-size: 13px; font-weight: 700; color: var(--navy); }
+.signoff-confirmed { font-size: 11.5px; color: var(--green); margin-top: 4px; }
+.signoff-pending { font-size: 11.5px; color: var(--red-deep); margin-top: 2px; }
 
 /* Group manager (Setup > Homepage) */
 .news-group-manager-list { display: flex; flex-direction: column; gap: 8px; }
