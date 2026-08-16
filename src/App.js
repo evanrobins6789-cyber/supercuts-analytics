@@ -1738,9 +1738,9 @@ function flattenLeaseCriticalDates(leases) {
 
 // The headline list the owner actually wants at the top of this tab: leases
 // (term end specifically, not renewal deadlines/ad hoc dates too) expiring
-// within a fixed 18-month window — distinct from flattenLeaseCriticalDates
+// within a fixed 180-day window — distinct from flattenLeaseCriticalDates
 // above, which has no time cutoff and covers every kind of critical date.
-const LEASE_EXPIRING_WINDOW_DAYS = 548; // ~18 months
+const LEASE_EXPIRING_WINDOW_DAYS = 180;
 function getExpiringLeases(leases, todayISO) {
   const cutoff = new Date(todayISO);
   cutoff.setDate(cutoff.getDate() + LEASE_EXPIRING_WINDOW_DAYS);
@@ -1771,6 +1771,7 @@ async function uploadLeaseFile(token, storeCode, file) {
 // full, not a diff) since the server-side patch merge shallow-merges this
 // object into whatever's stored — see handleSaveLease.
 function LeaseForm({ initial, submitLabel, onSubmit, onCancel }) {
+  const [address, setAddress] = useState(initial?.address || '');
   const [landlordName, setLandlordName] = useState(initial?.landlordName || '');
   const [landlordContact, setLandlordContact] = useState(initial?.landlordContact || '');
   const [baseRent, setBaseRent] = useState(initial?.baseRent ?? '');
@@ -1792,6 +1793,7 @@ function LeaseForm({ initial, submitLabel, onSubmit, onCancel }) {
   const submit = e => {
     e.preventDefault();
     onSubmit({
+      address: address.trim(),
       landlordName: landlordName.trim(),
       landlordContact: landlordContact.trim(),
       baseRent: baseRent === '' ? 0 : Number(baseRent),
@@ -1807,6 +1809,7 @@ function LeaseForm({ initial, submitLabel, onSubmit, onCancel }) {
 
   return (
     <form className="lease-form" onSubmit={submit}>
+      <input className="text-input" placeholder="Store address" value={address} onChange={e => setAddress(e.target.value)} />
       <input className="text-input" placeholder="Landlord name" value={landlordName} onChange={e => setLandlordName(e.target.value)} />
       <input className="text-input" placeholder="Landlord contact (phone/email)" value={landlordContact} onChange={e => setLandlordContact(e.target.value)} />
       <input className="text-input" type="number" min="0" placeholder="Base rent ($/mo)" value={baseRent} onChange={e => setBaseRent(e.target.value)} />
@@ -1975,6 +1978,7 @@ function LeaseDetailModal({ storeCode, record, token, onClose, onSaveLease, onSa
         ) : (
           <>
             <div className="lease-card-terms">
+              <p><strong>Address:</strong> {record.address || '—'}</p>
               <p><strong>Landlord:</strong> {record.landlordName || '—'}{record.landlordContact ? ` (${record.landlordContact})` : ''}</p>
               <p><strong>Base rent:</strong> {record.baseRent ? `${fmt$(record.baseRent)}/mo` : '—'}{record.rentEscalation ? ` · ${record.rentEscalation}` : ''}</p>
               <p><strong>Term:</strong> {record.termStart ? fmtDateLong(record.termStart) : '—'} to {record.termEnd ? fmtDateLong(record.termEnd) : '—'}</p>
@@ -1986,6 +1990,18 @@ function LeaseDetailModal({ storeCode, record, token, onClose, onSaveLease, onSa
                 <button type="button" className="btn-secondary" disabled={scanning} onClick={handleScan}>
                   {scanning ? 'Scanning…' : '🔍 Scan documents for dates'}
                 </button>
+              )}
+            </div>
+            <div className="lease-card-dates">
+              <p className="lease-card-dates-label">Renewal options remaining</p>
+              {!(record.renewalOptions || []).length ? (
+                <p className="empty-note">No renewal options on file for this store.</p>
+              ) : (
+                <ul className="lease-card-dates-list">
+                  {[...record.renewalOptions].sort((a, b) => (a.noticeByDate || '').localeCompare(b.noticeByDate || '')).map(ro => (
+                    <li key={ro.id}>{ro.years ? `${ro.years}-year option` : 'Renewal option'} — notice by {ro.noticeByDate ? fmtDateLong(ro.noticeByDate) : '—'}{ro.notes ? ` (${ro.notes})` : ''}</li>
+                  ))}
+                </ul>
               )}
             </div>
             {dates.length > 0 && (
@@ -2361,26 +2377,22 @@ function LeasesTab({ leases, token, onSaveLease, onBulkSaveLeaseUpdates, onDelet
 
   const daysUntil = date => Math.round((new Date(date) - new Date(todayISO)) / 86400000);
   const urgencyClass = days => (days <= 30 ? 'lease-date-badge--urgent' : days <= 90 ? 'lease-date-badge--soon' : 'lease-date-badge--ok');
-  // Wider tiers than the general critical-dates list above — this section
-  // spans a full 18 months, not the next few weeks, so "urgent" here means
-  // within a quarter, not within 30 days.
-  const expiryUrgencyClass = days => (days <= 90 ? 'lease-date-badge--urgent' : days <= 365 ? 'lease-date-badge--soon' : 'lease-date-badge--ok');
 
   return (
     <div className="tab-content">
       <p className="section-hint">Owner-only lease tracker — key terms, critical dates, and documents per store. This data is never sent to any non-owner login.</p>
 
       <div>
-        <p className="section-label">Leases Expiring in the Next 18 Months</p>
+        <p className="section-label">Leases Expiring in the Next 180 Days</p>
         {!expiring.length ? (
-          <p className="empty-note">No leases on file are expiring in the next 18 months.</p>
+          <p className="empty-note">No leases on file are expiring in the next 180 days.</p>
         ) : (
           <div className="lease-upcoming-list">
             {expiring.map(e => {
               const days = daysUntil(e.termEnd);
               return (
                 <button key={e.code} type="button" className="lease-upcoming-row lease-upcoming-row--clickable" onClick={() => setOpenStoreCode(e.code)}>
-                  <span className={`lease-date-badge ${expiryUrgencyClass(days)}`}>{days <= 0 ? 'Due' : `${days}d`}</span>
+                  <span className={`lease-date-badge ${urgencyClass(days)}`}>{days <= 0 ? 'Due' : `${days}d`}</span>
                   <span className="lease-upcoming-date">{fmtDateLong(e.termEnd)}</span>
                   <span className="lease-upcoming-store">{e.storeName}</span>
                   <span className="lease-upcoming-label">{e.landlordName ? `Landlord: ${e.landlordName}` : 'Lease expires'}</span>
@@ -5568,7 +5580,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     lines.push(`LEASES (${Object.keys(leases).length} store(s) on file, ${fileCount} document(s) uploaded): next upcoming critical dates —`);
     if (upcoming.length) upcoming.forEach(d => lines.push(`${d.date} — ${d.storeName}: ${d.label}${d.notes ? ` (${d.notes})` : ''}`));
     else lines.push('none upcoming.');
-    if (expiringSoon.length) lines.push(`Leases expiring within 18 months: ${expiringSoon.map(e => `${e.storeName} (${e.termEnd})`).join(', ')}.`);
+    if (expiringSoon.length) lines.push(`Leases expiring within 180 days: ${expiringSoon.map(e => `${e.storeName} (${e.termEnd})`).join(', ')}.`);
     lines.push('');
   }
 
