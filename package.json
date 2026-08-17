@@ -2,15 +2,21 @@
   "name": "supercuts-analytics",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.6",
     "@supabase/supabase-js": "^2.39.0",
     "bcryptjs": "^2.4.3",
     "chart.js": "^4.4.1",
     "pdf-parse": "^1.1.1",
+    "pdfjs-dist": "^6.2.108",
     "react": "^18.2.0",
     "react-chartjs-2": "^5.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",
+    "tesseract.js": "^6.0.1",
     "xlsx": "^0.18.5"
   },
   "scripts": {
