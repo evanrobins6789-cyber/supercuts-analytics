@@ -1598,7 +1598,13 @@ function HsaClassCard({ cls, signups, isOwner, canEditAny, currentUserName, onSi
               // to matching on `name` itself. Owner and District Leaders can
               // always edit any entry, not just their own.
               const submitter = s.enteredBy || s.name;
-              const canEdit = canEditAny || (currentUserName && normalizeName(submitter) === normalizeName(currentUserName));
+              const ownEntry = currentUserName && normalizeName(submitter) === normalizeName(currentUserName);
+              const canEdit = canEditAny || ownEntry;
+              // Deletion is narrower than editing: owner and District Leaders
+              // can edit any entry (canEditAny), but deleting someone else's
+              // entry stays owner-only — a DL (or anyone) can only delete an
+              // entry they personally submitted.
+              const canDelete = isOwner || ownEntry;
               if (editingSignupId === s.id) {
                 return (
                   <li key={s.id} className="hsa-roster-editing">
@@ -1615,7 +1621,7 @@ function HsaClassCard({ cls, signups, isOwner, canEditAny, currentUserName, onSi
                 <li key={s.id}>
                   <strong>{s.name}</strong>{s.store ? ` — ${s.store}` : ''}{s.dl ? ` (DL: ${s.dl})` : ''}{isOwner && s.phone ? ` · 📞 ${s.phone}` : ''}
                   {canEdit && <button className="hsa-roster-edit" onClick={() => setEditingSignupId(s.id)}>✎</button>}
-                  {isOwner && <button className="btn-ghost btn-danger hsa-roster-remove" onClick={() => onRemoveSignup(s.id)}>✕</button>}
+                  {canDelete && <button className="btn-ghost btn-danger hsa-roster-remove" onClick={() => onRemoveSignup(s.id)}>✕</button>}
                 </li>
               );
             })}
