@@ -1047,11 +1047,11 @@ export function mergeSalesIntoHistory(history, salesRecords) {
   const next = { ...history };
   salesRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, signatureSCount: null, bottles: null, employees: {}, products: {} };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, signatureSCount: null, bottles: null, otherServices: null, employees: {}, products: {} };
     next[key] = {
-      ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards, haircuts: r.haircuts, signatureS: r.signatureS, signatureSCount: r.signatureSCount, bottles: r.bottles,
+      ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards, haircuts: r.haircuts, signatureS: r.signatureS, signatureSCount: r.signatureSCount, bottles: r.bottles, otherServices: r.otherServices,
       products: r.products || {},
-      employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales', 'haircuts', 'retail', 'signatureS', 'signatureSCount']),
+      employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales', 'haircuts', 'retail', 'signatureS', 'signatureSCount', 'otherServices']),
     };
   });
   return next;
