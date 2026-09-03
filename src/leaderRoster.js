@@ -10,8 +10,7 @@ export const LEADER_ROSTER_SECTIONS = [
     role: "District Leaders",
     leaders: [
       { name: "Amber Vines", storeCodes: ["80591", "81142", "80618", "80694"] },
-      { name: "Andrea Solomon", storeCodes: ["80095", "80952", "81038", "81772"] },
-      { name: "Katie Ingram", storeCodes: ["82025", "82267", "80212"] },
+      { name: "Katie Ingram", storeCodes: ["82025", "82267", "80212", "81038", "8844", "81772"] },
       { name: "Laura Kenney", storeCodes: ["81516", "82183", "80180", "80014", "81098"] },
       { name: "Lia Koutsikos", storeCodes: ["80577", "82993", "80651", "8150"] },
       { name: "Lisa Hair", storeCodes: ["80948", "80147", "81673", "82818", "80667", "80719"] },
@@ -21,7 +20,7 @@ export const LEADER_ROSTER_SECTIONS = [
   {
     role: "Area Supervisors",
     leaders: [
-      { name: "Allie Clifford", storeCodes: ["82734", "80108", "81475", "8844"] },
+      { name: "Allie Clifford", storeCodes: ["82734", "80108", "81475", "80095", "80952"] },
       { name: "Brandy DiGiacomo", storeCodes: ["81416", "89080", "82262"] },
       { name: "Christina Nole", storeCodes: ["80185", "82179"] },
       { name: "Erik Petner", storeCodes: ["80661", "81092", "8919"] },

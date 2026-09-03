@@ -17,6 +17,7 @@ import {
 import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
 import { LEASE_STORE_CODE_TO_NAME, LEASE_INACTIVE_CODES, leaseStoreName, matchStoreCodeFromPath, extractTermDatesFromFilename } from './leaseStoreDirectory';
+import { exportReviewsToPDF } from './reviewExport';
 import {
   EMPTY_RANGE_TOTALS, addRangeInto, expandDateRangeDays, mergeEmployeesInto, finalizeEmployee,
   getRangeTotals, historyTotalsToReportShape, rollupRows, addDaysISO, isoWeekStart, getLastFullWeekRange, sortByMetric,
@@ -308,6 +309,7 @@ function fmtDateRangeLong(startISO, endISO) {
 // Store-level metrics shown on the Overview tab.
 const STORE_METRICS = [
   { key: 'sales', label: 'Net Sales', fmt: fmt$ },
+  { key: 'avgTicket', label: 'Avg Ticket', fmt: fmt$ },
   { key: 'tsth', label: 'TSTH', fmt: fmtRate },
   { key: 'totalHours', label: 'Total Hours', fmt: n => fmtNum(n, 0) },
   { key: 'colorSales', label: 'Color Sales', fmt: fmt$ },
@@ -320,6 +322,11 @@ const STORE_METRICS = [
   { key: 'cpc', label: 'CPC', fmt: n => fmtNum(n) },
   { key: 'retail', label: 'Retail', fmt: fmt$ },
   { key: 'rpc', label: 'RPC', fmt: n => fmtNum(n) },
+  // "Other Services" — beard trims, waxes, shampoos, and anything else not
+  // already captured by Color/Signature Service/the haircut itself. OPC
+  // pairs with it the same way CPC pairs with Color Sales.
+  { key: 'otherServices', label: 'Other Svcs', fmt: fmt$ },
+  { key: 'opc', label: 'OPC', fmt: n => fmtNum(n) },
   { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
   { key: 'cph', label: 'CPH', fmt: n => fmtNum(n, 2) },
   { key: 'signatureS', label: 'SS', fmt: (v, row) => fmtSS(row?.signatureSCount, v) },
@@ -329,12 +336,15 @@ const STORE_METRICS = [
 const EMPLOYEE_METRICS = [
   { key: 'totalHours', label: 'Hours', fmt: n => fmtNum(n, 1) },
   { key: 'sales', label: 'Sales', fmt: fmt$ },
+  { key: 'avgTicket', label: 'Avg Ticket', fmt: fmt$ },
   { key: 'colorSales', label: 'Color Sales', fmt: fmt$ },
   { key: 'retail', label: 'Retail', fmt: fmt$ },
   // See STORE_METRICS above — fmtNum wrapped for the same reason (this list
   // is rendered the same `m.fmt(value, row)` way).
   { key: 'cpc', label: 'CPC', fmt: n => fmtNum(n) },
   { key: 'rpc', label: 'RPC', fmt: n => fmtNum(n) },
+  { key: 'otherServices', label: 'Other Svcs', fmt: fmt$ },
+  { key: 'opc', label: 'OPC', fmt: n => fmtNum(n) },
   { key: 'tsth', label: 'TSTH', fmt: fmtRate },
   { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
   { key: 'cph', label: 'CPH', fmt: n => fmtNum(n, 2) },
@@ -2646,6 +2656,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
                 </div>
                 <div className="dl-card-stats">
                   <div className="dl-stat"><span className="dl-stat-label">Sales</span><span className="dl-stat-value">{fmt$(s.sales)}</span></div>
+                  {s.avgTicket != null && <div className="dl-stat"><span className="dl-stat-label">Avg Ticket</span><span className="dl-stat-value">{fmt$(s.avgTicket)}</span></div>}
                   {getSalesGoal(s.code) != null && (
                     <>
                       <div className="dl-stat"><span className="dl-stat-label">Sales Goal</span><span className="dl-stat-value">{fmt$(getSalesGoal(s.code))}</span></div>
@@ -2658,6 +2669,8 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
                   {s.cpc != null && <div className="dl-stat"><span className="dl-stat-label">CPC</span><span className="dl-stat-value">{fmtNum(s.cpc)}</span></div>}
                   <div className="dl-stat"><span className="dl-stat-label">Retail</span><span className="dl-stat-value">{fmt$(s.retail)}</span></div>
                   {s.rpc != null && <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(s.rpc)}</span></div>}
+                  <div className="dl-stat"><span className="dl-stat-label">Other Svcs</span><span className="dl-stat-value">{fmt$(s.otherServices)}</span></div>
+                  {s.opc != null && <div className="dl-stat"><span className="dl-stat-label">OPC</span><span className="dl-stat-value">{fmtNum(s.opc)}</span></div>}
                   <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(s.haircuts)}</span></div>
                   {s.cph != null && <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(s.cph)}</span></div>}
                   <div className="dl-stat"><span className="dl-stat-label">SS</span><span className="dl-stat-value">{fmtSS(s.signatureSCount, s.signatureS)}</span></div>
@@ -2668,7 +2681,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
                   <EmployeeTable
                     rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                     showStoreCol={false}
-                    footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
+                    footer={{ sales: s.sales, avgTicket: s.avgTicket, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, otherServices: s.otherServices, opc: s.opc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                     footerLabel="Store total / weighted avg"
                     focused={focused} onFocus={setFocused}
                     canAward={canAward} onAward={onAward}
@@ -3152,7 +3165,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                                     <EmployeeTable
                                       rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                                       showStoreCol={false}
-                                      footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
+                                      footer={{ sales: s.sales, avgTicket: s.avgTicket, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, otherServices: s.otherServices, opc: s.opc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                                       footerLabel="Store total / weighted avg"
                                       focused={focused} onFocus={setFocused}
                                       canAward={canAward} onAward={onAward}
@@ -3230,7 +3243,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                           <EmployeeTable
                             rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                             showStoreCol={false}
-                            footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
+                            footer={{ sales: s.sales, avgTicket: s.avgTicket, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, otherServices: s.otherServices, opc: s.opc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                             footerLabel="Store total / weighted avg"
                             focused={focused} onFocus={setFocused}
                             canAward={canAward} onAward={onAward}
@@ -3613,12 +3626,15 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                     </div>
                     <div className="dl-card-stats">
                       <div className="dl-stat"><span className="dl-stat-label">Sales</span><span className="dl-stat-value">{fmt$(t.sales)}</span></div>
+                      {t.avgTicket != null && <div className="dl-stat"><span className="dl-stat-label">Avg Ticket</span><span className="dl-stat-value">{fmt$(t.avgTicket)}</span></div>}
                       <div className="dl-stat"><span className="dl-stat-label">TSTH</span><span className={`dl-stat-value ${tsthClass(t.tsth)}`}>{fmtRate(t.tsth)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Hours</span><span className="dl-stat-value">{fmtNum(t.totalHours, 0)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Color</span><span className="dl-stat-value">{fmt$(t.colorSales)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">CPC</span><span className="dl-stat-value">{fmtNum(t.cpc)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Retail</span><span className="dl-stat-value">{fmt$(t.retail)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(t.rpc)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Other Svcs</span><span className="dl-stat-value">{fmt$(t.otherServices)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">OPC</span><span className="dl-stat-value">{fmtNum(t.opc)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(t.haircuts)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(t.cph)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">SS</span><span className="dl-stat-value">{fmtSS(t.signatureSCount, t.signatureS)}</span></div>
@@ -3631,8 +3647,8 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                       <thead>
                         <tr>
                           <th className="ledger-name-col">Store</th><th className="ledger-name-col">Manager</th>
-                          <th>Sales</th><th>TSTH</th><th>Total Hours</th><th>Color Sales</th>
-                          <th>CPC</th><th>Retail</th><th>RPC</th><th>Cuts</th><th>CPH</th><th>SS</th>
+                          <th>Sales</th><th>Avg Ticket</th><th>TSTH</th><th>Total Hours</th><th>Color Sales</th>
+                          <th>CPC</th><th>Retail</th><th>RPC</th><th>Other Svcs</th><th>OPC</th><th>Cuts</th><th>CPH</th><th>SS</th>
                           <th>Goal</th><th>Milestone</th><th>Progress</th>
                         </tr>
                       </thead>
@@ -3652,7 +3668,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                               <tr key={s.code}>
                                 <td className="ledger-name-col">{s.name}</td>
                                 <td className="ledger-name-col">{managerName || <span className="empty-note">not set</span>}</td>
-                                <td colSpan={13} className="empty-note">
+                                <td colSpan={16} className="empty-note">
                                   {managerName ? `No individual data found for ${managerName} in this period` : '—'}
                                 </td>
                               </tr>
@@ -3663,12 +3679,15 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                               <td className="ledger-name-col">{s.name}</td>
                               <td className="ledger-name-col">{managerName}</td>
                               <td>{fmt$(managerEmp.sales)}</td>
+                              <td>{fmt$(managerEmp.avgTicket)}</td>
                               <td className={`ledger-rate ${tsthClass(managerEmp.tsth)}`}>{fmtRate(managerEmp.tsth)}</td>
                               <td>{fmtNum(managerEmp.totalHours, 0)}</td>
                               <td>{fmt$(managerEmp.colorSales)}</td>
                               <td>{fmtNum(managerEmp.cpc)}</td>
                               <td>{fmt$(managerEmp.retail)}</td>
                               <td>{fmtNum(managerEmp.rpc)}</td>
+                              <td>{fmt$(managerEmp.otherServices)}</td>
+                              <td>{fmtNum(managerEmp.opc)}</td>
                               <td>{fmtInt(managerEmp.haircuts)}</td>
                               <td>{fmtNum(managerEmp.cph)}</td>
                               <td>{fmtSS(managerEmp.signatureSCount, managerEmp.signatureS)}</td>
@@ -3684,12 +3703,15 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                           <td className="ledger-name-col">{g.leaderName} total / weighted avg (whole stores)</td>
                           <td className="ledger-name-col"></td>
                           <td>{fmt$(t.sales)}</td>
+                          <td>{fmt$(t.avgTicket)}</td>
                           <td className={`ledger-rate ${tsthClass(t.tsth)}`}>{fmtRate(t.tsth)}</td>
                           <td>{fmtNum(t.totalHours, 0)}</td>
                           <td>{fmt$(t.colorSales)}</td>
                           <td>{fmtNum(t.cpc)}</td>
                           <td>{fmt$(t.retail)}</td>
                           <td>{fmtNum(t.rpc)}</td>
+                          <td>{fmt$(t.otherServices)}</td>
+                          <td>{fmtNum(t.opc)}</td>
                           <td>{fmtInt(t.haircuts)}</td>
                           <td>{fmtNum(t.cph)}</td>
                           <td>{fmtSS(t.signatureSCount, t.signatureS)}</td>
@@ -3727,12 +3749,15 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                     </div>
                     <div className="dl-card-stats">
                       <div className="dl-stat"><span className="dl-stat-label">Sales</span><span className="dl-stat-value">{fmt$(t.sales)}</span></div>
+                      {t.avgTicket != null && <div className="dl-stat"><span className="dl-stat-label">Avg Ticket</span><span className="dl-stat-value">{fmt$(t.avgTicket)}</span></div>}
                       <div className="dl-stat"><span className="dl-stat-label">TSTH</span><span className={`dl-stat-value ${tsthClass(t.tsth)}`}>{fmtRate(t.tsth)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Hours</span><span className="dl-stat-value">{fmtNum(t.totalHours, 0)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Color</span><span className="dl-stat-value">{fmt$(t.colorSales)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">CPC</span><span className="dl-stat-value">{fmtNum(t.cpc)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Retail</span><span className="dl-stat-value">{fmt$(t.retail)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(t.rpc)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Other Svcs</span><span className="dl-stat-value">{fmt$(t.otherServices)}</span></div>
+                      <div className="dl-stat"><span className="dl-stat-label">OPC</span><span className="dl-stat-value">{fmtNum(t.opc)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(t.haircuts)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(t.cph)}</span></div>
                       <div className="dl-stat"><span className="dl-stat-label">SS</span><span className="dl-stat-value">{fmtSS(t.signatureSCount, t.signatureS)}</span></div>
@@ -3746,10 +3771,12 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                         <thead>
                           <tr>
                             <th className="ledger-name-col">Store</th>
-                            <th>Sales</th><th>TSTH</th><th>Total Hours</th><th>Color Sales</th>
+                            <th>Sales</th><th>Avg Ticket</th><th>TSTH</th><th>Total Hours</th><th>Color Sales</th>
                             <th>CPC</th>
                             <th>Retail</th>
                             <th>RPC</th>
+                            <th>Other Svcs</th>
+                            <th>OPC</th>
                             <th>Cuts</th>
                             <th>CPH</th>
                             <th>SS</th>
@@ -3769,12 +3796,15 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                                     {hasEmployeeData && <span className={`mini-chevron ${isStoreOpen ? 'mini-chevron--open' : ''}`}>▸</span>} {s.name}
                                   </td>
                                   <td>{fmt$(s.sales)}</td>
+                                  <td>{fmt$(s.avgTicket)}</td>
                                   <td className={`ledger-rate ${tsthClass(s.tsth)}`}>{fmtRate(s.tsth)}</td>
                                   <td>{fmtNum(s.totalHours, 0)}</td>
                                   <td>{fmt$(s.colorSales)}</td>
                                   <td>{fmtNum(s.cpc)}</td>
                                   <td>{fmt$(s.retail)}</td>
                                   <td>{fmtNum(s.rpc)}</td>
+                                  <td>{fmt$(s.otherServices)}</td>
+                                  <td>{fmtNum(s.opc)}</td>
                                   <td>{fmtInt(s.haircuts)}</td>
                                   <td>{fmtNum(s.cph)}</td>
                                   <td>{fmtSS(s.signatureSCount, s.signatureS)}</td>
@@ -3784,11 +3814,11 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                                 </tr>
                                 {isStoreOpen && hasEmployeeData && (
                                   <tr className="store-expand-row">
-                                    <td colSpan={14}>
+                                    <td colSpan={17}>
                                       <EmployeeTable
                                         rows={sortByMetric(withManagerFlag(s.employees, managers, s.code), 'sales', 'desc')}
                                         showStoreCol={false}
-                                        footer={{ sales: s.sales, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
+                                        footer={{ sales: s.sales, avgTicket: s.avgTicket, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, otherServices: s.otherServices, opc: s.opc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                                         footerLabel="Store total / weighted avg"
                                         focused={focused} onFocus={setFocused}
                                         canAward={canAward} onAward={onAward}
@@ -4499,7 +4529,9 @@ function ReviewDateRangeBar({ start, end, onChange }) {
   );
 }
 
-function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery, reviewNotes, onAddReviewNote, goldCombs, onToggleGoldComb, canAward, onAward }) {
+function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery, reviewNotes, onAddReviewNote, goldCombs, onToggleGoldComb, canAward, onAward, currentUser }) {
+  // Export is for DL/leadership looking at a store's reviews, not rank-and-file.
+  const canExportReviews = !!currentUser && currentUser.role !== 'employee';
   const [viewMode, setViewMode] = useState('flat'); // 'flat' | 'dl'
   const [category, setCategory] = useState(null);
   const [sentiment, setSentiment] = useState(null); // null | 'pos' | 'neg'
@@ -4661,6 +4693,30 @@ function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery,
   const toggleLeader = name => setExpandedLeader(prev => ({ ...prev, [name]: !prev[name] }));
   const activeCat = REVIEW_CATEGORIES.find(c => c.key === category);
 
+  // Mirrors the exact narrowing renderReviewList below applies, so the PDF
+  // always matches what's actually on screen for this store at the moment
+  // of export — same time period, same category/sentiment/mention filters.
+  const exportStoreReviewsPDF = (s, reviewList, employeesForStore) => {
+    const filterLabels = [];
+    if (category) filterLabels.push(`Category: ${activeCat.label} (negative only)`);
+    else if (sentiment === 'pos') filterLabels.push('Positive (4–5★) only');
+    else if (sentiment === 'neg') filterLabels.push('Negative (1–3★) only');
+    if (mentionedOnly) filterLabels.push('Mentions an employee by name');
+    exportReviewsToPDF({
+      storeName: s.name,
+      dateRange: reviewDateRange,
+      filterLabels,
+      reviews: reviewList.map(r => ({
+        ...r,
+        employeeMatch: detectEmployeeMention(r.message, employeesForStore),
+        notes: reviewNotes?.[reviewKey(r)] || [],
+      })),
+    }).catch(err => {
+      console.error('PDF export failed', err);
+      alert('Could not generate the PDF. Please try again.');
+    });
+  };
+
   const renderReviewList = s => {
     const employeesForStore = employeesForCode(s.code);
     let reviewList = [...s.reviews].sort((a, b) => b.postedAt.localeCompare(a.postedAt));
@@ -4670,6 +4726,18 @@ function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery,
     if (mentionedOnly) reviewList = reviewList.filter(r => !!detectEmployeeMention(r.message, employeesForStore));
     return (
       <div className="dl-store-table review-list">
+        {canExportReviews && (
+          <div className="review-list-toolbar">
+            <button
+              type="button" className="review-export-btn"
+              onClick={() => exportStoreReviewsPDF(s, reviewList, employeesForStore)}
+              disabled={!reviewList.length}
+              title={`Export these ${reviewList.length} review${reviewList.length !== 1 ? 's' : ''} for ${s.name} to a PDF`}
+            >
+              ⬇ Export PDF ({reviewList.length})
+            </button>
+          </div>
+        )}
         {reviewList.map((r, i) => (
           <ReviewCard
             key={i} review={r} employeeMatch={detectEmployeeMention(r.message, employeesForStore)}
@@ -5597,14 +5665,14 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   if (report && !isReportStale(report)) {
     const t = report.companyTotals;
     lines.push(`CURRENT REPORT PERIOD: ${report.dateRangeLabel || 'unknown'}`);
-    lines.push(`Company totals — Sales: $${Math.round(t.sales)}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}, Cuts: ${Math.round(t.haircuts || 0)}, CPH: ${t.cph != null ? t.cph.toFixed(2) : 'n/a'}`);
+    lines.push(`Company totals — Sales: $${Math.round(t.sales)}, Avg Ticket: $${t.avgTicket != null ? t.avgTicket.toFixed(2) : 'n/a'}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}, Other Services: $${Math.round(t.otherServices || 0)}, OPC: ${t.opc != null ? t.opc.toFixed(2) : 'n/a'}, Cuts: ${Math.round(t.haircuts || 0)}, CPH: ${t.cph != null ? t.cph.toFixed(2) : 'n/a'}`);
     lines.push('');
-    lines.push('Per-store totals for the CURRENT period (Store: Sales, TSTH, Hours, Color, Retail, CPC, RPC, Cuts, CPH, goals if set):');
+    lines.push('Per-store totals for the CURRENT period (Store: Sales, Avg Ticket, TSTH, Hours, Color, Retail, CPC, RPC, Other Services, OPC, Cuts, CPH, goals if set):');
     report.stores.forEach(s => {
       const st = s.totals;
       const goal = goals?.[s.code];
       const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Bottle Goal: ${goal.bottleGoal ?? 'none'} bottles, Signature Service Goal: ${goal.signatureSGoal ?? 'none'} services` : '';
-      lines.push(`${s.name}: Sales $${Math.round(st.sales)}, TSTH $${st.tsth != null ? st.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(st.totalHours)}, Color $${Math.round(st.colorSales)}, Retail $${Math.round(st.retail)}, CPC ${st.cpc != null ? st.cpc.toFixed(2) : 'n/a'}, RPC ${st.rpc != null ? st.rpc.toFixed(2) : 'n/a'}, Cuts ${Math.round(st.haircuts || 0)}, CPH ${st.cph != null ? st.cph.toFixed(2) : 'n/a'}${goalStr}`);
+      lines.push(`${s.name}: Sales $${Math.round(st.sales)}, Avg Ticket $${st.avgTicket != null ? st.avgTicket.toFixed(2) : 'n/a'}, TSTH $${st.tsth != null ? st.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(st.totalHours)}, Color $${Math.round(st.colorSales)}, Retail $${Math.round(st.retail)}, CPC ${st.cpc != null ? st.cpc.toFixed(2) : 'n/a'}, RPC ${st.rpc != null ? st.rpc.toFixed(2) : 'n/a'}, Other Services $${Math.round(st.otherServices || 0)}, OPC ${st.opc != null ? st.opc.toFixed(2) : 'n/a'}, Cuts ${Math.round(st.haircuts || 0)}, CPH ${st.cph != null ? st.cph.toFixed(2) : 'n/a'}${goalStr}`);
     });
     currentStoreRows = report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals }));
     currentAllEmployees = report.allEmployees || [];
@@ -5617,13 +5685,13 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     currentAllEmployees = currentStoreRows.flatMap(s => (s.employees || []).map(e => ({ ...e, store: s.name })));
     const t = rollupRows(currentStoreRows);
     lines.push(`CURRENT REPORT PERIOD: ${fmtDateLong(start)} – ${fmtDateLong(end)} (month-to-date — no current Stylist Report on file, sourced from Sales-Accrual/Attendance instead)`);
-    lines.push(`Company totals — Sales: $${Math.round(t.sales)}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}, Cuts: ${Math.round(t.haircuts || 0)}, CPH: ${t.cph != null ? t.cph.toFixed(2) : 'n/a'}, SS: ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}`);
+    lines.push(`Company totals — Sales: $${Math.round(t.sales)}, Avg Ticket: $${t.avgTicket != null ? t.avgTicket.toFixed(2) : 'n/a'}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}, Other Services: $${Math.round(t.otherServices || 0)}, OPC: ${t.opc != null ? t.opc.toFixed(2) : 'n/a'}, Cuts: ${Math.round(t.haircuts || 0)}, CPH: ${t.cph != null ? t.cph.toFixed(2) : 'n/a'}, SS: ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}`);
     lines.push('');
-    lines.push('Per-store totals for the CURRENT period (Store: Sales, TSTH, Hours, Color, Retail, CPC, RPC, Cuts, CPH, goals if set):');
+    lines.push('Per-store totals for the CURRENT period (Store: Sales, Avg Ticket, TSTH, Hours, Color, Retail, CPC, RPC, Other Services, OPC, Cuts, CPH, goals if set):');
     currentStoreRows.forEach(s => {
       const goal = goals?.[s.code];
       const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Bottle Goal: ${goal.bottleGoal ?? 'none'} bottles, Signature Service Goal: ${goal.signatureSGoal ?? 'none'} services` : '';
-      lines.push(`${s.name}: Sales $${Math.round(s.sales)}, TSTH $${s.tsth != null ? s.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(s.totalHours)}, Color $${Math.round(s.colorSales)}, Retail $${Math.round(s.retail)}, CPC ${s.cpc != null ? s.cpc.toFixed(2) : 'n/a'}, RPC ${s.rpc != null ? s.rpc.toFixed(2) : 'n/a'}, Cuts ${Math.round(s.haircuts || 0)}, CPH ${s.cph != null ? s.cph.toFixed(2) : 'n/a'}${goalStr}`);
+      lines.push(`${s.name}: Sales $${Math.round(s.sales)}, Avg Ticket $${s.avgTicket != null ? s.avgTicket.toFixed(2) : 'n/a'}, TSTH $${s.tsth != null ? s.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(s.totalHours)}, Color $${Math.round(s.colorSales)}, Retail $${Math.round(s.retail)}, CPC ${s.cpc != null ? s.cpc.toFixed(2) : 'n/a'}, RPC ${s.rpc != null ? s.rpc.toFixed(2) : 'n/a'}, Other Services $${Math.round(s.otherServices || 0)}, OPC ${s.opc != null ? s.opc.toFixed(2) : 'n/a'}, Cuts ${Math.round(s.haircuts || 0)}, CPH ${s.cph != null ? s.cph.toFixed(2) : 'n/a'}${goalStr}`);
     });
   }
   if (currentAllEmployees.length) {
@@ -5791,7 +5859,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       const leaderLines = [];
       LEADER_ROSTER_SECTIONS.forEach(sec => {
         sec.leaders.forEach(l => {
-          const rolled = { service: 0, retail: 0, color: 0, hours: 0, haircuts: 0 };
+          const rolled = { service: 0, retail: 0, color: 0, hours: 0, haircuts: 0, otherServices: 0 };
           let any = false;
           l.storeCodes.forEach(code => {
             const t = totals[code];
@@ -5802,8 +5870,12 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
             rolled.color += t.color || 0;
             rolled.hours += t.hours || 0;
             rolled.haircuts += t.haircuts || 0;
+            rolled.otherServices += t.otherServices || 0;
           });
-          if (any) leaderLines.push(`  ${l.name} — Sales $${Math.round(rolled.service + rolled.retail)}, Color $${Math.round(rolled.color)}, Retail $${Math.round(rolled.retail)}, Hours ${Math.round(rolled.hours)}, Cuts ${Math.round(rolled.haircuts)}`);
+          const rolledSales = rolled.service + rolled.retail;
+          const avgTicket = rolled.haircuts > 0 ? rolledSales / rolled.haircuts : null;
+          const opc = rolled.haircuts > 0 ? rolled.otherServices / rolled.haircuts : null;
+          if (any) leaderLines.push(`  ${l.name} — Sales $${Math.round(rolledSales)}, Avg Ticket ${avgTicket != null ? `$${avgTicket.toFixed(2)}` : 'n/a'}, Color $${Math.round(rolled.color)}, Retail $${Math.round(rolled.retail)}, Other Services $${Math.round(rolled.otherServices)}, OPC ${opc != null ? opc.toFixed(2) : 'n/a'}, Hours ${Math.round(rolled.hours)}, Cuts ${Math.round(rolled.haircuts)}`);
         });
       });
       if (leaderLines.length) { lines.push(`${m.month}:`); leaderLines.forEach(l => lines.push(l)); }
@@ -8270,6 +8342,7 @@ export default function App() {
             reviewNotes={reviewNotes} onAddReviewNote={handleAddReviewNote}
             goldCombs={goldCombs} onToggleGoldComb={handleToggleGoldComb}
             canAward={currentUser.role === 'owner'} onAward={handleAwardPoints}
+            currentUser={currentUser}
           />
         )}
         {tab === 'Weekly' && (

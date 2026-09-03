@@ -101,6 +101,13 @@ export function rollup(employees) {
   const totalColor = sum('colorSales');
   const totalRetail = sum('retail');
   const totalHaircuts = sum('haircuts');
+  // "Other Services" — beard trims, waxes, shampoos, and anything else that
+  // isn't Color, isn't Signature Service, and isn't a haircut itself. The
+  // live Stylist Report already carries this per-employee as "$Emp Other
+  // Net" (see col.otherNet / employee.otherServices below); OPC (Other
+  // [services] per Customer) mirrors CPC/RPC exactly, using the same
+  // haircuts-as-customer-count convention those already use.
+  const totalOther = sum('otherServices');
   return {
     sales: Math.round(totalSales * 100) / 100,
     // Raw service-only total, backed out of the combined `sales` above —
@@ -115,10 +122,17 @@ export function rollup(employees) {
     totalHours: Math.round(totalHours * 100) / 100,
     colorSales: Math.round(totalColor * 100) / 100,
     retail: Math.round(totalRetail * 100) / 100,
+    otherServices: Math.round(totalOther * 100) / 100,
     haircuts: totalHaircuts,
     tsth: totalHours > 0 ? totalSales / totalHours : null,
     cpc: totalHaircuts > 0 ? totalColor / totalHaircuts : null,
     rpc: totalHaircuts > 0 ? totalRetail / totalHaircuts : null,
+    opc: totalHaircuts > 0 ? totalOther / totalHaircuts : null,
+    // "Average Ticket" — the average amount a customer spends per visit.
+    // Same customer-count convention as CPC/RPC/OPC (haircuts stands in for
+    // a visit/ticket — there's no separate per-transaction ID in either
+    // source export to count real tickets against).
+    avgTicket: totalHaircuts > 0 ? totalSales / totalHaircuts : null,
     cph: totalHours > 0 ? totalHaircuts / totalHours : null,
   };
 }
@@ -205,12 +219,13 @@ export function parseStylistReportFromGrid(grid, fileName) {
     const empHours = numOf(row[col.totalHours]);
     const empServiceSales = numOf(row[col.sales]);
     const empRetail = numOf(row[col.productNet]);
+    const empSales = empServiceSales + empRetail;
     current.employees.push({
       name: `${first} ${last}`.trim(),
       // "Sales" = total revenue (service + retail), matching the same
       // definition used everywhere else in the app (see rollup() above and
       // historyTotalsToReportShape in metrics.js).
-      sales: empServiceSales + empRetail,
+      sales: empSales,
       colorSales: numOf(row[col.colorNet]),
       retail: empRetail,
       cpc: numOf(row[col.cpc]),
@@ -221,10 +236,16 @@ export function parseStylistReportFromGrid(grid, fileName) {
       // No CPH column in the source export — unlike CPC/RPC/TSTH, this one's
       // ours to compute, so it only appears when both figures are actually present.
       cph: empHours > 0 ? empHaircuts / empHours : null,
+      // Same story for Average Ticket — no column for it, computed from the
+      // same Sales/haircuts this row already carries.
+      avgTicket: empHaircuts > 0 ? empSales / empHaircuts : null,
       prodHours: numOf(row[col.prodHours]),
       nonProdHours: numOf(row[col.nonProdHours]),
       daysWorked: numOf(row[col.daysWorked]),
-      otherNet: numOf(row[col.otherNet]),
+      // "$Emp Other Net" / "OPC" — other services (beard trims, waxes,
+      // shampoos, anything not Color/Signature Service/the haircut itself)
+      // already broken out by the source export at the per-employee level.
+      otherServices: numOf(row[col.otherNet]),
       opc: numOf(row[col.opc]),
     });
   }
@@ -840,20 +861,30 @@ export async function parseSalesAccrualFile(file) {
     const soldBy = col.soldBy !== -1 ? cellText(row[col.soldBy]) : '';
 
     const key = `${code}|${isoDate}`;
-    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0, employees: {}, products: {} });
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0, otherServices: 0, employees: {}, products: {} });
     const rec = daily.get(key);
     const employeeFor = name => {
       if (!name) return null;
-      if (!rec.employees[name]) rec.employees[name] = { sales: 0, colorSales: 0, haircuts: 0, retail: 0, signatureS: 0, signatureSCount: 0 };
+      if (!rec.employees[name]) rec.employees[name] = { sales: 0, colorSales: 0, haircuts: 0, retail: 0, signatureS: 0, signatureSCount: 0, otherServices: 0 };
       return rec.employees[name];
     };
+    // "Other Services" — a non-retail, non-gift-card item that isn't Color,
+    // isn't the haircut itself, and isn't Signature Service: beard trims,
+    // waxes, shampoos, or anything else no other bucket already accounts
+    // for. Deliberately a residual category (mirrors Signature Service's own
+    // "Conditioning Treatment Services" bucket) rather than its own keyword
+    // list, since the whole point is to catch everything the other three
+    // don't — a keyword list would just under-count it the same way the old
+    // Signature Service name-regex did (see isSignatureServiceItem's comment).
     const addService = (name, isColor, isHaircut, isSignature) => {
+      const isOther = !isColor && !isHaircut && !isSignature;
       const emp = employeeFor(name);
       if (!emp) return;
       emp.sales += amount;
       if (isColor) emp.colorSales += amount;
       if (isHaircut) emp.haircuts += qty;
       if (isSignature) { emp.signatureS += amount; emp.signatureSCount += qty; }
+      if (isOther) emp.otherServices += amount;
     };
     const addRetail = name => {
       const emp = employeeFor(name);
@@ -904,6 +935,7 @@ export async function parseSalesAccrualFile(file) {
         if (isColor) rec.color += amount;
         if (isHaircut) rec.haircuts += qty;
         if (isSignature) { rec.signatureS += amount; rec.signatureSCount += qty; }
+        if (!isColor && !isHaircut && !isSignature) rec.otherServices += amount;
         addService(stylist, isColor, isHaircut, isSignature);
       }
     } else {
@@ -920,6 +952,7 @@ export async function parseSalesAccrualFile(file) {
         if (isColor) rec.color += amount;
         if (isHaircut) rec.haircuts += qty;
         if (isSignature) { rec.signatureS += amount; rec.signatureSCount += qty; }
+        if (!isColor && !isHaircut && !isSignature) rec.otherServices += amount;
         addService(stylist, isColor, isHaircut, isSignature);
       }
     }
@@ -936,11 +969,13 @@ export async function parseSalesAccrualFile(file) {
     signatureS: Math.round(r.signatureS * 100) / 100,
     signatureSCount: Math.round(r.signatureSCount * 100) / 100,
     bottles: Math.round(r.bottles * 100) / 100,
+    otherServices: Math.round(r.otherServices * 100) / 100,
     employees: Object.entries(r.employees).map(([name, v]) => ({
       name, sales: Math.round(v.sales * 100) / 100, colorSales: Math.round(v.colorSales * 100) / 100,
       haircuts: Math.round(v.haircuts * 100) / 100, retail: Math.round(v.retail * 100) / 100,
       signatureS: Math.round(v.signatureS * 100) / 100,
       signatureSCount: Math.round(v.signatureSCount * 100) / 100,
+      otherServices: Math.round(v.otherServices * 100) / 100,
     })),
     products: Object.fromEntries(
       Object.entries(r.products).map(([name, v]) => [name, { qty: Math.round(v.qty * 100) / 100, amount: Math.round(v.amount * 100) / 100 }])
@@ -1056,9 +1091,10 @@ export function buildWeeklyRecord(report) {
       color: s.totals.colorSales,
       hours: s.totals.totalHours,
       haircuts: s.totals.haircuts,
+      otherServices: s.totals.otherServices,
       employees: s.employees.map(e => ({
         name: e.name, sales: e.sales, colorSales: e.colorSales, retail: e.retail,
-        haircuts: e.haircuts, totalHours: e.totalHours,
+        haircuts: e.haircuts, totalHours: e.totalHours, otherServices: e.otherServices,
       })),
     };
   });

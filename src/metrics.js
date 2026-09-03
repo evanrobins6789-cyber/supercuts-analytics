@@ -10,7 +10,7 @@
 // an uploaded weekly report if its whole range sits inside the query range;
 // any day already covered by SOME weekly report is skipped from the daily
 // (Sales-Accrual/Attendance) bucket either way, so nothing is ever counted twice.
-export const EMPTY_RANGE_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0 };
+export const EMPTY_RANGE_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0, otherServices: 0 };
 
 // `products` is deliberately NOT part of the EMPTY_RANGE_TOTALS constant
 // above — that object gets shallow-copied (`{ ...EMPTY_RANGE_TOTALS }`) once
@@ -28,6 +28,7 @@ export function addRangeInto(target, src) {
   target.signatureS += src.signatureS || 0;
   target.signatureSCount += src.signatureSCount || 0;
   target.bottles += src.bottles || 0;
+  target.otherServices += src.otherServices || 0;
   if (src.products) {
     Object.entries(src.products).forEach(([name, v]) => {
       if (!target.products[name]) target.products[name] = { qty: 0, amount: 0 };
@@ -57,7 +58,7 @@ export function expandDateRangeDays(start, end) {
 // recomputing tsth/cpc/rpc from those sums — never averaging ratios.
 export function mergeEmployeesInto(targetMap, employees) {
   employees.forEach(e => {
-    if (!targetMap[e.name]) targetMap[e.name] = { name: e.name, sales: 0, colorSales: 0, retail: 0, haircuts: 0, totalHours: 0, signatureS: 0, signatureSCount: 0 };
+    if (!targetMap[e.name]) targetMap[e.name] = { name: e.name, sales: 0, colorSales: 0, retail: 0, haircuts: 0, totalHours: 0, signatureS: 0, signatureSCount: 0, otherServices: 0 };
     const t = targetMap[e.name];
     t.sales += e.sales || 0;
     t.colorSales += e.colorSales || 0;
@@ -66,6 +67,7 @@ export function mergeEmployeesInto(targetMap, employees) {
     t.totalHours += e.totalHours || 0;
     t.signatureS += e.signatureS || 0;
     t.signatureSCount += e.signatureSCount || 0;
+    t.otherServices += e.otherServices || 0;
   });
 }
 
@@ -75,6 +77,8 @@ export function finalizeEmployee(e) {
     tsth: e.totalHours > 0 ? e.sales / e.totalHours : null,
     cpc: e.haircuts > 0 ? e.colorSales / e.haircuts : null,
     rpc: e.haircuts > 0 ? e.retail / e.haircuts : null,
+    opc: e.haircuts > 0 ? e.otherServices / e.haircuts : null,
+    avgTicket: e.haircuts > 0 ? e.sales / e.haircuts : null,
     cph: e.totalHours > 0 ? e.haircuts / e.totalHours : null,
   };
 }
@@ -167,10 +171,13 @@ export function historyTotalsToReportShape(t) {
     signatureS: t?.signatureS || 0,
     signatureSCount: t?.signatureSCount || 0,
     bottles: t?.bottles || 0,
+    otherServices: t?.otherServices || 0,
     haircuts: haircuts || null,
     tsth: hours > 0 ? sales / hours : null,
     cpc: haircuts > 0 ? (t.color || 0) / haircuts : null,
     rpc: haircuts > 0 ? retail / haircuts : null,
+    opc: haircuts > 0 ? (t.otherServices || 0) / haircuts : null,
+    avgTicket: haircuts > 0 ? sales / haircuts : null,
     cph: hours > 0 ? haircuts / hours : null,
     employees: t?.employees || [],
     products: t?.products || {},
@@ -190,6 +197,7 @@ export function rollupRows(rows) {
   const totalSignatureS = sum('signatureS');
   const totalSignatureSCount = sum('signatureSCount');
   const totalBottles = sum('bottles');
+  const totalOther = sum('otherServices');
   return {
     sales: totalSales,
     totalHours,
@@ -199,9 +207,12 @@ export function rollupRows(rows) {
     signatureS: totalSignatureS,
     signatureSCount: totalSignatureSCount,
     bottles: totalBottles,
+    otherServices: totalOther,
     tsth: totalHours > 0 ? totalSales / totalHours : null,
     cpc: totalHaircuts > 0 ? totalColor / totalHaircuts : null,
     rpc: totalHaircuts > 0 ? totalRetail / totalHaircuts : null,
+    opc: totalHaircuts > 0 ? totalOther / totalHaircuts : null,
+    avgTicket: totalHaircuts > 0 ? totalSales / totalHaircuts : null,
     cph: totalHours > 0 ? totalHaircuts / totalHours : null,
   };
 }

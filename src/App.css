@@ -391,6 +391,19 @@
    review's message onto one long line pushed off to the right instead of
    wrapping normally. */
 .review-list { padding: 12px; display: flex; flex-direction: column; gap: 10px; white-space: normal; text-align: left; }
+.review-list-toolbar { display: flex; justify-content: flex-end; }
+/* Standalone, not layered on `.btn-ghost` — same near-invisible-on-white-
+   card issue already hit and fixed the same way elsewhere in this file
+   (`.hsa-roster-edit`, `.lease-edit`): don't inherit `.btn-ghost`'s
+   white-on-transparent styling meant for the dark header bar. */
+.review-export-btn {
+  background: transparent; color: var(--navy); border: 1px solid var(--navy);
+  border-radius: 20px; padding: 6px 14px; font-size: 12px; font-family: 'Inter', sans-serif;
+  cursor: pointer;
+}
+.review-export-btn:hover { background: var(--navy); color: #fff; }
+.review-export-btn:disabled { opacity: 0.5; cursor: default; }
+.review-export-btn:disabled:hover { background: transparent; color: var(--navy); }
 .review-card { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; border-left: 3px solid var(--line); }
 .review-card--pos { border-left-color: var(--green); }
 .review-card--neg { border-left-color: var(--red); }
