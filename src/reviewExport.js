@@ -77,6 +77,30 @@ function toneColor(rating) {
   return GOLD;
 }
 
+// Groups reviews by the stylist they mention (alphabetically by name),
+// with reviews mentioning no one bucketed last under their own group — the
+// user asked for the export sorted by stylist name specifically for
+// reviews that mention one. Within a group, newest first (same order the
+// on-screen list and the un-grouped fallback below both already use).
+function groupReviewsByStylist(reviews) {
+  const byStylist = new Map();
+  const unmentioned = [];
+  reviews.forEach(r => {
+    if (r.employeeMatch) {
+      if (!byStylist.has(r.employeeMatch)) byStylist.set(r.employeeMatch, []);
+      byStylist.get(r.employeeMatch).push(r);
+    } else {
+      unmentioned.push(r);
+    }
+  });
+  const sortByDateDesc = list => [...list].sort((a, b) => (b.postedAt || '').localeCompare(a.postedAt || ''));
+  const groups = Array.from(byStylist.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([name, list]) => ({ name, reviews: sortByDateDesc(list) }));
+  if (unmentioned.length) groups.push({ name: null, reviews: sortByDateDesc(unmentioned) });
+  return groups;
+}
+
 // `reviews` — already-filtered/sorted array (whatever the Reviews tab is
 // currently showing for this store: respects the active date range plus
 // any category/sentiment/"mentioned only" narrowing), each with
@@ -178,8 +202,8 @@ export async function exportReviewsToPDF({ storeName, reviews, dateRange, filter
     doc.text('No reviews match the current view.', PAGE_MARGIN, y);
   }
 
-  // ── One rounded card per review ────────────────────────────────────────
-  reviews.forEach(r => {
+  // ── One rounded card per review, grouped by mentioned stylist ──────────
+  const drawReviewCard = r => {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9.5);
     const messageLines = r.message ? doc.splitTextToSize(r.message, CONTENT_WIDTH - 26) : [];
@@ -243,6 +267,37 @@ export async function exportReviewsToPDF({ storeName, reviews, dateRange, filter
     }
 
     y = boxY + boxH + 10;
+  };
+
+  const drawGroupHeader = (label, count, avgRating) => {
+    ensureRoom(34);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11.5);
+    doc.setTextColor(NAVY);
+    doc.text(label, PAGE_MARGIN, y + 12);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(INK_SOFT);
+    const meta = `${count} review${count !== 1 ? 's' : ''}${avgRating != null ? ` · avg ${avgRating.toFixed(2)}★` : ''}`;
+    doc.text(meta, PAGE_MARGIN + CONTENT_WIDTH, y + 12, { align: 'right' });
+    y += 18;
+    doc.setDrawColor(NAVY);
+    doc.line(PAGE_MARGIN, y, PAGE_MARGIN + CONTENT_WIDTH, y);
+    y += 12;
+  };
+
+  // Headers only add value once there's actually more than one bucket to
+  // tell apart — a store with zero stylist mentions falls back to one flat,
+  // date-sorted list exactly like before this feature existed.
+  const hasMentions = reviews.some(r => r.employeeMatch);
+  const groups = hasMentions ? groupReviewsByStylist(reviews) : [{ name: null, reviews }];
+  groups.forEach(group => {
+    if (hasMentions) {
+      const label = group.name || 'Not Mentioning a Stylist';
+      const gAvg = group.reviews.length ? group.reviews.reduce((s, r) => s + r.rating, 0) / group.reviews.length : null;
+      drawGroupHeader(label, group.reviews.length, gAvg);
+    }
+    group.reviews.forEach(drawReviewCard);
   });
 
   drawFooter(pageNum);
