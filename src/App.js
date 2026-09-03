@@ -440,14 +440,48 @@ function groupStoresByLeader(storeRows) {
 // at parse time, not recomputed on load, unlike the historical/date-range
 // paths above which always derive it fresh. Patch it in here so CPH shows
 // up immediately rather than only after the next weekly upload.
-function ensureReportCph(report) {
+// The live "current period" report is stored in Supabase as a fully
+// pre-computed JSON blob (parsed once at upload time, then loaded as-is on
+// every later page load) — so a derived field added to the parser after a
+// report was last uploaded doesn't retroactively appear just because the
+// client code changed; the stored blob still has the old shape until the
+// next real re-upload. This patches a just-loaded report on the client to
+// backfill any derived fields the parser has grown since it was last
+// uploaded, so a metric added today doesn't sit blank until someone
+// re-uploads this week's file. `cph` was the first field that needed this
+// (hence the name); `otherServices`/`opc`/`avgTicket` (2026-09-02) reuse the
+// same patch point rather than each inventing their own.
+function ensureReportDerivedFields(report) {
   if (!report) return report;
+  const emp = e => {
+    // Legacy stored employees (pre-2026-09-02) may still carry the old
+    // `otherNet` field name instead of `otherServices` — see parser.js's
+    // rollup() comment for why it was renamed.
+    const otherServices = e.otherServices ?? e.otherNet ?? 0;
+    e.otherServices = otherServices;
+    e.cph = e.totalHours > 0 ? e.haircuts / e.totalHours : null;
+    e.avgTicket = e.haircuts > 0 ? e.sales / e.haircuts : null;
+    // Per-employee OPC is the source file's own OPC column value directly
+    // (same convention CPC/RPC already use at the employee level) — only
+    // fall back to recomputing it if this employee predates that column
+    // being parsed at all.
+    if (e.opc == null) e.opc = e.haircuts > 0 ? otherServices / e.haircuts : null;
+    return otherServices;
+  };
   report.stores.forEach(s => {
-    s.employees.forEach(e => { e.cph = e.totalHours > 0 ? e.haircuts / e.totalHours : null; });
+    let totalOther = 0;
+    s.employees.forEach(e => { totalOther += emp(e); });
+    s.totals.otherServices = s.totals.otherServices ?? Math.round(totalOther * 100) / 100;
     s.totals.cph = s.totals.totalHours > 0 ? s.totals.haircuts / s.totals.totalHours : null;
+    s.totals.avgTicket = s.totals.haircuts > 0 ? s.totals.sales / s.totals.haircuts : null;
+    s.totals.opc = s.totals.haircuts > 0 ? s.totals.otherServices / s.totals.haircuts : null;
   });
   report.allEmployees = report.stores.flatMap(s => s.employees.map(e => ({ ...e, store: s.name })));
+  const companyOther = report.stores.reduce((sum, s) => sum + (s.totals.otherServices || 0), 0);
+  report.companyTotals.otherServices = report.companyTotals.otherServices ?? Math.round(companyOther * 100) / 100;
   report.companyTotals.cph = report.companyTotals.totalHours > 0 ? report.companyTotals.haircuts / report.companyTotals.totalHours : null;
+  report.companyTotals.avgTicket = report.companyTotals.haircuts > 0 ? report.companyTotals.sales / report.companyTotals.haircuts : null;
+  report.companyTotals.opc = report.companyTotals.haircuts > 0 ? report.companyTotals.otherServices / report.companyTotals.haircuts : null;
   return report;
 }
 
@@ -4693,10 +4727,21 @@ function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery,
   const toggleLeader = name => setExpandedLeader(prev => ({ ...prev, [name]: !prev[name] }));
   const activeCat = REVIEW_CATEGORIES.find(c => c.key === category);
 
-  // Mirrors the exact narrowing renderReviewList below applies, so the PDF
-  // always matches what's actually on screen for this store at the moment
-  // of export — same time period, same category/sentiment/mention filters.
-  const exportStoreReviewsPDF = (s, reviewList, employeesForStore) => {
+  // Same narrowing both the review list AND the export button use, so
+  // whichever one the button appears next to (the collapsed store name or
+  // the expanded list itself), the PDF always matches what's on screen.
+  const getStoreReviewData = s => {
+    const employeesForStore = employeesForCode(s.code);
+    let reviewList = [...s.reviews].sort((a, b) => b.postedAt.localeCompare(a.postedAt));
+    if (category) reviewList = reviewList.filter(r => isNegativeReview(r) && reviewMatchesCategory(r.message, category));
+    else if (sentiment === 'pos') reviewList = reviewList.filter(isPositiveReview);
+    else if (sentiment === 'neg') reviewList = reviewList.filter(isNegativeReview);
+    if (mentionedOnly) reviewList = reviewList.filter(r => !!detectEmployeeMention(r.message, employeesForStore));
+    return { reviewList, employeesForStore };
+  };
+
+  const exportStoreReviewsPDF = s => {
+    const { reviewList, employeesForStore } = getStoreReviewData(s);
     const filterLabels = [];
     if (category) filterLabels.push(`Category: ${activeCat.label} (negative only)`);
     else if (sentiment === 'pos') filterLabels.push('Positive (4–5★) only');
@@ -4717,27 +4762,30 @@ function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery,
     });
   };
 
+  // Sits right next to a store's name (card header or table row) so it's
+  // reachable without expanding that store's review list first — the user
+  // asked for it "next to the store names," not tucked inside the list.
+  // `stopPropagation` keeps a click here from also toggling the
+  // expand/collapse the name sits inside.
+  const ExportReviewsButton = ({ s }) => {
+    if (!canExportReviews) return null;
+    const count = getStoreReviewData(s).reviewList.length;
+    return (
+      <button
+        type="button" className="review-export-btn"
+        onClick={e => { e.stopPropagation(); exportStoreReviewsPDF(s); }}
+        disabled={!count}
+        title={`Export ${count} review${count !== 1 ? 's' : ''} for ${s.name} to a PDF`}
+      >
+        ⬇ Export PDF
+      </button>
+    );
+  };
+
   const renderReviewList = s => {
-    const employeesForStore = employeesForCode(s.code);
-    let reviewList = [...s.reviews].sort((a, b) => b.postedAt.localeCompare(a.postedAt));
-    if (category) reviewList = reviewList.filter(r => isNegativeReview(r) && reviewMatchesCategory(r.message, category));
-    else if (sentiment === 'pos') reviewList = reviewList.filter(isPositiveReview);
-    else if (sentiment === 'neg') reviewList = reviewList.filter(isNegativeReview);
-    if (mentionedOnly) reviewList = reviewList.filter(r => !!detectEmployeeMention(r.message, employeesForStore));
+    const { reviewList, employeesForStore } = getStoreReviewData(s);
     return (
       <div className="dl-store-table review-list">
-        {canExportReviews && (
-          <div className="review-list-toolbar">
-            <button
-              type="button" className="review-export-btn"
-              onClick={() => exportStoreReviewsPDF(s, reviewList, employeesForStore)}
-              disabled={!reviewList.length}
-              title={`Export these ${reviewList.length} review${reviewList.length !== 1 ? 's' : ''} for ${s.name} to a PDF`}
-            >
-              ⬇ Export PDF ({reviewList.length})
-            </button>
-          </div>
-        )}
         {reviewList.map((r, i) => (
           <ReviewCard
             key={i} review={r} employeeMatch={detectEmployeeMention(r.message, employeesForStore)}
@@ -4756,10 +4804,14 @@ function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery,
     const isOpen = !!expandedStore[s.code];
     return (
       <div key={s.code} className="dl-card">
-        <button className="dl-card-head" onClick={() => toggleStore(s.code)}>
+        {/* A real <button> here (not this outer div) can't nest the export
+            button below without invalid button-in-button HTML, so this head
+            is a div acting as a button (role/tabIndex/onKeyDown) instead. */}
+        <div className="dl-card-head" role="button" tabIndex={0} onClick={() => toggleStore(s.code)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleStore(s.code); } }}>
           <div className="dl-card-name-wrap">
             <span className={`dl-chevron ${isOpen ? 'dl-chevron--open' : ''}`}>▸</span>
             <span className="dl-card-name">{s.name}</span>
+            <ExportReviewsButton s={s} />
             {!s.matched && <span className="store-unmatched-flag">⚠ unrecognized code {s.code}</span>}
             <span className="dl-card-count">{s.reviews.length} review{s.reviews.length !== 1 ? 's' : ''} ({s.negCount} neg · {s.posCount} pos)</span>
           </div>
@@ -4770,7 +4822,7 @@ function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery,
             <div className="dl-stat"><span className="dl-stat-label">No Notes</span><span className="dl-stat-value">{s.noNotesCount}</span></div>
             {category && <div className="dl-stat"><span className="dl-stat-label">{activeCat.label}</span><span className="dl-stat-value">{s.matchCount}</span></div>}
           </div>
-        </button>
+        </div>
         {isOpen && renderReviewList(s)}
       </div>
     );
@@ -4811,6 +4863,7 @@ function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery,
                       <tr className="store-row-clickable" onClick={() => toggleStore(s.code)}>
                         <td className="ledger-name-col">
                           <span className={`mini-chevron ${isStoreOpen ? 'mini-chevron--open' : ''}`}>▸</span> {s.name}
+                          <ExportReviewsButton s={s} />
                           {!s.matched && <span className="store-unmatched-flag"> ⚠</span>}
                         </td>
                         <td>{s.reviews.length}</td>
@@ -7084,7 +7137,7 @@ export default function App() {
       loadScopedByPrefix('daily_history_', token), loadScopedByPrefix('weekly_history_', token),
       loadScoped('daily_history', token), loadScoped('weekly_history', token), // legacy single-row format, if anything was saved before chunking
     ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, newsReadsRes, hsaSignupsRes, leasesRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
-      if (reportRes.data) setReport(ensureReportCph(reportRes.data)); else if (currentUser.role === 'owner') { setTab('Setup'); setSetupSection('upload'); }
+      if (reportRes.data) setReport(ensureReportDerivedFields(reportRes.data)); else if (currentUser.role === 'owner') { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
       if (managersRes.data) setManagers(managersRes.data);
