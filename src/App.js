@@ -4,6 +4,7 @@ import { Bar } from 'react-chartjs-2';
 import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDataByPrefix, supabase } from './db';
 import {
   parseStylistReport, parseEmployeeStartDates, parseGoalFile, downloadGoalTemplate, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
+  parseColorAttachGoalsFile,
   parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory,
   buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile, parseMasterSalonListFile, parseHsaScheduleFile,
 } from './parser';
@@ -259,6 +260,7 @@ const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-US', { minimumFraction
 const fmtInt = n => Number(n || 0).toLocaleString('en-US');
 const fmtRate = n => (n == null || isNaN(n) ? '—' : `$${n.toFixed(2)}`);
 const fmtNum = (n, d = 2) => (n == null || isNaN(n) ? '—' : Number(n).toFixed(d));
+const fmtPct = n => (n == null || isNaN(n) ? '—' : `${(Number(n) * 100).toFixed(0)}%`);
 // Compact $ for tight spaces (thermometer labels) — $45,231 -> "$45K"
 const fmtCompact$ = n => {
   if (n == null || isNaN(n)) return '—';
@@ -2984,7 +2986,7 @@ function getPrevMonthRange() {
 }
 
 // ─── Single-focus store tabs (Retail, Color Sales) — grouped by DL ─────────
-function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers, canAward, onAward, isOwner, showProducts, goalMetricKey, goalMetricLabel, goalFmt }) {
+function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers, canAward, onAward, isOwner, showProducts, goalMetricKey, goalMetricLabel, goalFmt, attachMetric, refMetric }) {
   const [sortBy, setSortBy] = useState(metricA.key);
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat' | 'products'
   const [expanded, setExpanded] = useState({});
@@ -3001,7 +3003,31 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   const getGoal = code => (goalType && goals?.[code]?.[goalType] != null ? goals[code][goalType] : null);
   const showGoals = !!goalType;
   const showGoalMetricCol = showGoals && goalKey !== metricA.key && goalKey !== metricB.key;
-  const colCount = 3 + (showGoals ? 2 : 0) + (showPrevMonthColor ? 1 : 0) + (showGoalMetricCol ? 1 : 0);
+  // attachMetric/refMetric ({actualField, goalField, label} / {field, label,
+  // fmt}) source their value straight from `goals` rather than from the
+  // row's own computed totals — unlike every other tracked goal here, the
+  // actual side of a store's Retail Attach % can't be derived from anything
+  // this app parses (no per-ticket data — see parseColorAttachGoalsFile's
+  // comment in parser.js), so it's a manually-imported figure too, refreshed
+  // whenever the user re-imports the DL Color Goals file. `avgAttach`
+  // averages unweighted across whichever stores in the group actually have
+  // a value on file — there's no per-store ticket count here to weight by.
+  const showAttach = !!attachMetric;
+  const attachFmt = (attachMetric && attachMetric.fmt) || fmtPct;
+  const getAttachActual = code => (showAttach && goals?.[code]?.[attachMetric.actualField] != null ? goals[code][attachMetric.actualField] : null);
+  const getAttachGoal = code => (showAttach && goals?.[code]?.[attachMetric.goalField] != null ? goals[code][attachMetric.goalField] : null);
+  const avgAttach = (storesArr, field) => {
+    const vals = storesArr.map(st => (goals?.[st.code]?.[field])).filter(v => v != null);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  };
+  const showRef = !!refMetric;
+  const refFmt = (refMetric && refMetric.fmt) || fmt$;
+  const getRef = code => (showRef && goals?.[code]?.[refMetric.field] != null ? goals[code][refMetric.field] : null);
+  // Unlike attach %, a ref metric is a $ figure (e.g. last year's Color $ for
+  // the same month) — additive, so a group/company total is a real sum, not
+  // an average like avgAttach above.
+  const sumRef = storesArr => storesArr.reduce((sum, st) => sum + (getRef(st.code) || 0), 0);
+  const colCount = 3 + (showGoals ? 2 : 0) + (showPrevMonthColor ? 1 : 0) + (showGoalMetricCol ? 1 : 0) + (showAttach ? 3 : 0) + (showRef ? 1 : 0);
 
   const prevMonthColorByCode = useMemo(() => {
     if (!showPrevMonthColor) return {};
@@ -3157,6 +3183,9 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                     {showGoals && (
                       <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupTotals[goalKey]} milestone={goalTotal} fmt={goalFmt && goalFormatter} compactFmt={goalFmt && goalFormatter} /></div>
                     )}
+                    {showRef && <div className="dl-stat"><span className="dl-stat-label">{refMetric.label}</span><span className="dl-stat-value">{refFmt(sumRef(g.stores))}</span></div>}
+                    {showAttach && <div className="dl-stat"><span className="dl-stat-label">{attachMetric.label}</span><span className="dl-stat-value">{attachFmt(avgAttach(g.stores, attachMetric.actualField))}</span></div>}
+                    {showAttach && <div className="dl-stat"><span className="dl-stat-label">{attachMetric.label} Goal</span><span className="dl-stat-value">{attachFmt(avgAttach(g.stores, attachMetric.goalField))}</span></div>}
                   </div>
                 </button>
                 {isLeaderOpen && (
@@ -3168,6 +3197,8 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                           {showPrevMonthColor && <th>Prev Month Color</th>}
                           {showGoalMetricCol && <th>{goalMetricLabel}</th>}
                           {showGoals && <><th>Goal</th><th>vs Goal</th></>}
+                          {showRef && <th>{refMetric.label}</th>}
+                          {showAttach && <><th>{attachMetric.label}</th><th>{attachMetric.label} Goal</th><th>Attach vs Goal</th></>}
                         </tr>
                       </thead>
                       <tbody>
@@ -3176,6 +3207,9 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                           const diff = s.vsGoal;
                           const isOpen = !!expanded[s.code];
                           const hasEmployeeData = s.employees.length > 0;
+                          const attachActual = getAttachActual(s.code);
+                          const attachGoal = getAttachGoal(s.code);
+                          const attachDiff = (attachActual != null && attachGoal != null) ? attachActual - attachGoal : null;
                           return (
                             <React.Fragment key={s.name}>
                               <tr className={hasEmployeeData ? 'store-row-clickable' : ''} onClick={hasEmployeeData ? () => toggleStore(s.code) : undefined}>
@@ -3190,6 +3224,14 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                                   <>
                                     <td>{goal != null ? goalFormatter(goal) : '—'}</td>
                                     <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${goalFormatter(diff)}` : '—'}</td>
+                                  </>
+                                )}
+                                {showRef && <td>{getRef(s.code) != null ? refFmt(getRef(s.code)) : '—'}</td>}
+                                {showAttach && (
+                                  <>
+                                    <td>{attachActual != null ? attachFmt(attachActual) : '—'}</td>
+                                    <td>{attachGoal != null ? attachFmt(attachGoal) : '—'}</td>
+                                    <td className={vsGoalClass(attachDiff)}>{attachDiff != null ? `${attachDiff >= 0 ? '+' : ''}${attachFmt(attachDiff)}` : '—'}</td>
                                   </>
                                 )}
                               </tr>
@@ -3226,6 +3268,19 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                               </td>
                             </>
                           )}
+                          {showRef && <td>{refFmt(sumRef(g.stores))}</td>}
+                          {showAttach && (() => {
+                            const gAvgActual = avgAttach(g.stores, attachMetric.actualField);
+                            const gAvgGoal = avgAttach(g.stores, attachMetric.goalField);
+                            const gDiff = (gAvgActual != null && gAvgGoal != null) ? gAvgActual - gAvgGoal : null;
+                            return (
+                              <>
+                                <td>{gAvgActual != null ? attachFmt(gAvgActual) : '—'}</td>
+                                <td>{gAvgGoal != null ? attachFmt(gAvgGoal) : '—'}</td>
+                                <td className={vsGoalClass(gDiff)}>{gDiff != null ? `${gDiff >= 0 ? '+' : ''}${attachFmt(gDiff)}` : '—'}</td>
+                              </>
+                            );
+                          })()}
                         </tr>
                       </tfoot>
                     </table>
@@ -3246,6 +3301,8 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                 {showPrevMonthColor && <th>Prev Month Color</th>}
                 {showGoalMetricCol && <th>{goalMetricLabel}</th>}
                 {showGoals && <><th>Goal</th><th>vs Goal</th></>}
+                {showRef && <th>{refMetric.label}</th>}
+                {showAttach && <><th>{attachMetric.label}</th><th>{attachMetric.label} Goal</th><th>Attach vs Goal</th></>}
               </tr>
             </thead>
             <tbody>
@@ -3254,6 +3311,9 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                 const diff = s.vsGoal;
                 const isOpen = !!expanded[s.code];
                 const hasEmployeeData = s.employees.length > 0;
+                const attachActual = getAttachActual(s.code);
+                const attachGoal = getAttachGoal(s.code);
+                const attachDiff = (attachActual != null && attachGoal != null) ? attachActual - attachGoal : null;
                 return (
                   <React.Fragment key={s.name}>
                     <tr className={hasEmployeeData ? 'store-row-clickable' : ''} onClick={hasEmployeeData ? () => toggleStore(s.code) : undefined}>
@@ -3268,6 +3328,14 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                         <>
                           <td>{goal != null ? goalFormatter(goal) : '—'}</td>
                           <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${goalFormatter(diff)}` : '—'}</td>
+                        </>
+                      )}
+                      {showRef && <td>{getRef(s.code) != null ? refFmt(getRef(s.code)) : '—'}</td>}
+                      {showAttach && (
+                        <>
+                          <td>{attachActual != null ? attachFmt(attachActual) : '—'}</td>
+                          <td>{attachGoal != null ? attachFmt(attachGoal) : '—'}</td>
+                          <td className={vsGoalClass(attachDiff)}>{attachDiff != null ? `${attachDiff >= 0 ? '+' : ''}${attachFmt(attachDiff)}` : '—'}</td>
                         </>
                       )}
                     </tr>
@@ -3305,6 +3373,19 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                       </td>
                     </>
                   )}
+                  {showRef && <td>{refFmt(sumRef(sortedFlat))}</td>}
+                  {showAttach && (() => {
+                    const cAvgActual = avgAttach(rows, attachMetric.actualField);
+                    const cAvgGoal = avgAttach(rows, attachMetric.goalField);
+                    const cDiff = (cAvgActual != null && cAvgGoal != null) ? cAvgActual - cAvgGoal : null;
+                    return (
+                      <>
+                        <td>{cAvgActual != null ? attachFmt(cAvgActual) : '—'}</td>
+                        <td>{cAvgGoal != null ? attachFmt(cAvgGoal) : '—'}</td>
+                        <td className={vsGoalClass(cDiff)}>{cDiff != null ? `${cDiff >= 0 ? '+' : ''}${attachFmt(cDiff)}` : '—'}</td>
+                      </>
+                    );
+                  })()}
                 </tr>
               </tfoot>
             )}
@@ -3937,10 +4018,17 @@ const NEW_HIRE_SORT_OPTIONS = [
 // ─── Goals tab ──────────────────────────────────────────────────────────────
 const GOAL_FIELD_LABELS = { salesGoal: 'sales', colorGoal: 'color', bottleGoal: 'bottle', signatureSGoal: 'signature service' };
 
-function GoalsTab({ report, goals, onSaveGoal, onImportGoals, fallbackEmployeesByStore }) {
+function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttachGoals, fallbackEmployeesByStore }) {
   const [query, setQuery] = useState('');
   const [drafts, setDrafts] = useState({}); // { code: { salesGoal, colorGoal, bottleGoal, signatureSGoal } } — in-progress edits
   const [importing, setImporting] = useState(null); // 'colorGoal' | 'bottleGoal' | null
+  const [importingColorAttach, setImportingColorAttach] = useState(false);
+
+  const handleImportColorAttachFile = async file => {
+    setImportingColorAttach(true);
+    await onImportColorAttachGoals(file);
+    setImportingColorAttach(false);
+  };
 
   const handleImportFile = async (field, file) => {
     setImporting(field);
@@ -4036,6 +4124,19 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, fallbackEmployeesB
           {importing === 'signatureSGoal' ? <span className="spinner small" /> : '📥'} Import Signature Service Goals from file
         </label>
       </div>
+
+      {onImportColorAttachGoals && (
+        <div className="goal-import-row">
+          <label className="goal-import-btn">
+            <input
+              type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+              onChange={e => { if (e.target.files[0]) handleImportColorAttachFile(e.target.files[0]); e.target.value = ''; }}
+            />
+            {importingColorAttach ? <span className="spinner small" /> : '📥'} Import Color Goals + Retail Attach % (DL Color Goals file)
+          </label>
+        </div>
+      )}
+      <p className="section-hint">The DL Color Goals file sets Color Goal, Retail Attach % (color tickets that also have a retail item — actual and goal), and a same-month-last-year Color $ reference all at once, matched by the Salon column. Retail Attach % isn't computed by this app (Sales-Accrual has no per-ticket data to link a retail item back to a color ticket) — both the actual and goal always come from this file.</p>
 
       <div className="ledger-scroll">
         <table className="ledger-table">
@@ -5761,11 +5862,15 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   // standing target, not tied to a specific historical month.
   if (goals && Object.keys(goals).length) {
     lines.push('');
-    lines.push('STORE GOALS (Sales/Color/Bottle/Signature Service targets — standing targets, not specific to any period, entered by DLs on the Goals tab; Sales/Color Goal are $ figures, Bottle Goal is a unit count of retail product sold, Signature Service Goal is a unit count of services performed — NOT a dollar figure, despite Signature Service dollar totals appearing elsewhere in this context):');
+    lines.push('STORE GOALS (Sales/Color/Bottle/Signature Service targets — standing targets, not specific to any period, entered by DLs on the Goals tab; Sales/Color Goal are $ figures, Bottle Goal is a unit count of retail product sold, Signature Service Goal is a unit count of services performed — NOT a dollar figure, despite Signature Service dollar totals appearing elsewhere in this context. Retail Attach % = color tickets that also have a retail item attached — both the actual and the goal are imported from the user\'s own DL Color Goals file, not computed by this app, since Sales-Accrual has no per-ticket data to link a retail item back to a color ticket. Color (Last Year) is the same calendar month\'s Color $ from the prior year, imported for comparison — it is NOT the current period\'s color figure, which is in CURRENT REPORT PERIOD above.):');
     Object.entries(goals).forEach(([code, g]) => {
-      if (g.salesGoal == null && g.colorGoal == null && g.bottleGoal == null && g.signatureSGoal == null) return;
+      if (g.salesGoal == null && g.colorGoal == null && g.bottleGoal == null && g.signatureSGoal == null && g.retailAttach == null && g.retailAttachGoal == null && g.colorLastYear == null) return;
       const name = STORE_CODE_TO_NAME[code] || `Store ${code}`;
-      lines.push(`${name}: Sales Goal ${g.salesGoal ?? 'none'}, Color Goal ${g.colorGoal ?? 'none'}, Bottle Goal ${g.bottleGoal ?? 'none'} bottles, Signature Service Goal ${g.signatureSGoal ?? 'none'} services`);
+      const attachStr = (g.retailAttach != null || g.retailAttachGoal != null)
+        ? `, Retail Attach % ${g.retailAttach != null ? `${(g.retailAttach * 100).toFixed(0)}%` : 'none'} (Goal ${g.retailAttachGoal != null ? `${(g.retailAttachGoal * 100).toFixed(0)}%` : 'none'})`
+        : '';
+      const lastYearStr = g.colorLastYear != null ? `, Color (Last Year) $${Math.round(g.colorLastYear)}` : '';
+      lines.push(`${name}: Sales Goal ${g.salesGoal ?? 'none'}, Color Goal ${g.colorGoal ?? 'none'}, Bottle Goal ${g.bottleGoal ?? 'none'} bottles, Signature Service Goal ${g.signatureSGoal ?? 'none'} services${attachStr}${lastYearStr}`);
     });
   }
 
@@ -8028,6 +8133,54 @@ export default function App() {
     return queued;
   }, [currentUser]);
 
+  // The DL Color Goals file bundles 4 fields per store in one sheet (new
+  // Color $ goal, current Retail/Color attach %, new attach % goal, and a
+  // same-month-last-year Color $ reference) — same queued/saveScoped pattern
+  // as handleImportGoals above, just patching several fields per store in
+  // one pass instead of one. A field only overwrites what the file actually
+  // had a value for (null entries are skipped, not written as null), so a
+  // future re-import that's missing e.g. the last-year column doesn't wipe
+  // out an already-saved value from a previous import.
+  const handleImportColorAttachGoals = useCallback(file => {
+    const task = async () => {
+      try {
+        const parsed = await parseColorAttachGoalsFile(file);
+        const next = { ...goalsRef.current };
+        const patch = {};
+        let matched = 0;
+        const unmatched = [];
+        parsed.entries.forEach(e => {
+          const code = getCodeForStoreName(e.storeName);
+          if (!code) { unmatched.push(e.storeName); return; }
+          const fields = {};
+          ['colorLastYear', 'colorGoal', 'retailAttach', 'retailAttachGoal'].forEach(f => {
+            if (e[f] != null) fields[f] = e[f];
+          });
+          if (!Object.keys(fields).length) return;
+          next[code] = { ...next[code], ...fields };
+          patch[code] = fields;
+          matched++;
+        });
+        goalsRef.current = next;
+        setGoals(next);
+        const result = matched ? await saveScoped(currentUser.token, 'store_goals', patch) : { ok: true };
+        if (result.ok && result.data) { goalsRef.current = result.data; setGoals(result.data); }
+        if (!result.ok) {
+          showToast(`Imported ${matched} store(s) of color goals/attach data, but couldn't sync to Supabase (${result.error})`, 'error');
+        } else if (unmatched.length) {
+          showToast(`Imported ${matched} store(s) from ${file.name} — ${unmatched.length} store name${unmatched.length > 1 ? 's' : ''} not recognized: ${unmatched.slice(0, 3).join(', ')}${unmatched.length > 3 ? '…' : ''}`, 'error');
+        } else {
+          showToast(`Imported color goals + retail attach for ${matched} store(s) from ${file.name}`);
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    };
+    const queued = importChainRef.current.then(task, task);
+    importChainRef.current = queued.then(() => {}, () => {});
+    return queued;
+  }, [currentUser]);
+
   // Queued through importChainRef and saved via saveScoped (only the touched
   // store codes) for the same reason handleImportGoals is above — a local
   // full-object overwrite from a non-owner's own (already scoped-down)
@@ -8354,6 +8507,8 @@ export default function App() {
             report={report} query={queries['Color Sales']} onQuery={v => setQuery('Color Sales', v)}
             title="Color Sales" metricA={{ key: 'colorSales', label: 'Color Sales', fmt: fmt$ }} metricB={{ key: 'cpc', label: 'CPC', fmt: fmtNum }}
             goalType="colorGoal" goals={goals}
+            attachMetric={{ actualField: 'retailAttach', goalField: 'retailAttachGoal', label: 'Retail Attach %' }}
+            refMetric={{ field: 'colorLastYear', label: 'Color (Last Year)' }}
             history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
             canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
             showPrevMonthColor
@@ -8377,7 +8532,7 @@ export default function App() {
           />
         )}
         {tab === 'Goals' && (
-          <GoalsTab report={report} goals={goals} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} fallbackEmployeesByStore={fallbackEmployeesByStore} />
+          <GoalsTab report={report} goals={goals} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} onImportColorAttachGoals={handleImportColorAttachGoals} fallbackEmployeesByStore={fallbackEmployeesByStore} />
         )}
         {tab === 'Leases' && (
           <LeasesTab

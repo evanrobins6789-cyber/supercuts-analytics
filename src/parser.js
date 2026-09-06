@@ -415,6 +415,56 @@ export async function parseGoalFile(file) {
   return { entries, periodLabel, fileName: file.name };
 }
 
+// ─── DL Color Goals file (DL | Salon | same-month-last-year Color $ |
+// current-month Color $ (ignored — the app already tracks this itself from
+// real uploads) | new Color $ goal | current Retail/Color attach % |
+// new attach % goal) ─────────────────────────────────────────────────────
+// "Attach %" = color tickets that also carry a retail item. Sales-Accrual
+// has no ticket/invoice id at all (just aggregated line items — see the
+// comment above parseSalesAccrualFile), so there's no way for this app to
+// ever compute that itself; both the actual and the goal have to come from
+// this file, which the user generates from their own POS attach-rate tool.
+// Read by column position (col 1 Salon, 2 last-year Color $, 4 new Color $
+// goal, 5 current attach %, 6 new attach % goal) since the header text is a
+// month label that changes every time this file is regenerated.
+export async function parseColorAttachGoalsFile(file) {
+  const grid = await readWorkbookGrid(file);
+  if (grid.length < 2) throw new Error('This file does not have any store rows in it.');
+
+  // The source sheet is inconsistent about how it stores a percent: a couple
+  // of cells are real percent-formatted fractions (0.05 meaning 5%), most
+  // are plain whole numbers meant as percentage points (13 meaning 13%, not
+  // 1300%). >=1 (not >1) is the right cutoff — one real store in this file
+  // has a raw value of exactly 1, clearly meant as "1%" like its neighboring
+  // stores' 0/3/4% rows, not a literal 100% attach rate; nothing in this
+  // file's actual percent-formatted cells goes anywhere near 100% (0.75 is
+  // the highest), so >=1 can only ever catch a percentage-point cell.
+  const normalizePct = cell => {
+    if (cellText(cell) === '') return null;
+    const n = numOf(cell);
+    return n >= 1 ? n / 100 : n;
+  };
+  const numOrNull = cell => (cellText(cell) === '' ? null : numOf(cell));
+
+  const entries = [];
+  for (let r = 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (!rowHasData(row)) continue;
+    const storeName = cellText(row[1]);
+    if (!storeName) continue;
+    entries.push({
+      storeName,
+      colorLastYear: numOrNull(row[2]),
+      colorGoal: numOrNull(row[4]),
+      retailAttach: normalizePct(row[5]),
+      retailAttachGoal: normalizePct(row[6]),
+    });
+  }
+  if (!entries.length) throw new Error('No store rows found in this file.');
+
+  return { entries, fileName: file.name };
+}
+
 // Blank template for the above — same DL | Store | Goal column layout (DL is
 // ignored on import, kept here only so the person filling it in can see
 // which stores are theirs), with the Goal column left empty. Works for any
