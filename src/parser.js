@@ -419,14 +419,19 @@ export async function parseGoalFile(file) {
 // current-month Color $ (ignored — the app already tracks this itself from
 // real uploads) | new Color $ goal | current Retail/Color attach % |
 // new attach % goal) ─────────────────────────────────────────────────────
-// "Attach %" = color tickets that also carry a retail item. Sales-Accrual
-// has no ticket/invoice id at all (just aggregated line items — see the
-// comment above parseSalesAccrualFile), so there's no way for this app to
-// ever compute that itself; both the actual and the goal have to come from
-// this file, which the user generates from their own POS attach-rate tool.
-// Read by column position (col 1 Salon, 2 last-year Color $, 4 new Color $
-// goal, 5 current attach %, 6 new attach % goal) since the header text is a
-// month label that changes every time this file is regenerated.
+// "Attach %" = color tickets that also carry a retail item. As of the
+// Invoice No column being added to the Sales-Accrual export (see
+// parseSalesAccrualFile below), the ACTUAL side of this can now be computed
+// for real from a historical import — the StoreMetricTab UI always prefers
+// that real figure when it's available for the period being viewed. This
+// file's "current attach %" column still gets imported as a fallback for
+// whenever it isn't (older Sales-Accrual data from before Invoice No
+// existed, or the live current-period weekly Stylist Report, which has no
+// per-ticket detail at all) — and its goal column is still the ONLY source
+// for the goal side either way, since there's nothing to compute a goal
+// from. Read by column position (col 1 Salon, 2 last-year Color $, 4 new
+// Color $ goal, 5 current attach %, 6 new attach % goal) since the header
+// text is a month label that changes every time this file is regenerated.
 export async function parseColorAttachGoalsFile(file) {
   const grid = await readWorkbookGrid(file);
   if (grid.length < 2) throw new Error('This file does not have any store rows in it.');
@@ -883,6 +888,7 @@ export async function parseSalesAccrualFile(file) {
     soldBy: findCol(headerRow, 'Sold By'),
     itemType: findCol(headerRow, 'Item Type'),
     itemCategory: findCol(headerRow, 'Item Category'),
+    invoice: findCol(headerRow, 'Invoice No'),
   };
   if (col.center === -1 || col.sales === -1 || col.date === -1) {
     throw new Error('Could not find the expected columns (Center Name, Sales (Exc. Tax), Sale Date) in this file.');
@@ -893,7 +899,24 @@ export async function parseSalesAccrualFile(file) {
   // no double-dipping between Sales and Retail.
   const hasExactTypes = col.itemType !== -1;
 
-  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color, giftCards, haircuts, signatureS, signatureSCount, employees: {name: {sales, colorSales, haircuts, signatureS, signatureSCount}} }
+  // Retail Attach % (color tickets that also have a retail item on the same
+  // invoice) needs real per-ticket linkage — only possible when this export
+  // carries an "Invoice No" column (added to the source report after this
+  // was first built; older exports won't have it, and this whole block is a
+  // no-op when col.invoice === -1). Two-pass: rows for one invoice aren't
+  // guaranteed contiguous in the file, so flag each invoice number as we go
+  // (invoiceFlags), then fold the finished per-invoice flags into the
+  // matching store/day record once the main loop is done.
+  const invoiceFlags = new Map(); // invoiceNo -> { code, date, hasColor, hasRetail }
+  const markInvoice = (invoiceNo, code, isoDate, isColorRow, isRetailRow) => {
+    if (!invoiceNo || col.invoice === -1) return;
+    if (!invoiceFlags.has(invoiceNo)) invoiceFlags.set(invoiceNo, { code, date: isoDate, hasColor: false, hasRetail: false });
+    const f = invoiceFlags.get(invoiceNo);
+    if (isColorRow) f.hasColor = true;
+    if (isRetailRow) f.hasRetail = true;
+  };
+
+  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color, giftCards, haircuts, signatureS, signatureSCount, colorTicketCount, colorTicketsWithRetail, employees: {name: {sales, colorSales, haircuts, signatureS, signatureSCount}} }
   for (let r = hdrRowIdx + 1; r < grid.length; r++) {
     const row = grid[r];
     if (!rowHasData(row)) continue;
@@ -909,9 +932,10 @@ export async function parseSalesAccrualFile(file) {
     // Retail/product rows are typically attributed via "Sold By" rather than
     // "Stylist" in this export — fall back to Stylist if Sold By is blank.
     const soldBy = col.soldBy !== -1 ? cellText(row[col.soldBy]) : '';
+    const invoiceNo = col.invoice !== -1 ? cellText(row[col.invoice]) : '';
 
     const key = `${code}|${isoDate}`;
-    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0, otherServices: 0, employees: {}, products: {} });
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0, otherServices: 0, colorTicketCount: 0, colorTicketsWithRetail: 0, employees: {}, products: {} });
     const rec = daily.get(key);
     const employeeFor = name => {
       if (!name) return null;
@@ -966,6 +990,7 @@ export async function parseSalesAccrualFile(file) {
         rec.bottles += qty;
         addRetail(soldBy || stylist);
         addProduct();
+        markInvoice(invoiceNo, code, isoDate, false, true);
       } else {
         rec.service += amount;
         const category = col.itemCategory !== -1 ? cellText(row[col.itemCategory]) : '';
@@ -987,6 +1012,7 @@ export async function parseSalesAccrualFile(file) {
         if (isSignature) { rec.signatureS += amount; rec.signatureSCount += qty; }
         if (!isColor && !isHaircut && !isSignature) rec.otherServices += amount;
         addService(stylist, isColor, isHaircut, isSignature);
+        markInvoice(invoiceNo, code, isoDate, isColor, false);
       }
     } else {
       // Older export without Item Type/Category — fall back to name-based heuristics.
@@ -994,6 +1020,7 @@ export async function parseSalesAccrualFile(file) {
       if (isRetailItem(itemName, stylist, soldBy)) {
         rec.retail += amount;
         addRetail(soldBy || stylist);
+        markInvoice(invoiceNo, code, isoDate, false, true);
       } else {
         rec.service += amount;
         const isColor = isColorItem(itemName);
@@ -1004,9 +1031,22 @@ export async function parseSalesAccrualFile(file) {
         if (isSignature) { rec.signatureS += amount; rec.signatureSCount += qty; }
         if (!isColor && !isHaircut && !isSignature) rec.otherServices += amount;
         addService(stylist, isColor, isHaircut, isSignature);
+        markInvoice(invoiceNo, code, isoDate, isColor, false);
       }
     }
   }
+
+  // Fold the finished per-invoice flags into their store/day record — done
+  // as a second pass (not inline during the main loop) since an invoice's
+  // rows aren't guaranteed to be contiguous in the file, so `hasColor`/
+  // `hasRetail` aren't known for sure until every row has been seen.
+  invoiceFlags.forEach(f => {
+    if (!f.hasColor) return;
+    const rec = daily.get(`${f.code}|${f.date}`);
+    if (!rec) return;
+    rec.colorTicketCount += 1;
+    if (f.hasRetail) rec.colorTicketsWithRetail += 1;
+  });
 
   if (!daily.size) throw new Error('No sales rows found in this file.');
   const records = Array.from(daily.values()).map(r => ({
@@ -1020,6 +1060,8 @@ export async function parseSalesAccrualFile(file) {
     signatureSCount: Math.round(r.signatureSCount * 100) / 100,
     bottles: Math.round(r.bottles * 100) / 100,
     otherServices: Math.round(r.otherServices * 100) / 100,
+    colorTicketCount: r.colorTicketCount,
+    colorTicketsWithRetail: r.colorTicketsWithRetail,
     employees: Object.entries(r.employees).map(([name, v]) => ({
       name, sales: Math.round(v.sales * 100) / 100, colorSales: Math.round(v.colorSales * 100) / 100,
       haircuts: Math.round(v.haircuts * 100) / 100, retail: Math.round(v.retail * 100) / 100,
@@ -1097,9 +1139,10 @@ export function mergeSalesIntoHistory(history, salesRecords) {
   const next = { ...history };
   salesRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, signatureSCount: null, bottles: null, otherServices: null, employees: {}, products: {} };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, signatureSCount: null, bottles: null, otherServices: null, colorTicketCount: null, colorTicketsWithRetail: null, employees: {}, products: {} };
     next[key] = {
       ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards, haircuts: r.haircuts, signatureS: r.signatureS, signatureSCount: r.signatureSCount, bottles: r.bottles, otherServices: r.otherServices,
+      colorTicketCount: r.colorTicketCount, colorTicketsWithRetail: r.colorTicketsWithRetail,
       products: r.products || {},
       employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales', 'haircuts', 'retail', 'signatureS', 'signatureSCount', 'otherServices']),
     };

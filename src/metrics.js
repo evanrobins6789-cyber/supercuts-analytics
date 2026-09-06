@@ -10,7 +10,7 @@
 // an uploaded weekly report if its whole range sits inside the query range;
 // any day already covered by SOME weekly report is skipped from the daily
 // (Sales-Accrual/Attendance) bucket either way, so nothing is ever counted twice.
-export const EMPTY_RANGE_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0, otherServices: 0 };
+export const EMPTY_RANGE_TOTALS = { service: 0, retail: 0, color: 0, hours: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0, otherServices: 0, colorTicketCount: 0, colorTicketsWithRetail: 0 };
 
 // `products` is deliberately NOT part of the EMPTY_RANGE_TOTALS constant
 // above — that object gets shallow-copied (`{ ...EMPTY_RANGE_TOTALS }`) once
@@ -29,6 +29,8 @@ export function addRangeInto(target, src) {
   target.signatureSCount += src.signatureSCount || 0;
   target.bottles += src.bottles || 0;
   target.otherServices += src.otherServices || 0;
+  target.colorTicketCount += src.colorTicketCount || 0;
+  target.colorTicketsWithRetail += src.colorTicketsWithRetail || 0;
   if (src.products) {
     Object.entries(src.products).forEach(([name, v]) => {
       if (!target.products[name]) target.products[name] = { qty: 0, amount: 0 };
@@ -115,8 +117,8 @@ export function getRangeTotals(history, weeklyHistory, startISO, endISO) {
       // counts, or a product breakdown at all. Pulling those straight from
       // the daily Sales-Accrual record here can't double-count anything,
       // since the weekly source's contribution to them is always zero.
-      if (r.signatureS || r.signatureSCount || r.bottles) {
-        addTo(r.code, { signatureS: r.signatureS, signatureSCount: r.signatureSCount, bottles: r.bottles });
+      if (r.signatureS || r.signatureSCount || r.bottles || r.colorTicketCount) {
+        addTo(r.code, { signatureS: r.signatureS, signatureSCount: r.signatureSCount, bottles: r.bottles, colorTicketCount: r.colorTicketCount, colorTicketsWithRetail: r.colorTicketsWithRetail });
       }
       if (r.products && Object.keys(r.products).length) {
         addTo(r.code, { products: r.products });
@@ -179,6 +181,15 @@ export function historyTotalsToReportShape(t) {
     opc: haircuts > 0 ? (t.otherServices || 0) / haircuts : null,
     avgTicket: haircuts > 0 ? sales / haircuts : null,
     cph: hours > 0 ? haircuts / hours : null,
+    // Retail Attach % — color tickets that also carry a retail item, from
+    // real per-invoice linkage (see parseSalesAccrualFile's Invoice No
+    // handling in parser.js). Only ever real here when Sales-Accrual data
+    // for this range came from an export new enough to carry Invoice No —
+    // null (not 0) when colorTicketCount is 0, same "don't show a fake
+    // number" rule haircuts/cpc/etc. already follow above.
+    colorTicketCount: t?.colorTicketCount || 0,
+    colorTicketsWithRetail: t?.colorTicketsWithRetail || 0,
+    retailAttachPct: (t?.colorTicketCount || 0) > 0 ? (t.colorTicketsWithRetail || 0) / t.colorTicketCount : null,
     employees: t?.employees || [],
     products: t?.products || {},
   };
@@ -198,6 +209,8 @@ export function rollupRows(rows) {
   const totalSignatureSCount = sum('signatureSCount');
   const totalBottles = sum('bottles');
   const totalOther = sum('otherServices');
+  const totalColorTickets = sum('colorTicketCount');
+  const totalColorTicketsWithRetail = sum('colorTicketsWithRetail');
   return {
     sales: totalSales,
     totalHours,
@@ -214,6 +227,9 @@ export function rollupRows(rows) {
     opc: totalHaircuts > 0 ? totalOther / totalHaircuts : null,
     avgTicket: totalHaircuts > 0 ? totalSales / totalHaircuts : null,
     cph: totalHours > 0 ? totalHaircuts / totalHours : null,
+    colorTicketCount: totalColorTickets,
+    colorTicketsWithRetail: totalColorTicketsWithRetail,
+    retailAttachPct: totalColorTickets > 0 ? totalColorTicketsWithRetail / totalColorTickets : null,
   };
 }
 

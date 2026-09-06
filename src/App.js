@@ -3003,22 +3003,39 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   const getGoal = code => (goalType && goals?.[code]?.[goalType] != null ? goals[code][goalType] : null);
   const showGoals = !!goalType;
   const showGoalMetricCol = showGoals && goalKey !== metricA.key && goalKey !== metricB.key;
-  // attachMetric/refMetric ({actualField, goalField, label} / {field, label,
-  // fmt}) source their value straight from `goals` rather than from the
-  // row's own computed totals — unlike every other tracked goal here, the
-  // actual side of a store's Retail Attach % can't be derived from anything
-  // this app parses (no per-ticket data — see parseColorAttachGoalsFile's
-  // comment in parser.js), so it's a manually-imported figure too, refreshed
-  // whenever the user re-imports the DL Color Goals file. `avgAttach`
-  // averages unweighted across whichever stores in the group actually have
-  // a value on file — there's no per-store ticket count here to weight by.
+  // attachMetric ({ rowKey, actualField, goalField, label }). The actual
+  // side prefers a REAL computed value when this range's Sales-Accrual data
+  // has per-invoice ticket linkage (`rowKey`, e.g. `retailAttachPct` — see
+  // parser.js's Invoice No handling and metrics.js's
+  // historyTotalsToReportShape/rollupRows, which recompute it from raw
+  // colorTicketCount/colorTicketsWithRetail sums, never averaging per-store
+  // percentages directly) and only falls back to the manually-imported
+  // `goals[code][actualField]` snapshot when it doesn't — older Sales-
+  // Accrual data with no Invoice No column, or the live weekly Stylist
+  // Report, which has no per-ticket detail at all. The goal side is always
+  // goals-only (imported from the DL Color Goals file) — there's nothing to
+  // compute a goal from.
   const showAttach = !!attachMetric;
   const attachFmt = (attachMetric && attachMetric.fmt) || fmtPct;
-  const getAttachActual = code => (showAttach && goals?.[code]?.[attachMetric.actualField] != null ? goals[code][attachMetric.actualField] : null);
+  const attachActualForRow = s => {
+    if (!showAttach) return null;
+    if (attachMetric.rowKey && s[attachMetric.rowKey] != null) return s[attachMetric.rowKey];
+    return goals?.[s.code]?.[attachMetric.actualField] ?? null;
+  };
   const getAttachGoal = code => (showAttach && goals?.[code]?.[attachMetric.goalField] != null ? goals[code][attachMetric.goalField] : null);
-  const avgAttach = (storesArr, field) => {
+  // Unweighted fallback average — only reached when a group/company has no
+  // real computed rollup available at all (no ticket-linked Sales-Accrual
+  // data anywhere in the range), otherwise `groupAttachActual` below prefers
+  // the rollup's own recomputed-from-sums figure.
+  const avgFromGoals = (storesArr, field) => {
     const vals = storesArr.map(st => (goals?.[st.code]?.[field])).filter(v => v != null);
     return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  };
+  const avgAttachGoal = storesArr => (showAttach ? avgFromGoals(storesArr, attachMetric.goalField) : null);
+  const groupAttachActual = (storesArr, computedTotals) => {
+    if (!showAttach) return null;
+    if (attachMetric.rowKey && computedTotals && computedTotals[attachMetric.rowKey] != null) return computedTotals[attachMetric.rowKey];
+    return avgFromGoals(storesArr, attachMetric.actualField);
   };
   const showRef = !!refMetric;
   const refFmt = (refMetric && refMetric.fmt) || fmt$;
@@ -3184,8 +3201,8 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                       <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupTotals[goalKey]} milestone={goalTotal} fmt={goalFmt && goalFormatter} compactFmt={goalFmt && goalFormatter} /></div>
                     )}
                     {showRef && <div className="dl-stat"><span className="dl-stat-label">{refMetric.label}</span><span className="dl-stat-value">{refFmt(sumRef(g.stores))}</span></div>}
-                    {showAttach && <div className="dl-stat"><span className="dl-stat-label">{attachMetric.label}</span><span className="dl-stat-value">{attachFmt(avgAttach(g.stores, attachMetric.actualField))}</span></div>}
-                    {showAttach && <div className="dl-stat"><span className="dl-stat-label">{attachMetric.label} Goal</span><span className="dl-stat-value">{attachFmt(avgAttach(g.stores, attachMetric.goalField))}</span></div>}
+                    {showAttach && <div className="dl-stat"><span className="dl-stat-label">{attachMetric.label}</span><span className="dl-stat-value">{attachFmt(groupAttachActual(g.stores, groupTotals))}</span></div>}
+                    {showAttach && <div className="dl-stat"><span className="dl-stat-label">{attachMetric.label} Goal</span><span className="dl-stat-value">{attachFmt(avgAttachGoal(g.stores))}</span></div>}
                   </div>
                 </button>
                 {isLeaderOpen && (
@@ -3207,7 +3224,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                           const diff = s.vsGoal;
                           const isOpen = !!expanded[s.code];
                           const hasEmployeeData = s.employees.length > 0;
-                          const attachActual = getAttachActual(s.code);
+                          const attachActual = attachActualForRow(s);
                           const attachGoal = getAttachGoal(s.code);
                           const attachDiff = (attachActual != null && attachGoal != null) ? attachActual - attachGoal : null;
                           return (
@@ -3270,8 +3287,8 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                           )}
                           {showRef && <td>{refFmt(sumRef(g.stores))}</td>}
                           {showAttach && (() => {
-                            const gAvgActual = avgAttach(g.stores, attachMetric.actualField);
-                            const gAvgGoal = avgAttach(g.stores, attachMetric.goalField);
+                            const gAvgActual = groupAttachActual(g.stores, groupTotals);
+                            const gAvgGoal = avgAttachGoal(g.stores);
                             const gDiff = (gAvgActual != null && gAvgGoal != null) ? gAvgActual - gAvgGoal : null;
                             return (
                               <>
@@ -3311,7 +3328,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                 const diff = s.vsGoal;
                 const isOpen = !!expanded[s.code];
                 const hasEmployeeData = s.employees.length > 0;
-                const attachActual = getAttachActual(s.code);
+                const attachActual = attachActualForRow(s);
                 const attachGoal = getAttachGoal(s.code);
                 const attachDiff = (attachActual != null && attachGoal != null) ? attachActual - attachGoal : null;
                 return (
@@ -3375,8 +3392,8 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                   )}
                   {showRef && <td>{refFmt(sumRef(sortedFlat))}</td>}
                   {showAttach && (() => {
-                    const cAvgActual = avgAttach(rows, attachMetric.actualField);
-                    const cAvgGoal = avgAttach(rows, attachMetric.goalField);
+                    const cAvgActual = groupAttachActual(rows, t);
+                    const cAvgGoal = avgAttachGoal(rows);
                     const cDiff = (cAvgActual != null && cAvgGoal != null) ? cAvgActual - cAvgGoal : null;
                     return (
                       <>
@@ -4136,7 +4153,7 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttac
           </label>
         </div>
       )}
-      <p className="section-hint">The DL Color Goals file sets Color Goal, Retail Attach % (color tickets that also have a retail item — actual and goal), and a same-month-last-year Color $ reference all at once, matched by the Salon column. Retail Attach % isn't computed by this app (Sales-Accrual has no per-ticket data to link a retail item back to a color ticket) — both the actual and goal always come from this file.</p>
+      <p className="section-hint">The DL Color Goals file sets Color Goal, Retail Attach % (color tickets that also have a retail item — actual and goal), and a same-month-last-year Color $ reference all at once, matched by the Salon column. The Color Sales tab shows a real computed Retail Attach % whenever the period you're viewing has Sales-Accrual data with an Invoice No column to link tickets by — this file's attach % is only used as a fallback for periods that don't (older Sales-Accrual imports, or the live current-period report). The Retail Attach % Goal always comes from this file either way — there's nothing to compute a goal from.</p>
 
       <div className="ledger-scroll">
         <table className="ledger-table">
@@ -5839,13 +5856,14 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     currentAllEmployees = currentStoreRows.flatMap(s => (s.employees || []).map(e => ({ ...e, store: s.name })));
     const t = rollupRows(currentStoreRows);
     lines.push(`CURRENT REPORT PERIOD: ${fmtDateLong(start)} – ${fmtDateLong(end)} (month-to-date — no current Stylist Report on file, sourced from Sales-Accrual/Attendance instead)`);
-    lines.push(`Company totals — Sales: $${Math.round(t.sales)}, Avg Ticket: $${t.avgTicket != null ? t.avgTicket.toFixed(2) : 'n/a'}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}, Other Services: $${Math.round(t.otherServices || 0)}, OPC: ${t.opc != null ? t.opc.toFixed(2) : 'n/a'}, Cuts: ${Math.round(t.haircuts || 0)}, CPH: ${t.cph != null ? t.cph.toFixed(2) : 'n/a'}, SS: ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}`);
+    lines.push(`Company totals — Sales: $${Math.round(t.sales)}, Avg Ticket: $${t.avgTicket != null ? t.avgTicket.toFixed(2) : 'n/a'}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}, Other Services: $${Math.round(t.otherServices || 0)}, OPC: ${t.opc != null ? t.opc.toFixed(2) : 'n/a'}, Cuts: ${Math.round(t.haircuts || 0)}, CPH: ${t.cph != null ? t.cph.toFixed(2) : 'n/a'}, SS: ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}, Retail Attach %: ${t.retailAttachPct != null ? `${(t.retailAttachPct * 100).toFixed(0)}% (${t.colorTicketsWithRetail}/${t.colorTicketCount} color tickets)` : 'n/a (no Invoice No-linked Sales-Accrual data for this range)'}`);
     lines.push('');
-    lines.push('Per-store totals for the CURRENT period (Store: Sales, Avg Ticket, TSTH, Hours, Color, Retail, CPC, RPC, Other Services, OPC, Cuts, CPH, goals if set):');
+    lines.push('Per-store totals for the CURRENT period (Store: Sales, Avg Ticket, TSTH, Hours, Color, Retail, CPC, RPC, Other Services, OPC, Cuts, CPH, Retail Attach % (real, computed from Sales-Accrual ticket linkage — n/a if this range has no Invoice No data), goals if set):');
     currentStoreRows.forEach(s => {
       const goal = goals?.[s.code];
       const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Bottle Goal: ${goal.bottleGoal ?? 'none'} bottles, Signature Service Goal: ${goal.signatureSGoal ?? 'none'} services` : '';
-      lines.push(`${s.name}: Sales $${Math.round(s.sales)}, Avg Ticket $${s.avgTicket != null ? s.avgTicket.toFixed(2) : 'n/a'}, TSTH $${s.tsth != null ? s.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(s.totalHours)}, Color $${Math.round(s.colorSales)}, Retail $${Math.round(s.retail)}, CPC ${s.cpc != null ? s.cpc.toFixed(2) : 'n/a'}, RPC ${s.rpc != null ? s.rpc.toFixed(2) : 'n/a'}, Other Services $${Math.round(s.otherServices || 0)}, OPC ${s.opc != null ? s.opc.toFixed(2) : 'n/a'}, Cuts ${Math.round(s.haircuts || 0)}, CPH ${s.cph != null ? s.cph.toFixed(2) : 'n/a'}${goalStr}`);
+      const attachStr = s.retailAttachPct != null ? `${(s.retailAttachPct * 100).toFixed(0)}% (${s.colorTicketsWithRetail}/${s.colorTicketCount})` : 'n/a';
+      lines.push(`${s.name}: Sales $${Math.round(s.sales)}, Avg Ticket $${s.avgTicket != null ? s.avgTicket.toFixed(2) : 'n/a'}, TSTH $${s.tsth != null ? s.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(s.totalHours)}, Color $${Math.round(s.colorSales)}, Retail $${Math.round(s.retail)}, CPC ${s.cpc != null ? s.cpc.toFixed(2) : 'n/a'}, RPC ${s.rpc != null ? s.rpc.toFixed(2) : 'n/a'}, Other Services $${Math.round(s.otherServices || 0)}, OPC ${s.opc != null ? s.opc.toFixed(2) : 'n/a'}, Cuts ${Math.round(s.haircuts || 0)}, CPH ${s.cph != null ? s.cph.toFixed(2) : 'n/a'}, Retail Attach % ${attachStr}${goalStr}`);
     });
   }
   if (currentAllEmployees.length) {
@@ -5862,7 +5880,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   // standing target, not tied to a specific historical month.
   if (goals && Object.keys(goals).length) {
     lines.push('');
-    lines.push('STORE GOALS (Sales/Color/Bottle/Signature Service targets — standing targets, not specific to any period, entered by DLs on the Goals tab; Sales/Color Goal are $ figures, Bottle Goal is a unit count of retail product sold, Signature Service Goal is a unit count of services performed — NOT a dollar figure, despite Signature Service dollar totals appearing elsewhere in this context. Retail Attach % = color tickets that also have a retail item attached — both the actual and the goal are imported from the user\'s own DL Color Goals file, not computed by this app, since Sales-Accrual has no per-ticket data to link a retail item back to a color ticket. Color (Last Year) is the same calendar month\'s Color $ from the prior year, imported for comparison — it is NOT the current period\'s color figure, which is in CURRENT REPORT PERIOD above.):');
+    lines.push('STORE GOALS (Sales/Color/Bottle/Signature Service targets — standing targets, not specific to any period, entered by DLs on the Goals tab; Sales/Color Goal are $ figures, Bottle Goal is a unit count of retail product sold, Signature Service Goal is a unit count of services performed — NOT a dollar figure, despite Signature Service dollar totals appearing elsewhere in this context. Retail Attach % = color tickets that also have a retail item attached. The figure below is the fallback value imported from the user\'s own DL Color Goals file — the Color Sales tab itself may show a different, more accurate REAL figure computed straight from Sales-Accrual ticket data (Invoice No) for whatever period is being viewed there, whenever that data is available; the goal always comes from this import either way, since there\'s nothing to compute a goal from. Color (Last Year) is the same calendar month\'s Color $ from the prior year, imported for comparison — it is NOT the current period\'s color figure, which is in CURRENT REPORT PERIOD above.):');
     Object.entries(goals).forEach(([code, g]) => {
       if (g.salesGoal == null && g.colorGoal == null && g.bottleGoal == null && g.signatureSGoal == null && g.retailAttach == null && g.retailAttachGoal == null && g.colorLastYear == null) return;
       const name = STORE_CODE_TO_NAME[code] || `Store ${code}`;
@@ -8507,7 +8525,7 @@ export default function App() {
             report={report} query={queries['Color Sales']} onQuery={v => setQuery('Color Sales', v)}
             title="Color Sales" metricA={{ key: 'colorSales', label: 'Color Sales', fmt: fmt$ }} metricB={{ key: 'cpc', label: 'CPC', fmt: fmtNum }}
             goalType="colorGoal" goals={goals}
-            attachMetric={{ actualField: 'retailAttach', goalField: 'retailAttachGoal', label: 'Retail Attach %' }}
+            attachMetric={{ rowKey: 'retailAttachPct', actualField: 'retailAttach', goalField: 'retailAttachGoal', label: 'Retail Attach %' }}
             refMetric={{ field: 'colorLastYear', label: 'Color (Last Year)' }}
             history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
             canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
