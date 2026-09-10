@@ -907,16 +907,17 @@ export async function parseSalesAccrualFile(file) {
   // guaranteed contiguous in the file, so flag each invoice number as we go
   // (invoiceFlags), then fold the finished per-invoice flags into the
   // matching store/day record once the main loop is done.
-  const invoiceFlags = new Map(); // invoiceNo -> { code, date, hasColor, hasRetail }
-  const markInvoice = (invoiceNo, code, isoDate, isColorRow, isRetailRow) => {
+  const invoiceFlags = new Map(); // invoiceNo -> { code, date, hasColor, hasSignature, hasRetail }
+  const markInvoice = (invoiceNo, code, isoDate, isColorRow, isSignatureRow, isRetailRow) => {
     if (!invoiceNo || col.invoice === -1) return;
-    if (!invoiceFlags.has(invoiceNo)) invoiceFlags.set(invoiceNo, { code, date: isoDate, hasColor: false, hasRetail: false });
+    if (!invoiceFlags.has(invoiceNo)) invoiceFlags.set(invoiceNo, { code, date: isoDate, hasColor: false, hasSignature: false, hasRetail: false });
     const f = invoiceFlags.get(invoiceNo);
     if (isColorRow) f.hasColor = true;
+    if (isSignatureRow) f.hasSignature = true;
     if (isRetailRow) f.hasRetail = true;
   };
 
-  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color, giftCards, haircuts, signatureS, signatureSCount, colorTicketCount, colorTicketsWithRetail, employees: {name: {sales, colorSales, haircuts, signatureS, signatureSCount}} }
+  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, service, retail, color, giftCards, haircuts, signatureS, signatureSCount, colorTicketCount, colorTicketsWithRetail, signatureTicketCount, signatureTicketsWithRetail, employees: {name: {sales, colorSales, haircuts, signatureS, signatureSCount}} }
   for (let r = hdrRowIdx + 1; r < grid.length; r++) {
     const row = grid[r];
     if (!rowHasData(row)) continue;
@@ -935,7 +936,7 @@ export async function parseSalesAccrualFile(file) {
     const invoiceNo = col.invoice !== -1 ? cellText(row[col.invoice]) : '';
 
     const key = `${code}|${isoDate}`;
-    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0, otherServices: 0, colorTicketCount: 0, colorTicketsWithRetail: 0, employees: {}, products: {} });
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0, otherServices: 0, colorTicketCount: 0, colorTicketsWithRetail: 0, signatureTicketCount: 0, signatureTicketsWithRetail: 0, employees: {}, products: {} });
     const rec = daily.get(key);
     const employeeFor = name => {
       if (!name) return null;
@@ -990,7 +991,7 @@ export async function parseSalesAccrualFile(file) {
         rec.bottles += qty;
         addRetail(soldBy || stylist);
         addProduct();
-        markInvoice(invoiceNo, code, isoDate, false, true);
+        markInvoice(invoiceNo, code, isoDate, false, false, true);
       } else {
         rec.service += amount;
         const category = col.itemCategory !== -1 ? cellText(row[col.itemCategory]) : '';
@@ -1012,7 +1013,7 @@ export async function parseSalesAccrualFile(file) {
         if (isSignature) { rec.signatureS += amount; rec.signatureSCount += qty; }
         if (!isColor && !isHaircut && !isSignature) rec.otherServices += amount;
         addService(stylist, isColor, isHaircut, isSignature);
-        markInvoice(invoiceNo, code, isoDate, isColor, false);
+        markInvoice(invoiceNo, code, isoDate, isColor, isSignature, false);
       }
     } else {
       // Older export without Item Type/Category — fall back to name-based heuristics.
@@ -1020,7 +1021,7 @@ export async function parseSalesAccrualFile(file) {
       if (isRetailItem(itemName, stylist, soldBy)) {
         rec.retail += amount;
         addRetail(soldBy || stylist);
-        markInvoice(invoiceNo, code, isoDate, false, true);
+        markInvoice(invoiceNo, code, isoDate, false, false, true);
       } else {
         rec.service += amount;
         const isColor = isColorItem(itemName);
@@ -1031,7 +1032,7 @@ export async function parseSalesAccrualFile(file) {
         if (isSignature) { rec.signatureS += amount; rec.signatureSCount += qty; }
         if (!isColor && !isHaircut && !isSignature) rec.otherServices += amount;
         addService(stylist, isColor, isHaircut, isSignature);
-        markInvoice(invoiceNo, code, isoDate, isColor, false);
+        markInvoice(invoiceNo, code, isoDate, isColor, isSignature, false);
       }
     }
   }
@@ -1039,13 +1040,21 @@ export async function parseSalesAccrualFile(file) {
   // Fold the finished per-invoice flags into their store/day record — done
   // as a second pass (not inline during the main loop) since an invoice's
   // rows aren't guaranteed to be contiguous in the file, so `hasColor`/
-  // `hasRetail` aren't known for sure until every row has been seen.
+  // `hasSignature`/`hasRetail` aren't known for sure until every row has
+  // been seen. One invoice can be both a color AND a Signature Service
+  // ticket (e.g. a color + a conditioning treatment on the same visit) —
+  // it then counts toward both tallies, same as it would on a real receipt.
   invoiceFlags.forEach(f => {
-    if (!f.hasColor) return;
     const rec = daily.get(`${f.code}|${f.date}`);
     if (!rec) return;
-    rec.colorTicketCount += 1;
-    if (f.hasRetail) rec.colorTicketsWithRetail += 1;
+    if (f.hasColor) {
+      rec.colorTicketCount += 1;
+      if (f.hasRetail) rec.colorTicketsWithRetail += 1;
+    }
+    if (f.hasSignature) {
+      rec.signatureTicketCount += 1;
+      if (f.hasRetail) rec.signatureTicketsWithRetail += 1;
+    }
   });
 
   if (!daily.size) throw new Error('No sales rows found in this file.');
@@ -1062,6 +1071,8 @@ export async function parseSalesAccrualFile(file) {
     otherServices: Math.round(r.otherServices * 100) / 100,
     colorTicketCount: r.colorTicketCount,
     colorTicketsWithRetail: r.colorTicketsWithRetail,
+    signatureTicketCount: r.signatureTicketCount,
+    signatureTicketsWithRetail: r.signatureTicketsWithRetail,
     employees: Object.entries(r.employees).map(([name, v]) => ({
       name, sales: Math.round(v.sales * 100) / 100, colorSales: Math.round(v.colorSales * 100) / 100,
       haircuts: Math.round(v.haircuts * 100) / 100, retail: Math.round(v.retail * 100) / 100,
@@ -1139,10 +1150,11 @@ export function mergeSalesIntoHistory(history, salesRecords) {
   const next = { ...history };
   salesRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, signatureSCount: null, bottles: null, otherServices: null, colorTicketCount: null, colorTicketsWithRetail: null, employees: {}, products: {} };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, signatureSCount: null, bottles: null, otherServices: null, colorTicketCount: null, colorTicketsWithRetail: null, signatureTicketCount: null, signatureTicketsWithRetail: null, employees: {}, products: {} };
     next[key] = {
       ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards, haircuts: r.haircuts, signatureS: r.signatureS, signatureSCount: r.signatureSCount, bottles: r.bottles, otherServices: r.otherServices,
       colorTicketCount: r.colorTicketCount, colorTicketsWithRetail: r.colorTicketsWithRetail,
+      signatureTicketCount: r.signatureTicketCount, signatureTicketsWithRetail: r.signatureTicketsWithRetail,
       products: r.products || {},
       employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales', 'haircuts', 'retail', 'signatureS', 'signatureSCount', 'otherServices']),
     };
