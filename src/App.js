@@ -4033,7 +4033,7 @@ const NEW_HIRE_SORT_OPTIONS = [
 ];
 
 // ─── Goals tab ──────────────────────────────────────────────────────────────
-const GOAL_FIELD_LABELS = { salesGoal: 'sales', colorGoal: 'color', bottleGoal: 'bottle', signatureSGoal: 'signature service' };
+const GOAL_FIELD_LABELS = { salesGoal: 'sales', colorGoal: 'color', bottleGoal: 'bottle', signatureSGoal: 'signature service', bottleToColorGoal: 'bottle-to-color %', bottleToSSGoal: 'bottle-to-SS %' };
 
 function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttachGoals, fallbackEmployeesByStore }) {
   const [query, setQuery] = useState('');
@@ -4102,7 +4102,7 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttac
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
-      <p className="section-hint">Set a weekly Sales, Color, Bottle, and Signature Service goal per store. Sales tracks total revenue (services + retail combined); Color goal tracks $ sold in color services specifically. Bottle and Signature Service goals track a unit count instead — bottles of retail product sold, and number of Signature Services performed. Color, Bottle, and Signature Service show up as "Goal"/"vs Goal" columns on their tabs; Sales goals show up on the Overview tab.</p>
+      <p className="section-hint">Set a weekly Sales, Color, Bottle, and Signature Service goal per store. Sales tracks total revenue (services + retail combined); Color goal tracks $ sold in color services specifically. Bottle and Signature Service goals track a unit count instead — bottles of retail product sold, and number of Signature Services performed. Color, Bottle, and Signature Service show up as "Goal"/"vs Goal" columns on their tabs; Sales goals show up on the Overview tab. Bottle-to-Color % and Bottle-to-SS % are target ratios of bottles sold per color service / per Signature Service performed — enter a whole percent (e.g. "15" for 15%).</p>
 
       <p className="section-hint">Download a blank sheet listing your stores (grouped by DL), fill in the Goal column, then import it below with whichever button matches what you filled in.</p>
       <div className="goal-import-row">
@@ -4140,6 +4140,20 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttac
           />
           {importing === 'signatureSGoal' ? <span className="spinner small" /> : '📥'} Import Signature Service Goals from file
         </label>
+        <label className="goal-import-btn">
+          <input
+            type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+            onChange={e => { if (e.target.files[0]) handleImportFile('bottleToColorGoal', e.target.files[0]); e.target.value = ''; }}
+          />
+          {importing === 'bottleToColorGoal' ? <span className="spinner small" /> : '📥'} Import Bottle-to-Color % Goals from file
+        </label>
+        <label className="goal-import-btn">
+          <input
+            type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+            onChange={e => { if (e.target.files[0]) handleImportFile('bottleToSSGoal', e.target.files[0]); e.target.value = ''; }}
+          />
+          {importing === 'bottleToSSGoal' ? <span className="spinner small" /> : '📥'} Import Bottle-to-SS % Goals from file
+        </label>
       </div>
 
       {onImportColorAttachGoals && (
@@ -4164,6 +4178,8 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttac
               <th>Color Goal</th>
               <th>Bottle Goal</th>
               <th>Signature Service Goal</th>
+              <th>Bottle-to-Color % Goal</th>
+              <th>Bottle-to-SS % Goal</th>
             </tr>
           </thead>
           <tbody>
@@ -4174,6 +4190,8 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttac
                 <td>{goalField(s.code, 'colorGoal')}</td>
                 <td>{goalField(s.code, 'bottleGoal', '0')}</td>
                 <td>{goalField(s.code, 'signatureSGoal', '0')}</td>
+                <td>{goalField(s.code, 'bottleToColorGoal', '0%')}</td>
+                <td>{goalField(s.code, 'bottleToSSGoal', '0%')}</td>
               </tr>
             ))}
           </tbody>
@@ -5842,7 +5860,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     report.stores.forEach(s => {
       const st = s.totals;
       const goal = goals?.[s.code];
-      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Bottle Goal: ${goal.bottleGoal ?? 'none'} bottles, Signature Service Goal: ${goal.signatureSGoal ?? 'none'} services` : '';
+      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Bottle Goal: ${goal.bottleGoal ?? 'none'} bottles, Signature Service Goal: ${goal.signatureSGoal ?? 'none'} services, Bottle-to-Color % Goal: ${goal.bottleToColorGoal ?? 'none'}, Bottle-to-SS % Goal: ${goal.bottleToSSGoal ?? 'none'}` : '';
       lines.push(`${s.name}: Sales $${Math.round(st.sales)}, Avg Ticket $${st.avgTicket != null ? st.avgTicket.toFixed(2) : 'n/a'}, TSTH $${st.tsth != null ? st.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(st.totalHours)}, Color $${Math.round(st.colorSales)}, Retail $${Math.round(st.retail)}, CPC ${st.cpc != null ? st.cpc.toFixed(2) : 'n/a'}, RPC ${st.rpc != null ? st.rpc.toFixed(2) : 'n/a'}, Other Services $${Math.round(st.otherServices || 0)}, OPC ${st.opc != null ? st.opc.toFixed(2) : 'n/a'}, Cuts ${Math.round(st.haircuts || 0)}, CPH ${st.cph != null ? st.cph.toFixed(2) : 'n/a'}${goalStr}`);
     });
     currentStoreRows = report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals }));
@@ -5861,7 +5879,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     lines.push('Per-store totals for the CURRENT period (Store: Sales, Avg Ticket, TSTH, Hours, Color, Retail, CPC, RPC, Other Services, OPC, Cuts, CPH, Retail Attach % for Color and Signature Service (real, computed from Sales-Accrual ticket linkage — n/a if this range has no Invoice No data), goals if set):');
     currentStoreRows.forEach(s => {
       const goal = goals?.[s.code];
-      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Bottle Goal: ${goal.bottleGoal ?? 'none'} bottles, Signature Service Goal: ${goal.signatureSGoal ?? 'none'} services` : '';
+      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Bottle Goal: ${goal.bottleGoal ?? 'none'} bottles, Signature Service Goal: ${goal.signatureSGoal ?? 'none'} services, Bottle-to-Color % Goal: ${goal.bottleToColorGoal ?? 'none'}, Bottle-to-SS % Goal: ${goal.bottleToSSGoal ?? 'none'}` : '';
       const attachStr = s.retailAttachPct != null ? `${(s.retailAttachPct * 100).toFixed(0)}% (${s.colorTicketsWithRetail}/${s.colorTicketCount})` : 'n/a';
       const sigAttachStr = s.signatureAttachPct != null ? `${(s.signatureAttachPct * 100).toFixed(0)}% (${s.signatureTicketsWithRetail}/${s.signatureTicketCount})` : 'n/a';
       lines.push(`${s.name}: Sales $${Math.round(s.sales)}, Avg Ticket $${s.avgTicket != null ? s.avgTicket.toFixed(2) : 'n/a'}, TSTH $${s.tsth != null ? s.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(s.totalHours)}, Color $${Math.round(s.colorSales)}, Retail $${Math.round(s.retail)}, CPC ${s.cpc != null ? s.cpc.toFixed(2) : 'n/a'}, RPC ${s.rpc != null ? s.rpc.toFixed(2) : 'n/a'}, Other Services $${Math.round(s.otherServices || 0)}, OPC ${s.opc != null ? s.opc.toFixed(2) : 'n/a'}, Cuts ${Math.round(s.haircuts || 0)}, CPH ${s.cph != null ? s.cph.toFixed(2) : 'n/a'}, Retail Attach % (Color) ${attachStr}, Retail Attach % (Signature Service) ${sigAttachStr}${goalStr}`);
@@ -5881,15 +5899,18 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   // standing target, not tied to a specific historical month.
   if (goals && Object.keys(goals).length) {
     lines.push('');
-    lines.push('STORE GOALS (Sales/Color/Bottle/Signature Service targets — standing targets, not specific to any period, entered by DLs on the Goals tab; Sales/Color Goal are $ figures, Bottle Goal is a unit count of retail product sold, Signature Service Goal is a unit count of services performed — NOT a dollar figure, despite Signature Service dollar totals appearing elsewhere in this context. Retail Attach % = color tickets that also have a retail item attached. The figure below is the fallback value imported from the user\'s own DL Color Goals file — the Color Sales tab itself may show a different, more accurate REAL figure computed straight from Sales-Accrual ticket data (Invoice No) for whatever period is being viewed there, whenever that data is available; the goal always comes from this import either way, since there\'s nothing to compute a goal from. Color (Last Year) is the same calendar month\'s Color $ from the prior year, imported for comparison — it is NOT the current period\'s color figure, which is in CURRENT REPORT PERIOD above.):');
+    lines.push('STORE GOALS (Sales/Color/Bottle/Signature Service targets — standing targets, not specific to any period, entered by DLs on the Goals tab; Sales/Color Goal are $ figures, Bottle Goal is a unit count of retail product sold, Signature Service Goal is a unit count of services performed — NOT a dollar figure, despite Signature Service dollar totals appearing elsewhere in this context. Bottle-to-Color %/Bottle-to-SS % Goals are DL-entered target ratios of bottles sold per color service / per Signature Service performed — the app does not currently compute an actual figure to compare these against, they are goal-only. Retail Attach % = color tickets that also have a retail item attached. The figure below is the fallback value imported from the user\'s own DL Color Goals file — the Color Sales tab itself may show a different, more accurate REAL figure computed straight from Sales-Accrual ticket data (Invoice No) for whatever period is being viewed there, whenever that data is available; the goal always comes from this import either way, since there\'s nothing to compute a goal from. Color (Last Year) is the same calendar month\'s Color $ from the prior year, imported for comparison — it is NOT the current period\'s color figure, which is in CURRENT REPORT PERIOD above.):');
     Object.entries(goals).forEach(([code, g]) => {
-      if (g.salesGoal == null && g.colorGoal == null && g.bottleGoal == null && g.signatureSGoal == null && g.retailAttach == null && g.retailAttachGoal == null && g.colorLastYear == null) return;
+      if (g.salesGoal == null && g.colorGoal == null && g.bottleGoal == null && g.signatureSGoal == null && g.bottleToColorGoal == null && g.bottleToSSGoal == null && g.retailAttach == null && g.retailAttachGoal == null && g.colorLastYear == null) return;
       const name = STORE_CODE_TO_NAME[code] || `Store ${code}`;
       const attachStr = (g.retailAttach != null || g.retailAttachGoal != null)
         ? `, Retail Attach % ${g.retailAttach != null ? `${(g.retailAttach * 100).toFixed(0)}%` : 'none'} (Goal ${g.retailAttachGoal != null ? `${(g.retailAttachGoal * 100).toFixed(0)}%` : 'none'})`
         : '';
       const lastYearStr = g.colorLastYear != null ? `, Color (Last Year) $${Math.round(g.colorLastYear)}` : '';
-      lines.push(`${name}: Sales Goal ${g.salesGoal ?? 'none'}, Color Goal ${g.colorGoal ?? 'none'}, Bottle Goal ${g.bottleGoal ?? 'none'} bottles, Signature Service Goal ${g.signatureSGoal ?? 'none'} services${attachStr}${lastYearStr}`);
+      const ratioGoalStr = (g.bottleToColorGoal != null || g.bottleToSSGoal != null)
+        ? `, Bottle-to-Color % Goal ${g.bottleToColorGoal ?? 'none'}, Bottle-to-SS % Goal ${g.bottleToSSGoal ?? 'none'}`
+        : '';
+      lines.push(`${name}: Sales Goal ${g.salesGoal ?? 'none'}, Color Goal ${g.colorGoal ?? 'none'}, Bottle Goal ${g.bottleGoal ?? 'none'} bottles, Signature Service Goal ${g.signatureSGoal ?? 'none'} services${ratioGoalStr}${attachStr}${lastYearStr}`);
     });
   }
 
