@@ -1597,11 +1597,23 @@ function HsaClassForm({ initial, existingEventTypes, submitLabel, onSubmit, onCa
   );
 }
 
-function HsaClassCard({ cls, signups, isOwner, canEditAny, currentUserName, onSignUp, onRemoveSignup, onEditSignup, onEditClass, existingEventTypes }) {
+function HsaClassCard({ cls, signups, isOwner, canEditAny, currentUserName, onSignUp, onRemoveSignup, onEditSignup, onEditClass, onDeleteClass, existingEventTypes }) {
   const [signingUp, setSigningUp] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editingSignupId, setEditingSignupId] = useState(null);
   const alreadyIn = currentUserName && signups.some(s => normalizeName(s.name) === normalizeName(currentUserName));
+  // Deleting only removes the class card — it never touches the sign-up
+  // rows themselves (those live in a separate table, matched by classId).
+  // If people are already signed up, warn loudly before removing the only
+  // card that shows their names, since after this they'd have no card to
+  // appear under (recoverable only by re-adding/re-uploading a class with
+  // this exact id).
+  const handleDelete = () => {
+    const warning = signups.length
+      ? `Delete this class? ${signups.length} sign-up${signups.length === 1 ? '' : 's'} recorded against it will no longer show under any class (the sign-up entries themselves aren't deleted — they'll reattach automatically if a class with this same id ever comes back).`
+      : 'Delete this class from the schedule?';
+    if (window.confirm(warning)) onDeleteClass(cls.id);
+  };
   // Editing only ever changes this class's own date/type/location/time —
   // its `id` is passed through untouched by the caller (onEditClass), so
   // every sign-up already recorded against this class (matched by classId)
@@ -1627,6 +1639,7 @@ function HsaClassCard({ cls, signups, isOwner, canEditAny, currentUserName, onSi
         </div>
         <div className="hsa-class-actions">
           {isOwner && !signingUp && <button className="hsa-class-edit" onClick={() => setEditing(true)}>✎ Edit Class</button>}
+          {isOwner && !signingUp && <button className="hsa-class-delete" onClick={handleDelete}>✕ Delete Class</button>}
           {!signingUp && (
             <button className="btn-primary btn-secondary" onClick={() => setSigningUp(true)}>
               {alreadyIn ? "✋ Sign up someone else" : '✋ Sign Up'}
@@ -1686,7 +1699,7 @@ function HsaClassCard({ cls, signups, isOwner, canEditAny, currentUserName, onSi
   );
 }
 
-function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup, onEditSignup, onAddClass, onEditClass }) {
+function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup, onEditSignup, onAddClass, onEditClass, onDeleteClass }) {
   const [query, setQuery] = useState('');
   const [showPast, setShowPast] = useState(false);
   const [groupByType, setGroupByType] = useState(false);
@@ -1727,7 +1740,7 @@ function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup, onE
       signups={hsaSignups.filter(s => s.classId === cls.id)}
       isOwner={isOwner} canEditAny={canEditAny} currentUserName={currentUser.name}
       onSignUp={onSignUp} onRemoveSignup={onRemoveSignup} onEditSignup={onEditSignup}
-      onEditClass={onEditClass} existingEventTypes={existingEventTypes}
+      onEditClass={onEditClass} onDeleteClass={onDeleteClass} existingEventTypes={existingEventTypes}
     />
   );
 
@@ -8561,7 +8574,7 @@ export default function App() {
           <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={currentUser} newsReads={newsReads} onSignOff={handleSignOffNews} />
         )}
         {tab === 'HSA' && (
-          <HsaTab events={events} hsaSignups={hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} onEditSignup={handleEditHsaSignup} onAddClass={handleAddHsaClass} onEditClass={handleEditHsaClass} />
+          <HsaTab events={events} hsaSignups={hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} onEditSignup={handleEditHsaSignup} onAddClass={handleAddHsaClass} onEditClass={handleEditHsaClass} onDeleteClass={handleDeleteEvent} />
         )}
         {!needsReport && tab === 'Overview' && (report || hasHistoricalData) && (
           <OverviewTab report={report} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'} goals={goals} />
