@@ -369,12 +369,11 @@ function legacyHsaId(iso, event, location, time) {
 
 // Event types where several consecutive same-location rows in the file are
 // one multi-day class, not one class per day — confirmed by the user for
-// "HSA" specifically (the week-long class at Media that's listed one row
-// per day). Other event types that also happen to span 2+ consecutive days
-// in a real export (e.g. SuperColor) were never confirmed as multi-day the
-// same way, so they're deliberately left as one class per row unless/until
-// the user says otherwise.
-const MULTIDAY_EVENT_TYPES = new Set(['hsa']);
+// "HSA" (the week-long class at Media, one row per day) and "SuperColor"
+// (a 2-day session, same pattern). Any other event type that happens to
+// repeat on consecutive days is deliberately left as one class per row
+// unless/until the user confirms it's the same kind of multi-day class.
+const MULTIDAY_EVENT_TYPES = new Set(['hsa', 'supercolor']);
 
 export async function parseHsaScheduleFile(file) {
   const grid = await readWorkbookGrid(file);
