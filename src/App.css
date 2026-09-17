@@ -926,6 +926,8 @@
 .hsa-class-card--editing { border-style: dashed; border-color: var(--navy); }
 .hsa-class-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .hsa-class-form .text-input { margin: 0; flex: 1; min-width: 140px; }
+.hsa-class-form-enddate-label { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 220px; font-size: 12px; color: var(--ink-soft); }
+.hsa-class-form-enddate-label .text-input { margin-top: 2px; }
 .hsa-class-form-actions { display: flex; gap: 8px; flex-basis: 100%; }
 
 /* ─── Leases tab (owner-only) ────────────────────────────────────────────── */

@@ -1566,11 +1566,15 @@ function HsaClassForm({ initial, existingEventTypes, submitLabel, onSubmit, onCa
   const [eventType, setEventType] = useState(initial?.eventType || '');
   const [location, setLocation] = useState(initial?.location || '');
   const [time, setTime] = useState(initial?.time || '');
-  const valid = date && eventType.trim();
+  // Optional — only a class that actually runs more than one day (e.g. a
+  // week-long HSA session) needs this; leave it blank for a normal one-day
+  // class, same as before this field existed.
+  const [endDate, setEndDate] = useState(initial?.endDate || '');
+  const valid = date && eventType.trim() && (!endDate || endDate >= date);
   const submit = e => {
     e.preventDefault();
     if (!valid) return;
-    onSubmit(date, eventType.trim(), location.trim(), time.trim());
+    onSubmit(date, eventType.trim(), location.trim(), time.trim(), endDate || null);
   };
   return (
     <form className="hsa-class-form" onSubmit={submit}>
@@ -1581,6 +1585,10 @@ function HsaClassForm({ initial, existingEventTypes, submitLabel, onSubmit, onCa
       </datalist>
       <input className="text-input" placeholder="Location (optional)" value={location} onChange={e => setLocation(e.target.value)} />
       <input className="text-input" placeholder="Time (optional)" value={time} onChange={e => setTime(e.target.value)} />
+      <label className="hsa-class-form-enddate-label">
+        End date (optional — only for a class spanning multiple days)
+        <input className="text-input" type="date" min={date || undefined} value={endDate} onChange={e => setEndDate(e.target.value)} />
+      </label>
       <div className="hsa-class-form-actions">
         <button type="submit" className="btn-primary" disabled={!valid}>{submitLabel}</button>
         <button type="button" className="btn-ghost" onClick={onCancel}>Cancel</button>
@@ -1604,7 +1612,7 @@ function HsaClassCard({ cls, signups, isOwner, canEditAny, currentUserName, onSi
         <p className="hsa-class-title">Editing class{signups.length ? ` (${signups.length} already signed up — kept)` : ''}</p>
         <HsaClassForm
           initial={cls} existingEventTypes={existingEventTypes} submitLabel="Save changes"
-          onSubmit={(date, eventType, location, time) => { onEditClass(cls.id, date, eventType, location, time); setEditing(false); }}
+          onSubmit={(date, eventType, location, time, endDate) => { onEditClass(cls.id, date, eventType, location, time, endDate); setEditing(false); }}
           onCancel={() => setEditing(false)}
         />
       </div>
@@ -1615,7 +1623,7 @@ function HsaClassCard({ cls, signups, isOwner, canEditAny, currentUserName, onSi
       <div className="hsa-class-head">
         <div>
           <p className="hsa-class-title">{cls.eventType}</p>
-          <p className="hsa-class-meta">{fmtDateLong(cls.date)}{cls.location ? ` · ${cls.location}` : ''}{cls.time ? ` · ${cls.time}` : ''}</p>
+          <p className="hsa-class-meta">{cls.endDate && cls.endDate !== cls.date ? `${fmtDateLong(cls.date)} – ${fmtDateLong(cls.endDate)}` : fmtDateLong(cls.date)}{cls.location ? ` · ${cls.location}` : ''}{cls.time ? ` · ${cls.time}` : ''}</p>
         </div>
         <div className="hsa-class-actions">
           {isOwner && !signingUp && <button className="hsa-class-edit" onClick={() => setEditing(true)}>✎ Edit Class</button>}
@@ -1695,7 +1703,7 @@ function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup, onE
   const classes = useMemo(() => {
     const q = query.trim().toLowerCase();
     return allHsaEvents
-      .filter(ev => showPast || ev.date >= todayISO)
+      .filter(ev => showPast || (ev.endDate || ev.date) >= todayISO)
       .filter(ev => !q || ev.eventType.toLowerCase().includes(q) || (ev.location || '').toLowerCase().includes(q))
       .sort((a, b) => a.date.localeCompare(b.date) || a.eventType.localeCompare(b.eventType));
   }, [allHsaEvents, query, showPast, todayISO]);
@@ -1735,7 +1743,7 @@ function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup, onE
               <p className="hsa-class-title">New class</p>
               <HsaClassForm
                 existingEventTypes={existingEventTypes} submitLabel="Add class"
-                onSubmit={(date, eventType, location, time) => { onAddClass(date, eventType, location, time); setAddingClass(false); }}
+                onSubmit={(date, eventType, location, time, endDate) => { onAddClass(date, eventType, location, time, endDate); setAddingClass(false); }}
                 onCancel={() => setAddingClass(false)}
               />
             </div>
@@ -5793,10 +5801,11 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   const hsaClasses = (events || []).filter(ev => ev.source === 'hsa');
   if (hsaClasses.length) {
     const todayISO = new Date().toISOString().slice(0, 10);
-    lines.push('HSA CLASS SIGN-UPS (upcoming classes only, sorted by date):');
-    hsaClasses.filter(c => c.date >= todayISO).sort((a, b) => a.date.localeCompare(b.date)).forEach(c => {
+    lines.push('HSA CLASS SIGN-UPS (upcoming or still in progress, sorted by date):');
+    hsaClasses.filter(c => (c.endDate || c.date) >= todayISO).sort((a, b) => a.date.localeCompare(b.date)).forEach(c => {
       const names = (hsaSignups || []).filter(s => s.classId === c.id).map(s => `${s.name}${s.store ? ` (${s.store}${s.dl ? `, DL: ${s.dl}` : ''})` : ''}`);
-      lines.push(`${c.date} — ${c.eventType}${c.location ? ` @ ${c.location}` : ''}${c.time ? ` (${c.time})` : ''}: ${names.length ? names.join(', ') : 'no one signed up yet'}`);
+      const dateLabel = c.endDate && c.endDate !== c.date ? `${c.date} to ${c.endDate}` : c.date;
+      lines.push(`${dateLabel} — ${c.eventType}${c.location ? ` @ ${c.location}` : ''}${c.time ? ` (${c.time})` : ''}: ${names.length ? names.join(', ') : 'no one signed up yet'}`);
     });
     lines.push('');
   }
@@ -7985,10 +7994,11 @@ export default function App() {
     setUploadingHsaSchedule(true);
     parseHsaScheduleFile(file).then(({ classes, fileName }) => {
       const hsaEvents = classes.map(c => ({
-        id: c.id, title: c.location ? `${c.event} — ${c.location}` : c.event, date: c.date, endDate: null,
+        id: c.id, title: c.location ? `${c.event} — ${c.location}` : c.event, date: c.date, endDate: c.endDate || null,
         description: c.time, headerImage: null, color: HSA_EVENT_COLOR,
         source: 'hsa', eventType: c.event, location: c.location, time: c.time,
       }));
+      let manualHsaCount = 0;
       setEvents(prev => {
         // Merge, don't blindly replace: any class an owner hand-added
         // (+ Add Class) or hand-edited (✎ Edit) on the HSA tab carries
@@ -8001,15 +8011,42 @@ export default function App() {
         // replaces the schedule" behavior as before for anything that was
         // never hand-touched.
         const manualHsa = prev.filter(ev => ev.source === 'hsa' && ev.manual);
+        manualHsaCount = manualHsa.length;
         const manualIds = new Set(manualHsa.map(ev => ev.id));
         const freshHsaEvents = hsaEvents.filter(ev => !manualIds.has(ev.id));
         const next = [...prev.filter(ev => ev.source !== 'hsa'), ...manualHsa, ...freshHsaEvents];
         saveData('homepage_events', next).then(result => {
           if (isConfigured() && !result.ok) showToast(`Schedule saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
         });
-        showToast(`HSA schedule uploaded — ${classes.length} classes from ${fileName}${manualHsa.length ? ` (${manualHsa.length} hand-added/edited class${manualHsa.length === 1 ? '' : 'es'} kept)` : ''}`);
         return next;
       });
+      // A multi-day class (e.g. a week-long HSA session, one row per day in
+      // the file) now merges into a single class keyed to its first day's
+      // id — see parseHsaScheduleFromGrid. Any sign-up already recorded
+      // against one of that class's *other* days (back when each day was
+      // its own class) needs to move onto the merged class's id, or it'd
+      // silently stop showing up under any card despite still being on file.
+      const remap = new Map();
+      classes.forEach(c => (c.continuationIds || []).forEach(oldId => remap.set(oldId, c.id)));
+      let carriedOverCount = 0;
+      if (remap.size) {
+        setHsaSignups(prev => {
+          const next = prev.map(s => {
+            if (!remap.has(s.classId)) return s;
+            carriedOverCount++;
+            return { ...s, classId: remap.get(s.classId) };
+          });
+          saveData('hsa_signups', next).then(result => {
+            if (isConfigured() && !result.ok) showToast(`Schedule saved, but couldn't sync sign-up updates to Supabase (${result.error})`, 'error');
+          });
+          return next;
+        });
+      }
+      const notes = [
+        manualHsaCount ? `${manualHsaCount} hand-added/edited class${manualHsaCount === 1 ? '' : 'es'} kept` : null,
+        carriedOverCount ? `${carriedOverCount} existing sign-up${carriedOverCount === 1 ? '' : 's'} carried onto merged multi-day classes` : null,
+      ].filter(Boolean).join(', ');
+      showToast(`HSA schedule uploaded — ${classes.length} classes from ${fileName}${notes ? ` (${notes})` : ''}`);
     }).catch(err => showToast(err.message, 'error')).finally(() => setUploadingHsaSchedule(false));
   }, []);
 
@@ -8029,9 +8066,9 @@ export default function App() {
   // id — a hand-added class has no source file row to stay in sync with.
   // `manual: true` protects it from being dropped by a later bulk
   // Setup > HSA re-upload (see handleImportHsaSchedule's merge above).
-  const handleAddHsaClass = useCallback((date, eventType, location, time) => {
+  const handleAddHsaClass = useCallback((date, eventType, location, time, endDate) => {
     const entry = {
-      id: genId(), title: location ? `${eventType} — ${location}` : eventType, date, endDate: null,
+      id: genId(), title: location ? `${eventType} — ${location}` : eventType, date, endDate: endDate || null,
       description: time, headerImage: null, color: HSA_EVENT_COLOR,
       source: 'hsa', eventType, location, time, manual: true,
     };
@@ -8054,10 +8091,10 @@ export default function App() {
   // attached no matter what changes. Also stamps `manual: true` so this
   // edit isn't reverted back to the file's original text by a later bulk
   // Setup > HSA re-upload — see handleImportHsaSchedule's merge above.
-  const handleEditHsaClass = useCallback((id, date, eventType, location, time) => {
+  const handleEditHsaClass = useCallback((id, date, eventType, location, time, endDate) => {
     setEvents(prev => {
       const next = prev.map(ev => ev.id === id ? {
-        ...ev, date, title: location ? `${eventType} — ${location}` : eventType,
+        ...ev, date, endDate: endDate || null, title: location ? `${eventType} — ${location}` : eventType,
         description: time, eventType, location, time, manual: true,
       } : ev);
       saveData('homepage_events', next).then(result => {

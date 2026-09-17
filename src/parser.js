@@ -350,6 +350,32 @@ function dateCellToISO(cell) {
   return `${yr}-${mo.padStart(2, '0')}-${da.padStart(2, '0')}`;
 }
 
+function addOneDayISO(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + 1);
+  return dt.toISOString().slice(0, 10);
+}
+
+// Deterministic id from content (not random/incrementing) so re-uploading
+// the same schedule keeps the same class ids — sign-ups reference a class
+// by id, so a random id here would orphan every existing signup on the very
+// next re-upload. Also the id scheme every single-day class used before
+// multi-day merging (below) existed — kept unchanged so old sign-ups still
+// resolve.
+function legacyHsaId(iso, event, location, time) {
+  return `hsa-${iso}-${slugify(event)}-${slugify(location)}-${slugify(time)}`;
+}
+
+// Event types where several consecutive same-location rows in the file are
+// one multi-day class, not one class per day — confirmed by the user for
+// "HSA" specifically (the week-long class at Media that's listed one row
+// per day). Other event types that also happen to span 2+ consecutive days
+// in a real export (e.g. SuperColor) were never confirmed as multi-day the
+// same way, so they're deliberately left as one class per row unless/until
+// the user says otherwise.
+const MULTIDAY_EVENT_TYPES = new Set(['hsa']);
+
 export async function parseHsaScheduleFile(file) {
   const grid = await readWorkbookGrid(file);
   return parseHsaScheduleFromGrid(grid, file.name);
@@ -373,7 +399,7 @@ export function parseHsaScheduleFromGrid(grid, fileName) {
   if (dateCol === -1) throw new Error('Could not find a "Date" column in this file.');
   if (eventCol === -1) throw new Error('Could not find an "Event" column in this file.');
 
-  const classes = [];
+  const rawRows = [];
   for (let r = hdrRowIdx + 1; r < grid.length; r++) {
     const row = grid[r];
     if (!rowHasData(row)) continue;
@@ -382,14 +408,45 @@ export function parseHsaScheduleFromGrid(grid, fileName) {
     if (!iso || !event) continue;
     const location = locationCol !== -1 ? cellText(row[locationCol]) : '';
     const time = timeCol !== -1 ? cellText(row[timeCol]) : '';
-    // Deterministic id from content (not random/incrementing) so re-uploading
-    // the same schedule keeps the same class ids — sign-ups reference a
-    // class by id, so a random id here would orphan every existing signup
-    // on the very next re-upload.
-    const id = `hsa-${iso}-${slugify(event)}-${slugify(location)}-${slugify(time)}`;
-    classes.push({ id, date: iso, event, location, time });
+    rawRows.push({ iso, event, location, time });
   }
-  if (!classes.length) throw new Error('No class rows with a valid date and event were found in this file.');
+  if (!rawRows.length) throw new Error('No class rows with a valid date and event were found in this file.');
+
+  // Fold consecutive-calendar-day rows of a multi-day event type at the same
+  // location into one class spanning date→endDate, instead of one class per
+  // day. Other rows for other locations can appear in between in the file
+  // (the schedule interleaves stores) without breaking a run — only a same
+  // location/event/time row that isn't exactly the next calendar day closes
+  // it. The merged class keeps the FIRST day's legacy id, so any sign-up
+  // already recorded against that first day stays attached with no
+  // remapping needed; `continuationIds` lists every other absorbed day's
+  // legacy id so App.js can carry over sign-ups recorded against those days
+  // onto the merged class instead of orphaning them.
+  const classes = [];
+  const openRuns = new Map(); // location -> in-progress run
+  const flushRun = run => {
+    classes.push({
+      id: run.ids[0], date: run.startIso, endDate: run.startIso === run.lastIso ? null : run.lastIso,
+      event: run.event, location: run.location, time: run.time, continuationIds: run.ids.slice(1),
+    });
+  };
+  for (const row of rawRows) {
+    const rowId = legacyHsaId(row.iso, row.event, row.location, row.time);
+    if (!MULTIDAY_EVENT_TYPES.has(row.event.trim().toLowerCase())) {
+      classes.push({ id: rowId, date: row.iso, endDate: null, event: row.event, location: row.location, time: row.time, continuationIds: [] });
+      continue;
+    }
+    const open = openRuns.get(row.location);
+    if (open && open.event === row.event && open.time === row.time && row.iso === addOneDayISO(open.lastIso)) {
+      open.lastIso = row.iso;
+      open.ids.push(rowId);
+    } else {
+      if (open) flushRun(open);
+      openRuns.set(row.location, { event: row.event, location: row.location, time: row.time, startIso: row.iso, lastIso: row.iso, ids: [rowId] });
+    }
+  }
+  openRuns.forEach(flushRun);
+
   return { classes, fileName };
 }
 
