@@ -4,6 +4,8 @@
 // already use, so App.js's existing load/error-handling code doesn't need a
 // second pattern for the sensitive keys that go through this instead.
 
+import { isWriteBlocked, PRESENTER_BLOCKED_ERROR, fakeServerResponse } from './presenter';
+
 const SESSION_KEY = 'supercuts_session_v1';
 
 export function getSession() {
@@ -26,6 +28,20 @@ export function setSession(session) {
 
 export function clearSession() {
   localStorage.removeItem(SESSION_KEY);
+}
+
+// Presenter mode: every write wrapper below goes through this instead of
+// postJson, so nothing reaches the server while presenting.
+function postWrite(url, body) {
+  if (isWriteBlocked()) return Promise.resolve({ ok: false, error: PRESENTER_BLOCKED_ERROR });
+  return postJson(url, body);
+}
+
+// Presenter mode: reads that components render directly get faked on the
+// way back (names/phones/balances — see presenter.js fakeServerResponse).
+async function postRead(kind, url, body) {
+  const res = await postJson(url, body);
+  return isWriteBlocked() ? fakeServerResponse(kind, res) : res;
 }
 
 async function postJson(url, body) {
@@ -83,7 +99,7 @@ export async function loadScopedByPrefix(prefix, token) {
 // (possibly role-scoped-down) local state. Returns the caller's own
 // role-filtered view of the result, same shape as loadScoped.
 export function saveScoped(token, key, patch) {
-  return postJson('/api/scoped-data', { token, key, patch });
+  return postWrite('/api/scoped-data', { token, key, patch });
 }
 
 // Owner-only Supabase Storage access for lease documents (api/lease-files.js).
@@ -91,17 +107,17 @@ export function saveScoped(token, key, patch) {
 // straight from the browser to Supabase Storage (via supabase-js's
 // uploadToSignedUrl), never through this endpoint's request body.
 export function leaseUploadUrl(token, storeCode, fileName) {
-  return postJson('/api/lease-files', { token, action: 'uploadUrl', storeCode, fileName });
+  return postWrite('/api/lease-files', { token, action: 'uploadUrl', storeCode, fileName });
 }
 
 // Short-lived (10 min) signed read URL for a stored lease document, since
 // the bucket itself is private.
 export function leaseViewUrl(token, path) {
-  return postJson('/api/lease-files', { token, action: 'viewUrl', path });
+  return postWrite('/api/lease-files', { token, action: 'viewUrl', path });
 }
 
 export function leaseDeleteFile(token, path) {
-  return postJson('/api/lease-files', { token, action: 'delete', path });
+  return postWrite('/api/lease-files', { token, action: 'delete', path });
 }
 
 // Pulls a store's already-uploaded lease documents' text (free, local
@@ -112,57 +128,57 @@ export function leaseDeleteFile(token, path) {
 // that store's `record.files` array ({ path, name }). `storeName` isn't
 // used server-side anymore but is harmless to keep passing.
 export function scanLeaseDates(token, storeCode, storeName, files) {
-  return postJson('/api/scan-lease-dates', { token, storeCode, storeName, files });
+  return postWrite('/api/scan-lease-dates', { token, storeCode, storeName, files });
 }
 
 export function rosterList(token) {
-  return postJson('/api/roster', { action: 'list', token });
+  return postRead('rosterList', '/api/roster', { action: 'list', token });
 }
 
 export function rosterUpload(token, rows) {
-  return postJson('/api/roster', { action: 'upload', token, rows });
+  return postWrite('/api/roster', { action: 'upload', token, rows });
 }
 
 export function rosterResetPin(token, id) {
-  return postJson('/api/roster', { action: 'resetPin', token, id });
+  return postWrite('/api/roster', { action: 'resetPin', token, id });
 }
 
 export function rosterSetPin(token, id, pin) {
-  return postJson('/api/roster', { action: 'setPin', token, id, pin });
+  return postWrite('/api/roster', { action: 'setPin', token, id, pin });
 }
 
 export function rosterUpdate(token, id, patch) {
-  return postJson('/api/roster', { action: 'update', token, id, ...patch });
+  return postWrite('/api/roster', { action: 'update', token, id, ...patch });
 }
 
 export function rosterLoginCounts(token) {
-  return postJson('/api/roster', { action: 'loginCounts', token });
+  return postRead('loginCounts', '/api/roster', { action: 'loginCounts', token });
 }
 
 // Employee points / "Tillie's Nest" shop — thin wrappers over api/points.js,
 // same postJson shape as the roster wrappers above.
 export function pointsBalance(token) {
-  return postJson('/api/points', { action: 'balance', token });
+  return postRead('pointsBalance', '/api/points', { action: 'balance', token });
 }
 
 export function pointsAward(token, employeeName) {
-  return postJson('/api/points', { action: 'award', token, employeeName });
+  return postWrite('/api/points', { action: 'award', token, employeeName });
 }
 
 export function pointsAllBalances(token) {
-  return postJson('/api/points', { action: 'allBalances', token });
+  return postRead('pointsAllBalances', '/api/points', { action: 'allBalances', token });
 }
 
 export function pointsTransactions(token, employeeName) {
-  return postJson('/api/points', { action: 'transactions', token, employeeName });
+  return postRead('pointsTransactions', '/api/points', { action: 'transactions', token, employeeName });
 }
 
 export function pointsDeleteTransaction(token, id) {
-  return postJson('/api/points', { action: 'deleteTransaction', token, id });
+  return postWrite('/api/points', { action: 'deleteTransaction', token, id });
 }
 
 export function pointsRedeem(token, rewardId) {
-  return postJson('/api/points', { action: 'redeem', token, rewardId });
+  return postWrite('/api/points', { action: 'redeem', token, rewardId });
 }
 
 export function pointsListRewards(token) {
@@ -170,15 +186,15 @@ export function pointsListRewards(token) {
 }
 
 export function pointsSaveReward(token, patch) {
-  return postJson('/api/points', { action: 'saveReward', token, ...patch });
+  return postWrite('/api/points', { action: 'saveReward', token, ...patch });
 }
 
 export function pointsDeleteReward(token, id) {
-  return postJson('/api/points', { action: 'deleteReward', token, id });
+  return postWrite('/api/points', { action: 'deleteReward', token, id });
 }
 
 export function pointsMarkFulfilled(token, id, fulfilled) {
-  return postJson('/api/points', { action: 'markFulfilled', token, id, fulfilled });
+  return postWrite('/api/points', { action: 'markFulfilled', token, id, fulfilled });
 }
 
 // HSA class sign-ups — the sign-up itself is saved straight to Supabase by
@@ -186,5 +202,5 @@ export function pointsMarkFulfilled(token, id, fulfilled) {
 // only the best-effort Google Sheets export, so a failure here is read as
 // `sheetSynced: false`, not thrown.
 export function hsaSheetSync(token, payload) {
-  return postJson('/api/hsa-sheet', { token, ...payload });
+  return postWrite('/api/hsa-sheet', { token, ...payload });
 }

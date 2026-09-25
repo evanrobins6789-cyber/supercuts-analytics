@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { isWriteBlocked, PRESENTER_BLOCKED_ERROR } from './presenter';
 
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY || '';
@@ -36,6 +37,9 @@ export async function loadData(key) {
 
 // Returns { ok, error }
 export async function saveData(key, payload) {
+  // Presenter mode: refuse before touching Supabase OR the local mirror (a
+  // local-only write would get auto-pushed to Supabase on a later load).
+  if (isWriteBlocked()) return { ok: false, error: PRESENTER_BLOCKED_ERROR };
   if (payload == null) return { ok: false, error: 'Internal error: no data to save' };
   let error = null;
   if (supabase) {
@@ -61,6 +65,7 @@ export async function saveData(key, payload) {
 // can merge back on top of fresh data (the exact "data vanishes on refresh"
 // shape this has caused before).
 export async function clearData(key) {
+  if (isWriteBlocked()) return { ok: false, error: PRESENTER_BLOCKED_ERROR };
   let error = null;
   if (supabase) {
     const res = await supabase.from('weekly_report').delete().eq('report_id', key);
@@ -124,6 +129,7 @@ export async function loadDataByPrefix(prefix) {
 
 // Returns { ok, error } — see clearData's comment on why the caller needs this.
 export async function clearDataByPrefix(prefix) {
+  if (isWriteBlocked()) return { ok: false, error: PRESENTER_BLOCKED_ERROR };
   let error = null;
   if (supabase) {
     const res = await supabase.from('weekly_report').delete().like('report_id', `${prefix}%`);

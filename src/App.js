@@ -15,7 +15,8 @@ import {
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled, hsaSheetSync,
   leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates,
 } from './auth';
-import { LEADER_ROSTER_SECTIONS, getLeaderForStoreCode } from './leaderRoster';
+import { LEADER_ROSTER_SECTIONS as REAL_LEADER_ROSTER_SECTIONS, getLeaderForStoreCode as realGetLeaderForStoreCode } from './leaderRoster';
+import { isPresenting, initPresenterMode, setPresenterMode, presenterView, fakeLeaderSections, fakePersonName } from './presenter';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
 import { LEASE_STORE_CODE_TO_NAME, LEASE_INACTIVE_CODES, leaseStoreName, matchStoreCodeFromPath, extractTermDatesFromFilename } from './leaseStoreDirectory';
 import { exportReviewsToPDF } from './reviewExport';
@@ -30,6 +31,15 @@ import gcRobinBadge from './assets/branding/gc-robin-badge.png';
 import './App.css';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip);
+
+// DL/Area Supervisor names come from the hardcoded roster file rather than
+// loaded data, so presenter mode fakes them here (same name map as
+// everything else, so e.g. an HSA sign-up's DL still matches the DL tab).
+const leaderSections = () => (isPresenting() ? fakeLeaderSections(REAL_LEADER_ROSTER_SECTIONS) : REAL_LEADER_ROSTER_SECTIONS);
+function getLeaderForStoreCode(code) {
+  const info = realGetLeaderForStoreCode(code);
+  return info && isPresenting() ? { ...info, leaderName: fakePersonName(info.leaderName) } : info;
+}
 
 // ─── Login ──────────────────────────────────────────────────────────────────
 const ROLE_LABELS = { owner: 'Owner', district_leader: 'District Leader', manager: 'Manager', employee: 'Employee' };
@@ -334,6 +344,13 @@ const STORE_METRICS = [
   { key: 'signatureS', label: 'SS', fmt: (v, row) => fmtSS(row?.signatureSCount, v) },
 ];
 
+// CPD (Cuts Per Day) — Overview tab only, deliberately NOT in STORE_METRICS
+// (that list also drives the Homepage Top 10). Shown as "this period|same
+// period last year", e.g. "34|33". Whole numbers, per the ask.
+const fmtCPD = (cur, ly) => `${cur == null ? '—' : Math.round(cur)}|${ly == null ? '—' : Math.round(ly)}`;
+const CPD_METRIC = { key: 'cpd', label: 'CPD', fmt: (v, row) => fmtCPD(v, row?.cpdLY) };
+const OVERVIEW_METRICS = [...STORE_METRICS, CPD_METRIC];
+
 // Employee-level metrics shown on Employees and within each Stores card.
 const EMPLOYEE_METRICS = [
   { key: 'totalHours', label: 'Hours', fmt: n => fmtNum(n, 1) },
@@ -408,7 +425,7 @@ function MilestoneThermometer({ actual, goal, milestone, fmt, compactFmt }) {
 // in the roster land in a trailing "Unassigned" group instead of vanishing.
 function groupStoresByLeader(storeRows) {
   const order = [];
-  LEADER_ROSTER_SECTIONS.forEach(sec => sec.leaders.forEach(l => order.push({ name: l.name, role: sec.role })));
+  leaderSections().forEach(sec => sec.leaders.forEach(l => order.push({ name: l.name, role: sec.role })));
 
   const withLeader = storeRows.map(r => {
     const info = getLeaderForStoreCode(r.code);
@@ -497,6 +514,51 @@ function getCurrentMonthRange() {
   const first = new Date(now.getFullYear(), now.getMonth(), 1);
   const toISO = d => d.toISOString().slice(0, 10);
   return { start: toISO(first), end: toISO(now) };
+}
+
+// "2026-09-01" -> "2025-09-01". Feb 29 falls back to Feb 28 in a non-leap
+// year, so a last-year range is always a real date range.
+function shiftYearISO(iso, years) {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  const ny = y + years;
+  const lastDay = new Date(ny, m, 0).getDate();
+  return `${ny}-${String(m).padStart(2, '0')}-${String(Math.min(d, lastDay)).padStart(2, '0')}`;
+}
+
+// Cuts Per Day inputs per store for a date range: total haircuts (same
+// getRangeTotals figure the Cuts tile uses) and the number of days that
+// store actually did cuts. Counting only days with cuts > 0 means holiday/
+// snow-day closures (company-wide zero days, see HANDOFF.md) don't drag the
+// average down. A weekly Stylist Report week only contributes its days for a
+// store that has no daily Sales-Accrual rows in that week (weekly data has
+// no per-day detail, so all its days count).
+function getStoreCutsPerDay(history, weeklyHistory, start, end) {
+  const totals = getRangeTotals(history, weeklyHistory, start, end);
+  const days = {};
+  const addDay = (code, d) => { if (!days[code]) days[code] = new Set(); days[code].add(d); };
+  Object.values(history || {}).forEach(r => {
+    if (r.date >= start && r.date <= end && (r.haircuts || 0) > 0) addDay(r.code, r.date);
+  });
+  Object.values(weeklyHistory || {}).forEach(w => {
+    if (w.startDate < start || w.endDate > end) return;
+    const weekDays = expandDateRangeDays(w.startDate, w.endDate);
+    Object.entries(w.stores || {}).forEach(([code, v]) => {
+      if ((v.haircuts || 0) <= 0) return;
+      if (weekDays.some(d => days[code]?.has(d))) return;
+      weekDays.forEach(d => addDay(code, d));
+    });
+  });
+  const out = {};
+  Object.entries(totals).forEach(([code, t]) => { out[code] = { cuts: t.haircuts || 0, days: days[code]?.size || 0 }; });
+  return out;
+}
+const cpdOf = entry => (entry && entry.days > 0 ? entry.cuts / entry.days : null);
+// Company-level CPD = average per store per day (total cuts ÷ total
+// store-days), so it reads on the same scale as a single store's CPD.
+function companyCpd(byStore, codes) {
+  let cuts = 0, days = 0;
+  codes.forEach(c => { const e = byStore?.[c]; if (e) { cuts += e.cuts; days += e.days; } });
+  return days > 0 ? cuts / days : null;
 }
 
 // The Budgets tab's period, not the same as month-to-date — budgets recompute
@@ -1526,7 +1588,7 @@ function HsaSignUpForm({ onSubmit, initial, submitLabel = 'Confirm', onCancel })
   const [store, setStore] = useState(initial?.store || '');
   const storeNames = useMemo(() => [...new Set(Object.values(STORE_CODE_TO_NAME))].sort(), []);
   // DL is derived from the store, not a fifth thing to type — the app
-  // already has an authoritative store → DL mapping (LEADER_ROSTER_SECTIONS)
+  // already has an authoritative store → DL mapping (leaderSections())
   // used everywhere else, so letting someone free-type their own DL name
   // would just invite typos/mismatches against the store they picked.
   const dl = useMemo(() => {
@@ -2629,7 +2691,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
   const usingDefaultRange = isReportStale(report) && !(dateRange.start && dateRange.end);
   const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const isHistorical = !!(effectiveRange.start && effectiveRange.end);
-  const metric = STORE_METRICS.find(m => m.key === selected) || STORE_METRICS[0];
+  const metric = OVERVIEW_METRICS.find(m => m.key === selected) || OVERVIEW_METRICS[0];
 
   const storeRows = useMemo(() => {
     if (isHistorical) {
@@ -2642,21 +2704,41 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
     return report.stores.map(s => ({ name: s.name, code: s.code, employees: s.employees, ...s.totals }));
   }, [isHistorical, history, weeklyHistory, effectiveRange.start, effectiveRange.end, report]);
 
+  // CPD always comes from Sales-Accrual/Attendance history (it needs a
+  // per-day count), for the same range the rest of the tab is showing —
+  // the live report's own range when one is current — plus that same range
+  // shifted back one year for the "|last year" half.
+  const cpdStart = isHistorical ? effectiveRange.start : report?.startDateISO;
+  const cpdEnd = isHistorical ? effectiveRange.end : report?.endDateISO;
+  const cpdData = useMemo(() => {
+    if (!cpdStart || !cpdEnd) return null;
+    return {
+      cur: getStoreCutsPerDay(history, weeklyHistory, cpdStart, cpdEnd),
+      ly: getStoreCutsPerDay(history, weeklyHistory, shiftYearISO(cpdStart, -1), shiftYearISO(cpdEnd, -1)),
+    };
+  }, [history, weeklyHistory, cpdStart, cpdEnd]);
+  const rowsWithCpd = useMemo(
+    () => storeRows.map(r => ({ ...r, cpd: cpdOf(cpdData?.cur?.[r.code]), cpdLY: cpdOf(cpdData?.ly?.[r.code]) })),
+    [storeRows, cpdData]
+  );
+
   const isSearching = !!query.trim();
   const filtered = useMemo(() => {
-    if (!isSearching) return storeRows;
+    if (!isSearching) return rowsWithCpd;
     const q = query.trim().toLowerCase();
-    return storeRows
+    return rowsWithCpd
       .map(s => {
         const storeMatches = s.name.toLowerCase().includes(q);
         const employees = storeMatches ? s.employees : s.employees.filter(e => e.name.toLowerCase().includes(q));
         return { ...s, employees, _matched: storeMatches || employees.length > 0 };
       })
       .filter(s => s._matched);
-  }, [storeRows, query, isSearching]);
+  }, [rowsWithCpd, query, isSearching]);
   const sorted = useMemo(() => sortByMetric(filtered, sortBy, 'desc'), [filtered, sortBy]);
 
-  const t = isHistorical ? rollupRows(storeRows) : report.companyTotals;
+  const baseTotals = isHistorical ? rollupRows(storeRows) : report.companyTotals;
+  const storeCodes = storeRows.map(r => r.code);
+  const t = { ...baseTotals, cpd: companyCpd(cpdData?.cur, storeCodes), cpdLY: companyCpd(cpdData?.ly, storeCodes) };
   const toggle = name => setExpanded(prev => ({ ...prev, [name]: !prev[name] }));
 
   return (
@@ -2667,7 +2749,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
 
       <p className="section-hint">Tap any metric to see the top 10 and bottom 10 stores for it.</p>
       <div className="summary-grid">
-        {STORE_METRICS.map(m => (
+        {OVERVIEW_METRICS.map(m => (
           <button
             key={m.key}
             className={`summary-tile ${selected === m.key ? 'summary-tile--active' : ''}`}
@@ -2687,7 +2769,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
       <div className="ledger-head-row">
         <p className="section-label">{filtered.length} of {storeRows.length} stores{isHistorical ? ' (historical)' : ''}</p>
         <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
-          {STORE_METRICS.map(o => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
+          {OVERVIEW_METRICS.map(o => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
         </select>
       </div>
 
@@ -2731,6 +2813,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
                   <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(s.haircuts)}</span></div>
                   {s.cph != null && <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(s.cph)}</span></div>}
                   <div className="dl-stat"><span className="dl-stat-label">SS</span><span className="dl-stat-value">{fmtSS(s.signatureSCount, s.signatureS)}</span></div>
+                  <div className="dl-stat"><span className="dl-stat-label">CPD</span><span className="dl-stat-value">{fmtCPD(s.cpd, s.cpdLY)}</span></div>
                 </div>
               </button>
               {isOpen && hasEmployeeData && (
@@ -4434,7 +4517,7 @@ function HomepageAdminTab({
 // Owner-facing readout, for posts marked "Require District Leader sign-off"
 // on the News composer — who's confirmed reading it (any role, since anyone
 // can check the box) plus, specifically, which of the current District
-// Leaders (LEADER_ROSTER_SECTIONS, the curated DL list — not the login
+// Leaders (leaderSections(), the curated DL list — not the login
 // roster, which can include people who've left) haven't yet.
 function NewsSignoffTracker({ news, newsReads }) {
   const trackedPosts = useMemo(
@@ -4442,7 +4525,7 @@ function NewsSignoffTracker({ news, newsReads }) {
     [news]
   );
   const dlNames = useMemo(
-    () => LEADER_ROSTER_SECTIONS.find(sec => sec.role === 'District Leaders')?.leaders.map(l => l.name) || [],
+    () => leaderSections().find(sec => sec.role === 'District Leaders')?.leaders.map(l => l.name) || [],
     []
   );
   if (!trackedPosts.length) return null;
@@ -5762,7 +5845,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   // which stores, so a question naming a leader ("Amber's stores", "how did
   // Lisa Hair's group do") can be resolved instead of coming back empty.
   lines.push('DL / AREA SUPERVISOR STORE GROUPINGS (who manages which stores — use this whenever a question references a leader by name; every store below belongs to exactly one of these leaders):');
-  LEADER_ROSTER_SECTIONS.forEach(sec => {
+  leaderSections().forEach(sec => {
     sec.leaders.forEach(l => {
       const storeNames = l.storeCodes.map(c => STORE_CODE_TO_NAME[c] || `Store ${c}`).join(', ');
       lines.push(`${l.name} (${sec.role}): ${storeNames}`);
@@ -5788,7 +5871,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '')).forEach(n => {
       let signoffNote = '';
       if (n.requireSignoff) {
-        const dlNames = LEADER_ROSTER_SECTIONS.find(sec => sec.role === 'District Leaders')?.leaders.map(l => l.name) || [];
+        const dlNames = leaderSections().find(sec => sec.role === 'District Leaders')?.leaders.map(l => l.name) || [];
         const confirmed = new Set((newsReads || []).filter(r => r.newsId === n.id).map(r => normalizeName(r.userName)));
         const pending = dlNames.filter(name => !confirmed.has(normalizeName(name)));
         signoffNote = ` [requires DL sign-off — ${pending.length ? `still waiting on ${pending.join(', ')}` : 'all DLs confirmed'}]`;
@@ -5835,6 +5918,22 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       if (topBalances.length) lines.push(`Top balances: ${topBalances.map(b => `${b.employeeName} (${b.balance})`).join(', ')}`);
     }
     lines.push('');
+  }
+
+  // CPD (Cuts Per Day) — same figures the Overview tab's CPD tile shows by
+  // default: month-to-date vs the same dates last year.
+  if (history && Object.keys(history).length) {
+    const { start, end } = getCurrentMonthRange();
+    const cur = getStoreCutsPerDay(history, weeklyHistory, start, end);
+    const ly = getStoreCutsPerDay(history, weeklyHistory, shiftYearISO(start, -1), shiftYearISO(end, -1));
+    const codes = Object.keys(cur);
+    if (codes.length) {
+      const f = v => (v == null ? 'n/a' : v.toFixed(1));
+      lines.push(`CUTS PER DAY (CPD), month-to-date ${start} through ${end} vs the same dates last year — average haircuts per day a store was open (days with 0 cuts, e.g. closures, don't count). Company figure is the average per store per day. Shown on the Overview tab as "this year|last year":`);
+      lines.push(`Company: ${f(companyCpd(cur, codes))} this year vs ${f(companyCpd(ly, codes))} last year`);
+      codes.forEach(code => lines.push(`${STORE_CODE_TO_NAME[code] || `Store ${code}`}: ${f(cpdOf(cur[code]))} vs ${f(cpdOf(ly[code]))} last year`));
+      lines.push('');
+    }
   }
 
   // Milestone goals — Goal is the number a store HAS to hit this month,
@@ -6077,7 +6176,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     months.forEach(m => {
       const totals = monthlyTotals.get(m.month);
       const leaderLines = [];
-      LEADER_ROSTER_SECTIONS.forEach(sec => {
+      leaderSections().forEach(sec => {
         sec.leaders.forEach(l => {
           const rolled = { service: 0, retail: 0, color: 0, hours: 0, haircuts: 0, otherServices: 0 };
           let any = false;
@@ -6248,7 +6347,27 @@ const SETUP_SECTIONS = [
   { key: 'rewards', label: 'Rewards' },
   { key: 'hsa', label: 'HSA' },
   { key: 'leases', label: 'Leases' },
+  { key: 'presenter', label: 'Presenter Mode' },
 ];
+
+// Owner-only (Setup is already owner-only + password gated). Flips this
+// browser into presenter mode — see presenter.js for what it does/doesn't do.
+function PresenterSetupTab({ presenting, onToggle }) {
+  return (
+    <div className="setup-section">
+      <p className="chart-title">🎭 Presenter Mode</p>
+      <p className="step-body">Shows made-up numbers and names everywhere in the app so you can demo it without showing real data. Store names stay real; every sales figure, count, goal, rent amount, point balance, and person's name (stylists, managers, DLs, reviewers, HSA sign-ups) is swapped for a fake one. Review text is swapped for sample reviews.</p>
+      <ul className="step-body">
+        <li><strong>Nothing is changed or saved.</strong> The fake numbers are generated in this browser from your real data on the fly. While presenter mode is on, every save, upload, import, delete, and point award is blocked. Anything you type is thrown away when you turn it off.</li>
+        <li><strong>Only you, only this browser.</strong> Nobody else who logs in sees fake data or has this option, even on this same computer. It stays on across page reloads for you until you turn it off.</li>
+        <li>Turning it off reloads the page with your real data.</li>
+      </ul>
+      <button className={presenting ? 'btn-ghost' : 'btn-primary'} onClick={() => onToggle(!presenting)}>
+        {presenting ? 'Turn off presenter mode (show real data)' : 'Turn on presenter mode'}
+      </button>
+    </div>
+  );
+}
 
 // Owner-only roster of who can log in — Employee Name | Employee Code |
 // Phone Number | Role | Store Codes (see parseEmployeeAccessFromGrid in
@@ -6857,7 +6976,7 @@ function LeaseAdminSetupTab({ leaseCount, onClearAll }) {
   );
 }
 
-function SetupTab({ configured, section, onSection, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps, employeeAccessProps, rewardsProps, hsaProps, leaseAdminProps }) {
+function SetupTab({ configured, section, onSection, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps, employeeAccessProps, rewardsProps, hsaProps, leaseAdminProps, presenterProps }) {
   const [unlocked, setUnlocked] = useState(false);
   const [pwInput, setPwInput] = useState('');
   const [pwError, setPwError] = useState(false);
@@ -6920,6 +7039,7 @@ function SetupTab({ configured, section, onSection, managersProps, milestoneGoal
       {section === 'rewards' && <RewardsSetupTab {...rewardsProps} />}
       {section === 'hsa' && <HsaSetupTab {...hsaProps} />}
       {section === 'leases' && <LeaseAdminSetupTab {...leaseAdminProps} />}
+      {section === 'presenter' && <PresenterSetupTab {...presenterProps} />}
 
       {section === 'guide' && <>
       <div className="setup-section">
@@ -7227,6 +7347,9 @@ const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'DL', 'Retail', 'Color Sale
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
+  // Presenter mode (owner-only, this browser only) — see presenter.js.
+  // initPresenterMode also arms the module-level write block in db.js/auth.js.
+  const [presenting, setPresenting] = useState(() => initPresenterMode(getSession()));
   const [report, setReport] = useState(null);
   const [employeeRoster, setEmployeeRoster] = useState(null);
   const [goals, setGoals] = useState({});
@@ -7491,6 +7614,7 @@ export default function App() {
   // localStorage re-read), but the session won't survive a refresh, so say
   // so instead of leaving that a silent surprise.
   const handleLoggedIn = (session, persisted) => {
+    setPresenting(initPresenterMode(session));
     setCurrentUser(session);
     if (!persisted) showToast("Signed in, but this browser's storage is full so it couldn't remember your login — you'll need to sign in again next time you visit. Nothing else is affected.", 'error');
   };
@@ -7513,6 +7637,9 @@ export default function App() {
       return null;
     });
     clearSession();
+    // Disarm presenter mode for whoever logs in next on this device (the
+    // owner's own stored preference is kept and re-armed on their next login).
+    setPresenting(initPresenterMode(null));
     setLoading(true);
     // Clear out the previous session's scoped data so a different person
     // logging in on this same device never sees a stale flash of it before
@@ -8530,6 +8657,34 @@ export default function App() {
     [history, weeklyHistory]
   );
 
+  // Presenter mode: every tab gets these made-up stand-ins instead of the
+  // real state. The real state itself is never touched, and all writes are
+  // blocked (presenter.js), so nothing here can reach stored data.
+  const presenterData = useMemo(() => (presenting ? presenterView({
+    report, history, weeklyHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary,
+  }, fallbackEmployeesByStore) : null), [presenting, report, history, weeklyHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, fallbackEmployeesByStore]);
+  const presenterFallbackEmployees = useMemo(
+    () => (presenterData ? getEmployeesByStoreFromHistory(presenterData.history, presenterData.weeklyHistory) : null),
+    [presenterData]
+  );
+
+  const handleTogglePresenter = on => {
+    if (!currentUser || currentUser.role !== 'owner') return;
+    if (on) {
+      setPresenterMode(currentUser, true);
+      setPresenting(true);
+      setTab('Homepage');
+      showToast('Presenter mode is on — every number and name is made up, and nothing is saved.');
+    } else {
+      if (!window.confirm('Turn off presenter mode and show your real data?')) return;
+      setPresenterMode(currentUser, false);
+      // Reload so anything typed/imported while presenting (kept in memory
+      // only, never saved) is thrown away and real data comes straight
+      // from Supabase again.
+      window.location.reload();
+    }
+  };
+
   if (!currentUser) return <LoginScreen onLoggedIn={handleLoggedIn} />;
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
@@ -8540,6 +8695,10 @@ export default function App() {
   // getCurrentMonthRange). Only actually block on "nothing at all yet".
   const hasHistoricalData = Object.keys(history || {}).length > 0 || Object.keys(weeklyHistory || {}).length > 0;
   const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases';
+
+  const d = presenterData
+    ? { ...presenterData, fallbackEmployeesByStore: presenterFallbackEmployees }
+    : { report, history, weeklyHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, fallbackEmployeesByStore };
 
   return (
     <div className="app">
@@ -8555,6 +8714,7 @@ export default function App() {
           </div>
         </div>
         <div className="header-right">
+          {presenting && <button className="presenter-pill" onClick={() => handleTogglePresenter(false)} title="Presenter mode is on — made-up data. Click to turn off.">🎭 Presenter</button>}
           <span className="header-user">{currentUser.name} · {ROLE_LABELS[currentUser.role] || currentUser.role}</span>
           <button className="btn-ghost" onClick={handleLogout}>Log Out</button>
         </div>
@@ -8565,87 +8725,87 @@ export default function App() {
           <button key={t} className={`tab-btn ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>{t}</button>
         ))}
       </nav>
-      <main className="app-main">
+      <main className="app-main" key={presenting ? 'presenting' : 'live'}>
         {needsReport && <div className="empty-state"><p className="empty-title">No data yet</p><p>Go to the Setup tab and either upload this week's Stylist Report, or run a Sales-Accrual/Attendance historical import.</p></div>}
         {tab === 'Homepage' && (
-          <HomepageTab report={report} history={history} weeklyHistory={weeklyHistory} fallbackEmployeesByStore={fallbackEmployeesByStore} news={news} events={events} reviews={reviews} onOpenNews={handleOpenNews} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
+          <HomepageTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} fallbackEmployeesByStore={d.fallbackEmployeesByStore} news={news} events={events} reviews={d.reviews} onOpenNews={handleOpenNews} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
         )}
         {tab === 'News' && (
-          <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={currentUser} newsReads={newsReads} onSignOff={handleSignOffNews} />
+          <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={currentUser} newsReads={d.newsReads} onSignOff={handleSignOffNews} />
         )}
         {tab === 'HSA' && (
-          <HsaTab events={events} hsaSignups={hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} onEditSignup={handleEditHsaSignup} onAddClass={handleAddHsaClass} onEditClass={handleEditHsaClass} onDeleteClass={handleDeleteEvent} />
+          <HsaTab events={events} hsaSignups={d.hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} onEditSignup={handleEditHsaSignup} onAddClass={handleAddHsaClass} onEditClass={handleEditHsaClass} onDeleteClass={handleDeleteEvent} />
         )}
         {!needsReport && tab === 'Overview' && (report || hasHistoricalData) && (
-          <OverviewTab report={report} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'} goals={goals} />
+          <OverviewTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={d.managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'} goals={d.goals} />
         )}
         {!needsReport && tab === 'Employees' && (report || hasHistoricalData) && (
-          <EmployeesTab report={report} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} employeeRoster={employeeRoster} fallbackEmployeesByStore={fallbackEmployeesByStore} />
+          <EmployeesTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={d.managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} employeeRoster={d.employeeRoster} fallbackEmployeesByStore={d.fallbackEmployeesByStore} />
         )}
         {!needsReport && tab === 'Retail' && (report || hasHistoricalData) && (
           <StoreMetricTab
-            report={report} query={queries.Retail} onQuery={v => setQuery('Retail', v)}
+            report={d.report} query={queries.Retail} onQuery={v => setQuery('Retail', v)}
             title="Retail" metricA={{ key: 'retail', label: 'Retail', fmt: fmt$ }} metricB={{ key: 'rpc', label: 'RPC', fmt: fmtNum }}
-            goalType="bottleGoal" goals={goals} goalMetricKey="bottles" goalMetricLabel="Bottles" goalFmt={fmtInt}
-            history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
-            managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
+            goalType="bottleGoal" goals={d.goals} goalMetricKey="bottles" goalMetricLabel="Bottles" goalFmt={fmtInt}
+            history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
+            managers={d.managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
             showProducts
           />
         )}
         {!needsReport && tab === 'Color Sales' && (report || hasHistoricalData) && (
           <StoreMetricTab
-            report={report} query={queries['Color Sales']} onQuery={v => setQuery('Color Sales', v)}
+            report={d.report} query={queries['Color Sales']} onQuery={v => setQuery('Color Sales', v)}
             title="Color Sales" metricA={{ key: 'colorSales', label: 'Color Sales', fmt: fmt$ }} metricB={{ key: 'cpc', label: 'CPC', fmt: fmtNum }}
-            goalType="colorGoal" goals={goals}
+            goalType="colorGoal" goals={d.goals}
             attachMetric={{ rowKey: 'retailAttachPct', actualField: 'retailAttach', goalField: 'retailAttachGoal', label: 'Retail Attach %' }}
             refMetric={{ field: 'colorLastYear', label: 'Color (Last Year)' }}
-            history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
+            history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
             canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
             showPrevMonthColor
-            managers={managers}
+            managers={d.managers}
           />
         )}
         {!needsReport && tab === 'Signature Service' && (report || hasHistoricalData) && (
           <StoreMetricTab
-            report={report} query={queries['Signature Service']} onQuery={v => setQuery('Signature Service', v)}
+            report={d.report} query={queries['Signature Service']} onQuery={v => setQuery('Signature Service', v)}
             title="Signature Service" metricA={{ key: 'signatureS', label: 'Signature Service', fmt: fmt$ }} metricB={{ key: 'signatureSCount', label: 'SS Count', fmt: fmtInt }}
-            goalType="signatureSGoal" goals={goals} goalMetricKey="signatureSCount" goalFmt={fmtInt}
+            goalType="signatureSGoal" goals={d.goals} goalMetricKey="signatureSCount" goalFmt={fmtInt}
             attachMetric={{ rowKey: 'signatureAttachPct', label: 'Retail Attach %' }}
-            history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
-            managers={managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
+            history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
+            managers={d.managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
           />
         )}
         {!needsReport && tab === 'Budgets' && (report || hasHistoricalData) && (
           <BudgetsTab
             query={queries.Budgets} onQuery={v => setQuery('Budgets', v)}
-            history={history} weeklyHistory={weeklyHistory}
+            history={d.history} weeklyHistory={d.weeklyHistory}
             isOwner={currentUser.role === 'owner'}
           />
         )}
         {tab === 'Goals' && (
-          <GoalsTab report={report} goals={goals} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} onImportColorAttachGoals={handleImportColorAttachGoals} fallbackEmployeesByStore={fallbackEmployeesByStore} />
+          <GoalsTab report={d.report} goals={d.goals} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} onImportColorAttachGoals={handleImportColorAttachGoals} fallbackEmployeesByStore={d.fallbackEmployeesByStore} />
         )}
         {tab === 'Leases' && (
           <LeasesTab
-            leases={leases} token={currentUser.token} onSaveLease={handleSaveLease}
+            leases={d.leases} token={currentUser.token} onSaveLease={handleSaveLease}
             onBulkSaveLeaseUpdates={handleBulkSaveLeaseUpdates} onDeleteLeaseFile={handleDeleteLeaseFile}
             onViewFile={handleViewLeaseFile} showToast={showToast}
           />
         )}
         {!needsReport && tab === 'DL' && (report || hasHistoricalData) && (
-          <DLTab report={report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={history} weeklyHistory={weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={managers} milestoneGoals={milestoneGoals} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
+          <DLTab report={d.report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={d.managers} milestoneGoals={d.milestoneGoals} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
         )}
         {tab === 'Reviews' && (
           <ReviewsTab
-            report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} reviews={reviews} query={queries.Reviews} onQuery={v => setQuery('Reviews', v)}
-            reviewNotes={reviewNotes} onAddReviewNote={handleAddReviewNote}
-            goldCombs={goldCombs} onToggleGoldComb={handleToggleGoldComb}
+            report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} reviews={d.reviews} query={queries.Reviews} onQuery={v => setQuery('Reviews', v)}
+            reviewNotes={d.reviewNotes} onAddReviewNote={handleAddReviewNote}
+            goldCombs={d.goldCombs} onToggleGoldComb={handleToggleGoldComb}
             canAward={currentUser.role === 'owner'} onAward={handleAwardPoints}
             currentUser={currentUser}
           />
         )}
         {tab === 'Weekly' && (
-          <WeeklyTab dailyHistory={history} weeklyHistory={weeklyHistory} />
+          <WeeklyTab dailyHistory={d.history} weeklyHistory={d.weeklyHistory} />
         )}
         {tab === "Tillie's Nest" && (
           <TilliesNestTab token={currentUser.token} showToast={showToast} />
@@ -8653,21 +8813,21 @@ export default function App() {
         {tab === 'Setup' && (
           <SetupTab
             configured={isConfigured()} section={setupSection} onSection={setSetupSection}
-            managersProps={{ report, managers, onSaveManager: handleSaveManager, onImportManagers: handleImportManagers }}
-            milestoneGoalsProps={{ report, milestoneGoals, onSaveMilestoneGoal: handleSaveMilestoneGoal, onImportMilestoneGoals: handleImportMilestoneGoals }}
+            managersProps={{ report: d.report, managers: d.managers, onSaveManager: handleSaveManager, onImportManagers: handleImportManagers }}
+            milestoneGoalsProps={{ report: d.report, milestoneGoals: d.milestoneGoals, onSaveMilestoneGoal: handleSaveMilestoneGoal, onImportMilestoneGoals: handleImportMilestoneGoals }}
             homepageAdminProps={{
-              news, events, newsGroups, newsReads,
+              news, events, newsGroups, newsReads: d.newsReads,
               onAddNews: handleAddNews, onUpdateNews: handleUpdateNews, onDeleteNews: handleDeleteNews,
               onAddEvent: handleAddEvent, onUpdateEvent: handleUpdateEvent, onDeleteEvent: handleDeleteEvent,
               onRenameNewsGroup: handleRenameNewsGroup, onDeleteNewsGroup: handleDeleteNewsGroup,
               onReorderNewsGroup: handleReorderNewsGroup, onSetNewsGroupColor: handleSetNewsGroupColor,
               onImageError: msg => showToast(msg, 'error'),
             }}
-            historyProps={{ history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory, reviews, onImportReviewsBatch: handleImportReviewsBatch }}
+            historyProps={{ history: d.history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory, reviews: d.reviews, onImportReviewsBatch: handleImportReviewsBatch }}
             uploadProps={{
-              report, uploading, onFile: handleFile, onClear: handleClearAll,
-              employeeRoster, uploadingRoster, onRosterFile: handleRosterFile, onClearRoster: handleClearRoster,
-              reviews, uploadingReviews, onReviewsFile: handleReviewsFile, onClearReviews: handleClearReviews,
+              report: d.report, uploading, onFile: handleFile, onClear: handleClearAll,
+              employeeRoster: d.employeeRoster, uploadingRoster, onRosterFile: handleRosterFile, onClearRoster: handleClearRoster,
+              reviews: d.reviews, uploadingReviews, onReviewsFile: handleReviewsFile, onClearReviews: handleClearReviews,
             }}
             employeeAccessProps={{ token: currentUser.token, onRosterChanged: reconcileManagerTagsFromRoster }}
             rewardsProps={{ token: currentUser.token, showToast }}
@@ -8675,11 +8835,12 @@ export default function App() {
               classCount: events.filter(ev => ev.source === 'hsa').length,
               uploading: uploadingHsaSchedule, onFile: handleImportHsaSchedule, onClear: handleClearHsaSchedule,
             }}
-            leaseAdminProps={{ leaseCount: Object.keys(leases).length, onClearAll: handleClearAllLeases }}
+            leaseAdminProps={{ leaseCount: Object.keys(d.leases).length, onClearAll: handleClearAllLeases }}
+            presenterProps={{ presenting, onToggle: handleTogglePresenter }}
           />
         )}
       </main>
-      <AIChatWidget report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} history={history} weeklyHistory={weeklyHistory} goals={goals} reviews={reviews} employeeRoster={employeeRoster} reviewNotes={reviewNotes} goldCombs={goldCombs} managers={managers} milestoneGoals={milestoneGoals} news={news} events={events} points={pointsSummary} hsaSignups={hsaSignups} leases={currentUser.role === 'owner' ? leases : null} newsReads={newsReads} />
+      <AIChatWidget key={presenting ? 'presenting' : 'live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} />
     </div>
   );
 }

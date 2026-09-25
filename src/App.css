@@ -33,6 +33,9 @@
 .app-subtitle { font-size: 13px; color: #B9C6D6; margin-top: 2px; }
 .header-right { padding-top: 4px; display: flex; align-items: center; gap: 10px; }
 .header-user { color: #fff; font-size: 12.5px; }
+/* Presenter mode indicator + quick exit (owner-only, see presenter.js) */
+.presenter-pill { background: rgba(255,255,255,0.18); color: #fff; border: 1px solid rgba(255,255,255,0.45); border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.presenter-pill:hover { background: rgba(255,255,255,0.28); }
 .btn-ghost {
   background: transparent; border: 1px solid rgba(255,255,255,0.4); color: #fff;
   font-family: 'Inter', sans-serif; font-size: 12px; padding: 7px 14px; border-radius: 20px; cursor: pointer;
