@@ -8725,7 +8725,7 @@ export default function App() {
           <button key={t} className={`tab-btn ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>{t}</button>
         ))}
       </nav>
-      <main className="app-main" key={presenting ? 'presenting' : 'live'}>
+      <main className="app-main" key={presenting ? 'main-presenting' : 'main-live'}>
         {needsReport && <div className="empty-state"><p className="empty-title">No data yet</p><p>Go to the Setup tab and either upload this week's Stylist Report, or run a Sales-Accrual/Attendance historical import.</p></div>}
         {tab === 'Homepage' && (
           <HomepageTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} fallbackEmployeesByStore={d.fallbackEmployeesByStore} news={news} events={events} reviews={d.reviews} onOpenNews={handleOpenNews} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
@@ -8840,7 +8840,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget key={presenting ? 'presenting' : 'live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} />
+      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} />
     </div>
   );
 }
