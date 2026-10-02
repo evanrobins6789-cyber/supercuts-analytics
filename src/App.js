@@ -956,15 +956,14 @@ function readPdfAsDataURL(file, maxSizeMB = NEWS_PDF_MAX_MB) {
       return;
     }
     const reader = new FileReader();
-    reader.onload = ev => resolve({ dataUrl: ev.target.result, name: file.name, sizeKB: Math.round(file.size / 1024) });
+    reader.onload = ev => resolve({ id: genId(), dataUrl: ev.target.result, name: file.name, sizeKB: Math.round(file.size / 1024) });
     reader.onerror = () => reject(new Error('Failed to read the PDF file.'));
     reader.readAsDataURL(file);
   });
 }
 
-// Combined cap across all of one post's PDFs — every post lives inline in the
-// single `homepage_news` row, so several max-size files on one post would
-// bloat that row far faster than the per-file cap alone suggests.
+// Combined cap across all of one post's PDFs. They're stored in their own
+// pieces (see saveNews), but every viewer still loads every post's PDFs.
 const NEWS_PDF_TOTAL_MAX_MB = 16;
 
 // A post's attachments as a list. Posts saved before multi-PDF support carry
@@ -974,6 +973,85 @@ function getNewsPdfs(post) {
   if (!post) return [];
   if (Array.isArray(post.pdfs)) return post.pdfs;
   return post.pdf ? [post.pdf] : [];
+}
+
+// ─── News PDF storage ───────────────────────────────────────────────────────
+// PDFs used to live inline in the single `homepage_news` row, so every post/
+// edit/delete re-sent every PDF ever attached — at ~5MB that row started
+// hitting Postgres's statement timeout on save (2026-10-02). Each PDF's data
+// URL is now split into ~1.5MB pieces, one `homepage_news_pdf_<id>_<n>` row
+// each (tested: a ~3MB row upserts in under 2s, an incompressible 16MB one
+// times out). `homepage_news` itself only keeps `{ id, name, sizeKB, chunks }`.
+// In memory, posts still carry `dataUrl` on each PDF (re-attached on load),
+// so the composer/viewer code is unchanged — only persistence strips it.
+const NEWS_PDF_PREFIX = 'homepage_news_pdf_';
+const NEWS_PDF_CHUNK_CHARS = 1.5 * 1024 * 1024;
+// PDF ids whose pieces are confirmed in Supabase — those are never re-sent.
+const savedNewsPdfIds = new Set();
+
+// Gives every PDF a stable id (legacy inline PDFs never had one) so a PDF is
+// only ever uploaded once no matter how many times its post gets re-saved.
+function withNewsPdfIds(posts) {
+  return posts.map(post => {
+    const pdfs = getNewsPdfs(post);
+    if (!pdfs.length || pdfs.every(p => p.id)) return post;
+    const { pdf: _legacy, ...rest } = post;
+    return { ...rest, pdfs: pdfs.map((p, i) => (p.id ? p : { ...p, id: `legacy${post.id}x${i}` })) };
+  });
+}
+
+// Re-attaches each PDF's data URL from its stored pieces. A PDF still
+// embedded the old way keeps its inline dataUrl until the next save moves it.
+async function loadNewsWithPdfs(posts) {
+  const res = await loadDataByPrefix(NEWS_PDF_PREFIX);
+  const byKey = new Map((res.data || []).map(r => [r.key, r.payload]));
+  const localOnly = new Set(res.localOnlyKeys || []);
+  return withNewsPdfIds(posts).map(post => {
+    if (!Array.isArray(post.pdfs)) return post;
+    return {
+      ...post,
+      pdfs: post.pdfs.map(p => {
+        if (p.dataUrl || !p.chunks) return p;
+        const keys = Array.from({ length: p.chunks }, (_, i) => `${NEWS_PDF_PREFIX}${p.id}_${i}`);
+        if (!keys.every(k => typeof byKey.get(k) === 'string')) return p;
+        if (res.source === 'supabase' && !keys.some(k => localOnly.has(k))) savedNewsPdfIds.add(p.id);
+        return { ...p, dataUrl: keys.map(k => byKey.get(k)).join('') };
+      }),
+    };
+  });
+}
+
+// Drop-in for saveData('homepage_news', posts): uploads any PDF not yet in
+// Supabase as its own pieces first, then saves the slim post list. If a piece
+// fails, the post list isn't saved, so it never references a missing PDF.
+// Queued so a slow save (uploading PDF pieces) can't finish after a later
+// one and overwrite it with an older post list.
+let newsSaveQueue = Promise.resolve();
+function saveNews(posts) {
+  const run = newsSaveQueue.then(() => saveNewsNow(posts));
+  newsSaveQueue = run.catch(() => {});
+  return run;
+}
+async function saveNewsNow(posts) {
+  const slim = [];
+  for (const post of withNewsPdfIds(posts)) {
+    if (!Array.isArray(post.pdfs)) { slim.push(post); continue; }
+    const pdfs = [];
+    for (const p of post.pdfs) {
+      if (!p.dataUrl) { pdfs.push(p); continue; } // never loaded — keep its stored pieces as-is
+      const chunks = Math.max(1, Math.ceil(p.dataUrl.length / NEWS_PDF_CHUNK_CHARS));
+      if (!savedNewsPdfIds.has(p.id)) {
+        for (let i = 0; i < chunks; i++) {
+          const result = await saveData(`${NEWS_PDF_PREFIX}${p.id}_${i}`, p.dataUrl.slice(i * NEWS_PDF_CHUNK_CHARS, (i + 1) * NEWS_PDF_CHUNK_CHARS));
+          if (!result.ok) return { ok: false, error: `PDF "${p.name}": ${result.error}` };
+        }
+        savedNewsPdfIds.add(p.id);
+      }
+      pdfs.push({ id: p.id, name: p.name, sizeKB: p.sizeKB, chunks });
+    }
+    slim.push({ ...post, pdfs });
+  }
+  return saveData('homepage_news', slim);
 }
 
 function newsPdfBadge(post) {
@@ -1593,8 +1671,14 @@ function NewsPostModal({ post, onClose, hasSignedOff, onSignOff }) {
         )}
         {getNewsPdfs(post).map((pdf, i) => (
           <div key={`${pdf.name}-${i}`} className="news-post-pdf">
-            <iframe className="news-post-pdf-frame" src={pdf.dataUrl} title={pdf.name} />
-            <a className="news-post-pdf-link" href={pdf.dataUrl} download={pdf.name}>⬇ Download {pdf.name}</a>
+            {pdf.dataUrl ? (
+              <>
+                <iframe className="news-post-pdf-frame" src={pdf.dataUrl} title={pdf.name} />
+                <a className="news-post-pdf-link" href={pdf.dataUrl} download={pdf.name}>⬇ Download {pdf.name}</a>
+              </>
+            ) : (
+              <p className="news-post-text">📄 {pdf.name} couldn’t be loaded — try refreshing the page.</p>
+            )}
           </div>
         ))}
         {post.requireSignoff && (
@@ -7469,7 +7553,20 @@ export default function App() {
       if (reviewNotesRes.data) setReviewNotes(reviewNotesRes.data);
       if (goldCombsRes.data) setGoldCombs(goldCombsRes.data);
       const loadedNews = newsRes.data || [];
-      if (newsRes.data) setNews(loadedNews);
+      if (newsRes.data) {
+        setNews(withNewsPdfIds(loadedNews));
+        // PDF pieces load separately so posts show without waiting on them.
+        // Merged in by PDF id (not by replacing the list) so a post made or
+        // edited in the meantime isn't overwritten.
+        loadNewsWithPdfs(loadedNews).then(hydrated => {
+          const urls = new Map(hydrated.flatMap(n => getNewsPdfs(n)).filter(p => p.dataUrl).map(p => [p.id, p.dataUrl]));
+          setNews(prev => prev.map(n => {
+            const pdfs = getNewsPdfs(n);
+            if (!pdfs.some(p => !p.dataUrl && urls.has(p.id))) return n;
+            return { ...n, pdfs: pdfs.map(p => (p.dataUrl || !urls.has(p.id) ? p : { ...p, dataUrl: urls.get(p.id) })) };
+          }));
+        });
+      }
       if (newsReadsRes.data) setNewsReads(newsReadsRes.data);
       if (eventsRes.data) setEvents(eventsRes.data);
       if (hsaSignupsRes.data) setHsaSignups(hsaSignupsRes.data);
@@ -8021,7 +8118,7 @@ export default function App() {
     const item = { id: genId(), ...fields, date: new Date().toISOString().slice(0, 10), createdAt: new Date().toISOString() };
     setNews(prev => {
       const next = [item, ...prev];
-      saveData('homepage_news', next).then(result => {
+      saveNews(next).then(result => {
         if (isConfigured() && !result.ok) showToast(`Update saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
       });
       return next;
@@ -8032,7 +8129,7 @@ export default function App() {
     ensureNewsGroup(fields.group);
     setNews(prev => {
       const next = prev.map(n => n.id === id ? { ...n, ...fields } : n);
-      saveData('homepage_news', next).then(result => {
+      saveNews(next).then(result => {
         if (isConfigured() && !result.ok) showToast(`Update saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
       });
       return next;
@@ -8051,7 +8148,7 @@ export default function App() {
     });
     setNews(prev => {
       const next = prev.map(n => n.group === oldName ? { ...n, group: trimmed } : n);
-      saveData('homepage_news', next).then(result => {
+      saveNews(next).then(result => {
         if (isConfigured() && !result.ok) showToast(`Update saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
       });
       return next;
@@ -8068,7 +8165,7 @@ export default function App() {
     });
     setNews(prev => {
       const next = prev.map(n => n.group === name ? { ...n, group: null } : n);
-      saveData('homepage_news', next).then(result => {
+      saveNews(next).then(result => {
         if (isConfigured() && !result.ok) showToast(`Update saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
       });
       return next;
@@ -8102,7 +8199,7 @@ export default function App() {
   const handleDeleteNews = useCallback(id => {
     setNews(prev => {
       const next = prev.filter(n => n.id !== id);
-      saveData('homepage_news', next).then(result => {
+      saveNews(next).then(result => {
         if (isConfigured() && !result.ok) showToast(`Delete saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
       });
       return next;
