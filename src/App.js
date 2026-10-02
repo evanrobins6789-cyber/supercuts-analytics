@@ -962,14 +962,47 @@ function readPdfAsDataURL(file, maxSizeMB = NEWS_PDF_MAX_MB) {
   });
 }
 
+// Combined cap across all of one post's PDFs — every post lives inline in the
+// single `homepage_news` row, so several max-size files on one post would
+// bloat that row far faster than the per-file cap alone suggests.
+const NEWS_PDF_TOTAL_MAX_MB = 16;
+
+// A post's attachments as a list. Posts saved before multi-PDF support carry
+// a single `pdf` object instead of `pdfs` — still read here, so they keep
+// working without a data migration (the next edit rewrites them as `pdfs`).
+function getNewsPdfs(post) {
+  if (!post) return [];
+  if (Array.isArray(post.pdfs)) return post.pdfs;
+  return post.pdf ? [post.pdf] : [];
+}
+
+function newsPdfBadge(post) {
+  const n = getNewsPdfs(post).length;
+  if (!n) return undefined;
+  return n === 1 ? '📄 PDF' : `📄 ${n} PDFs`;
+}
+
 function PdfUploadField({ value, onChange, onError }) {
   const [busy, setBusy] = useState(false);
-  const handleFile = async file => {
+  const pdfs = value || [];
+  const handleFiles = async files => {
     setBusy(true);
+    const added = [];
+    let totalKB = pdfs.reduce((sum, p) => sum + (p.sizeKB || 0), 0);
     try {
-      onChange(await readPdfAsDataURL(file));
-    } catch (err) {
-      if (onError) onError(err.message);
+      for (const file of files) {
+        try {
+          const pdf = await readPdfAsDataURL(file);
+          if (totalKB + pdf.sizeKB > NEWS_PDF_TOTAL_MAX_MB * 1024) {
+            throw new Error(`Skipped ${file.name} — a post's PDFs can total at most ${NEWS_PDF_TOTAL_MAX_MB}MB.`);
+          }
+          totalKB += pdf.sizeKB;
+          added.push(pdf);
+        } catch (err) {
+          if (onError) onError(err.message);
+        }
+      }
+      if (added.length) onChange([...pdfs, ...added]);
     } finally {
       setBusy(false);
     }
@@ -977,15 +1010,15 @@ function PdfUploadField({ value, onChange, onError }) {
   return (
     <div className="homepage-image-field">
       <label className="homepage-image-upload">
-        <input type="file" accept="application/pdf" style={{ display: 'none' }} onChange={e => { if (e.target.files[0]) handleFile(e.target.files[0]); e.target.value = ''; }} />
-        {busy ? <span className="spinner small" /> : (value ? '📄 Replace PDF' : '📄 Attach PDF (optional)')}
+        <input type="file" accept="application/pdf" multiple style={{ display: 'none' }} onChange={e => { const files = Array.from(e.target.files || []); if (files.length) handleFiles(files); e.target.value = ''; }} />
+        {busy ? <span className="spinner small" /> : (pdfs.length ? '📄 Add more PDFs' : '📄 Attach PDFs (optional)')}
       </label>
-      {value && (
-        <div className="homepage-pdf-field-preview">
-          <span>📄 {value.name} ({value.sizeKB} KB)</span>
-          <button type="button" className="homepage-delete-btn" onClick={() => onChange(null)} title="Remove PDF">✕</button>
+      {pdfs.map((p, i) => (
+        <div key={`${p.name}-${i}`} className="homepage-pdf-field-preview">
+          <span>📄 {p.name} ({p.sizeKB} KB)</span>
+          <button type="button" className="homepage-delete-btn" onClick={() => onChange(pdfs.filter((_, j) => j !== i))} title="Remove PDF">✕</button>
         </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -998,7 +1031,7 @@ function NewsComposer({ initial, onSubmit, onCancel, onImageError, existingGroup
   const [title, setTitle] = useState(initial?.title || '');
   const [body, setBody] = useState(initial?.body || '');
   const [image, setImage] = useState(initial?.headerImage || null);
-  const [pdf, setPdf] = useState(initial?.pdf || null);
+  const [pdfs, setPdfs] = useState(() => getNewsPdfs(initial));
   const [group, setGroup] = useState(initial?.group || '');
   const [link, setLink] = useState(initial?.link || '');
   const [requireSignoff, setRequireSignoff] = useState(initial?.requireSignoff || false);
@@ -1016,8 +1049,8 @@ function NewsComposer({ initial, onSubmit, onCancel, onImageError, existingGroup
   const submit = e => {
     e.preventDefault();
     if (!title.trim()) return;
-    onSubmit({ title: title.trim(), body: body.trim(), headerImage: image, pdf, group: group.trim() || null, link: normalizeLink(link), requireSignoff });
-    if (!initial) { setTitle(''); setBody(''); setImage(null); setPdf(null); setGroup(''); setLink(''); setRequireSignoff(false); }
+    onSubmit({ title: title.trim(), body: body.trim(), headerImage: image, pdfs, pdf: null, group: group.trim() || null, link: normalizeLink(link), requireSignoff });
+    if (!initial) { setTitle(''); setBody(''); setImage(null); setPdfs([]); setGroup(''); setLink(''); setRequireSignoff(false); }
   };
   return (
     <form className="homepage-composer" onSubmit={submit}>
@@ -1029,7 +1062,7 @@ function NewsComposer({ initial, onSubmit, onCancel, onImageError, existingGroup
       </datalist>
       <input className="homepage-input" type="text" placeholder="Website link (optional) — e.g. https://… or just the address" value={link} onChange={e => setLink(e.target.value)} onBlur={() => setLink(l => normalizeLink(l) || '')} />
       <ImageUploadField value={image} onChange={setImage} onError={onImageError} label="Header image (optional)" />
-      <PdfUploadField value={pdf} onChange={setPdf} onError={onImageError} />
+      <PdfUploadField value={pdfs} onChange={setPdfs} onError={onImageError} />
       <label className="news-signoff-check">
         <input type="checkbox" checked={requireSignoff} onChange={e => setRequireSignoff(e.target.checked)} />
         <span>Require District Leader sign-off (they must check a box confirming they read it — tracked in Setup → Homepage)</span>
@@ -1412,7 +1445,7 @@ function NewsCarousel({ news, onOpenPost }) {
         {visible.map(n => (
           <HomepageMediaCard
             key={n.id} image={n.headerImage}
-            badge={n.pdf ? '📄 PDF' : undefined}
+            badge={newsPdfBadge(n)}
             isNew={isWithinDays(n.createdAt || n.date, 10)}
             title={n.title} date={fmtDateLong(n.date)} desc={n.body} link={n.link}
             onClick={() => onOpenPost(n.id)}
@@ -1558,12 +1591,12 @@ function NewsPostModal({ post, onClose, hasSignedOff, onSignOff }) {
         {post.link && (
           <a className="news-post-pdf-link" href={post.link} target="_blank" rel="noopener noreferrer">🔗 Visit link</a>
         )}
-        {post.pdf && (
-          <div className="news-post-pdf">
-            <iframe className="news-post-pdf-frame" src={post.pdf.dataUrl} title={post.pdf.name} />
-            <a className="news-post-pdf-link" href={post.pdf.dataUrl} download={post.pdf.name}>⬇ Download {post.pdf.name}</a>
+        {getNewsPdfs(post).map((pdf, i) => (
+          <div key={`${pdf.name}-${i}`} className="news-post-pdf">
+            <iframe className="news-post-pdf-frame" src={pdf.dataUrl} title={pdf.name} />
+            <a className="news-post-pdf-link" href={pdf.dataUrl} download={pdf.name}>⬇ Download {pdf.name}</a>
           </div>
-        )}
+        ))}
         {post.requireSignoff && (
           <label className={`news-signoff-check news-signoff-confirm ${hasSignedOff ? 'news-signoff-confirm--done' : ''}`}>
             <input type="checkbox" checked={!!hasSignedOff} disabled={hasSignedOff} onChange={() => onSignOff && onSignOff(post.id)} />
@@ -2665,7 +2698,7 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews, currentUser, n
           <div className="news-tile-grid">
             {b.posts.map(n => (
               <HomepageMediaCard
-                key={n.id} compact image={n.headerImage} badge={n.pdf ? '📄 PDF' : undefined}
+                key={n.id} compact image={n.headerImage} badge={newsPdfBadge(n)}
                 isNew={isWithinDays(n.createdAt || n.date, 10)}
                 title={n.title} date={fmtDateLong(n.date)} onClick={() => setSelectedPost(n)}
               />
@@ -4453,7 +4486,7 @@ function HomepageAdminTab({
 
   return (
     <div className="tab-content">
-      <p className="section-hint">Post News &amp; Updates and log Events here — both support an optional header image, and News can also attach a PDF and a group. News shows a teaser card on the Homepage that opens the full post (and PDF) on the News tab; events also appear on the Homepage calendar (in their chosen color), with the 3 soonest featured above it. Use ✎ to edit a post or event in place.</p>
+      <p className="section-hint">Post News &amp; Updates and log Events here — both support an optional header image, and News can also attach one or more PDFs and a group. News shows a teaser card on the Homepage that opens the full post (and PDF) on the News tab; events also appear on the Homepage calendar (in their chosen color), with the 3 soonest featured above it. Use ✎ to edit a post or event in place.</p>
 
       <NewsGroupManager
         groups={newsGroups} news={news} onRename={onRenameNewsGroup} onDelete={onDeleteNewsGroup}
@@ -4474,7 +4507,7 @@ function HomepageAdminTab({
                 {n.headerImage && <img className="homepage-admin-thumb" src={n.headerImage} alt="" />}
                 <div className="homepage-admin-row-body">
                   <p className="homepage-admin-row-title">{n.title}</p>
-                  <p className="homepage-admin-row-date">{fmtDateLong(n.date)}{n.group ? ` · 🏷 ${n.group}` : ''}{n.pdf ? ' · 📄 PDF attached' : ''}{n.link ? ' · 🔗 Link' : ''}{n.requireSignoff ? ' · ✅ Sign-off required' : ''}</p>
+                  <p className="homepage-admin-row-date">{fmtDateLong(n.date)}{n.group ? ` · 🏷 ${n.group}` : ''}{getNewsPdfs(n).length ? ` · 📄 ${getNewsPdfs(n).length} PDF${getNewsPdfs(n).length !== 1 ? 's' : ''} attached` : ''}{n.link ? ' · 🔗 Link' : ''}{n.requireSignoff ? ' · ✅ Sign-off required' : ''}</p>
                 </div>
                 <button className="homepage-edit-btn" onClick={() => setEditingNewsId(n.id)} title="Edit">✎</button>
                 <button className="homepage-delete-btn" onClick={() => onDeleteNews(n.id)} title="Delete">✕</button>
@@ -5876,7 +5909,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
         const pending = dlNames.filter(name => !confirmed.has(normalizeName(name)));
         signoffNote = ` [requires DL sign-off — ${pending.length ? `still waiting on ${pending.join(', ')}` : 'all DLs confirmed'}]`;
       }
-      lines.push(`${n.date}: ${n.title}${n.group ? ` [group: ${n.group}]` : ''}${n.body ? ` — ${n.body}` : ''}${n.pdf ? ' [has a PDF attachment]' : ''}${n.link ? ` [link: ${n.link}]` : ''}${signoffNote}`);
+      lines.push(`${n.date}: ${n.title}${n.group ? ` [group: ${n.group}]` : ''}${n.body ? ` — ${n.body}` : ''}${getNewsPdfs(n).length ? ` [PDF attachments: ${getNewsPdfs(n).map(p => p.name).join(', ')}]` : ''}${n.link ? ` [link: ${n.link}]` : ''}${signoffNote}`);
     });
     lines.push('');
   }
