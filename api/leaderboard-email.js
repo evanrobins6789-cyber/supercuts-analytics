@@ -156,7 +156,7 @@ function newsSection(news, range) {
           <tr>
             <td style="padding:12px 14px;font-family:${FONT};">
               <div style="font-size:13.5px;font-weight:700;color:${BRAND.navy};">${escapeHtml(n.title)}${badge}</div>
-              <div style="font-size:11.5px;color:${BRAND.inkSoft};margin-top:2px;">${fmtDateLong(n.date)}${n.group ? ` &nbsp;·&nbsp; ${escapeHtml(n.group)}` : ''}</div>
+              ${n.group ? `<div style="font-size:11.5px;color:${BRAND.inkSoft};margin-top:2px;">${escapeHtml(n.group)}</div>` : ''}
               ${n.body ? `<div style="font-size:12.5px;color:#444;margin-top:6px;line-height:1.4;">${escapeHtml(n.body)}</div>` : ''}
             </td>
           </tr>
