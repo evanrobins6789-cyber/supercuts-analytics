@@ -11,7 +11,7 @@ import {
 import {
   getSession, setSession, clearSession, checkEligible, signUp, logIn, logOut,
   loadScoped, loadScopedByPrefix, saveScoped, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
-  pointsBalance, pointsAward, pointsAllBalances, pointsTransactions, pointsDeleteTransaction,
+  pointsBalance, pointsAllBalances, pointsTransactions, pointsDeleteTransaction,
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled,
   leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates,
 } from './auth';
@@ -1421,7 +1421,7 @@ function matchCoreValueCategories(message) {
 // Cycles through 5-star reviews that name a stylist by name (via the same
 // detectEmployeeMention used on the Reviews tab) — a little "shoutouts" wall
 // for the front desk to leave running. 10s per review, pauses on hover.
-function ReviewSpotlightWidget({ report, fallbackEmployeesByStore, reviews, bitmojiImg, bitmojiActive, canAward, onAward }) {
+function ReviewSpotlightWidget({ report, fallbackEmployeesByStore, reviews, bitmojiImg, bitmojiActive }) {
   const [paused, setPaused] = useState(false);
   const reportUsable = report && !isReportStale(report);
   const spotlightReviews = useMemo(() => {
@@ -1458,11 +1458,7 @@ function ReviewSpotlightWidget({ report, fallbackEmployeesByStore, reviews, bitm
           <p className="homepage-spotlight-stars">⭐⭐⭐⭐⭐</p>
           <div className="homepage-spotlight-quote-wrap"><p className="homepage-spotlight-quote">“{current.message}”</p></div>
           <p className="homepage-spotlight-mention">
-            💇 Shoutout to <strong>{canAward ? (
-              <button type="button" className="ledger-name-award" onClick={() => onAward(current.mention)} title={`Award 5 points to ${current.mention}`}>
-                {current.mention}<span className="award-plus">+5</span>
-              </button>
-            ) : current.mention}</strong>!
+            💇 Shoutout to <strong>{current.mention}</strong>!
           </p>
           <p className="homepage-spotlight-meta">
             {current.userName || 'A happy guest'} · {STORE_CODE_TO_NAME[current.code] || current.code}
@@ -1537,7 +1533,7 @@ function NewsCarousel({ news, onOpenPost }) {
   );
 }
 
-function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore, news, events, reviews, onOpenNews, canAward, onAward }) {
+function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore, news, events, reviews, onOpenNews }) {
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
   const reportUsable = report && !isReportStale(report);
@@ -1637,7 +1633,7 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
         </div>
 
         <div className="homepage-sidebar">
-          <ReviewSpotlightWidget report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} reviews={reviews} bitmojiImg={bitmojiImg} bitmojiActive={bitmojiKey === 'spotlight'} canAward={canAward} onAward={onAward} />
+          <ReviewSpotlightWidget report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} reviews={reviews} bitmojiImg={bitmojiImg} bitmojiActive={bitmojiKey === 'spotlight'} />
           <CoreValuesWidget bitmojiImg={bitmojiImg} bitmojiActive={bitmojiKey === 'corevalues'} />
         </div>
       </div>
@@ -2797,7 +2793,7 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews, currentUser, n
 
 // ─── Overview tab ───────────────────────────────────────────────────────────
 // ─── Overview tab (top-10/bottom-10 leaderboards, plus the full store list) ─
-function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery, managers, canAward, onAward, isOwner, goals }) {
+function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery, managers, isOwner, goals }) {
   const [sortBy, setSortBy] = useState('tsth');
   const getSalesGoal = code => goals?.[code]?.salesGoal ?? null;
   const [expanded, setExpanded] = useState({});
@@ -2941,7 +2937,6 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
                     footer={{ sales: s.sales, avgTicket: s.avgTicket, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, otherServices: s.otherServices, opc: s.opc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                     footerLabel="Store total / weighted avg"
                     focused={focused} onFocus={setFocused}
-                    canAward={canAward} onAward={onAward}
                   />
                 </div>
               )}
@@ -2978,7 +2973,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
 }
 
 // ─── Employees tab ──────────────────────────────────────────────────────────
-function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel = 'Total / Avg (weighted)', focused = null, onFocus = null, canAward = false, onAward = null }) {
+function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel = 'Total / Avg (weighted)', focused = null, onFocus = null }) {
   return (
     <div className="ledger-scroll">
       <table className={`ledger-table ${focused ? 'ledger-table--focus-mode' : ''}`}>
@@ -2997,15 +2992,7 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
               onClick={onFocus ? () => onFocus(focused === e.name ? null : e.name) : undefined}
             >
               <td className="ledger-name-col">
-                {canAward ? (
-                  <button
-                    type="button" className="ledger-name-award"
-                    onClick={evt => { evt.stopPropagation(); onAward(e.name); }}
-                    title={`Award 5 points to ${e.name}`}
-                  >
-                    {e.name}<span className="award-plus">+5</span>
-                  </button>
-                ) : e.name}
+                {e.name}
                 {e.isManager && <span className="manager-tag"> MANAGER</span>}
               </td>
               {showStoreCol && <td className="ledger-store-col">{e.store}</td>}
@@ -3032,7 +3019,7 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
   );
 }
 
-function EmployeesTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, query, onQuery, managers, canAward, onAward, employeeRoster, fallbackEmployeesByStore }) {
+function EmployeesTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, query, onQuery, managers, employeeRoster, fallbackEmployeesByStore }) {
   const [sortBy, setSortBy] = useState('sales');
   const [newHireSortBy, setNewHireSortBy] = useState('daysAgo');
   const [showingNewHires, setShowingNewHires] = useState(false);
@@ -3147,11 +3134,7 @@ function EmployeesTab({ report, history, weeklyHistory, dateRange, onDateRangeCh
                   {newHireSorted.map((r, i) => (
                     <tr key={`${r.name}-${i}`}>
                       <td className="ledger-name-col">
-                        {canAward ? (
-                          <button type="button" className="ledger-name-award" onClick={() => onAward(r.name)} title={`Award 5 points to ${r.name}`}>
-                            {r.name}<span className="award-plus">+5</span>
-                          </button>
-                        ) : r.name}
+                        {r.name}
                       </td>
                       <td>{fmtDateLong(r.startDate)}</td>
                       <td>{r.daysAgo}</td>
@@ -3191,7 +3174,7 @@ function EmployeesTab({ report, history, weeklyHistory, dateRange, onDateRangeCh
               Focused on <strong>{focused}</strong> — everyone else is blurred. <button className="btn-ghost" onClick={() => setFocused(null)}>Clear focus</button>
             </p>
           )}
-          <EmployeeTable rows={sorted} showStoreCol focused={focused} onFocus={setFocused} canAward={canAward} onAward={onAward} />
+          <EmployeeTable rows={sorted} showStoreCol focused={focused} onFocus={setFocused} />
         </>
       )}
     </div>
@@ -3207,7 +3190,7 @@ function getPrevMonthRange() {
 }
 
 // ─── Single-focus store tabs (Retail, Color Sales) — grouped by DL ─────────
-function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers, canAward, onAward, isOwner, showProducts, goalMetricKey, goalMetricLabel, goalFmt, attachMetric, refMetric }) {
+function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers, isOwner, showProducts, goalMetricKey, goalMetricLabel, goalFmt, attachMetric, refMetric }) {
   const [sortBy, setSortBy] = useState(metricA.key);
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat' | 'products'
   const [expanded, setExpanded] = useState({});
@@ -3482,7 +3465,6 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                                       footer={{ sales: s.sales, avgTicket: s.avgTicket, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, otherServices: s.otherServices, opc: s.opc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                                       footerLabel="Store total / weighted avg"
                                       focused={focused} onFocus={setFocused}
-                                      canAward={canAward} onAward={onAward}
                                     />
                                   </td>
                                 </tr>
@@ -3586,7 +3568,6 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                             footer={{ sales: s.sales, avgTicket: s.avgTicket, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, otherServices: s.otherServices, opc: s.opc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                             footerLabel="Store total / weighted avg"
                             focused={focused} onFocus={setFocused}
-                            canAward={canAward} onAward={onAward}
                           />
                         </td>
                       </tr>
@@ -3886,7 +3867,7 @@ function BudgetsTab({ query, onQuery, history, weeklyHistory, isOwner }) {
 }
 
 // ─── DL tab ─────────────────────────────────────────────────────────────────
-function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers, milestoneGoals, canAward, onAward }) {
+function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers, milestoneGoals }) {
   const [expanded, setExpanded] = useState({});
   const [expandedStore, setExpandedStore] = useState({});
   const [showManagers, setShowManagers] = useState(false);
@@ -4174,7 +4155,6 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                                         footer={{ sales: s.sales, avgTicket: s.avgTicket, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, otherServices: s.otherServices, opc: s.opc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                                         footerLabel="Store total / weighted avg"
                                         focused={focused} onFocus={setFocused}
-                                        canAward={canAward} onAward={onAward}
                                       />
                                     </td>
                                   </tr>
@@ -4840,7 +4820,7 @@ function ReviewNotes({ notes, onAdd }) {
   );
 }
 
-function ReviewCard({ review, employeeMatch, notes, onAddNote, goldComb, onToggleGoldComb, canAward, onAward }) {
+function ReviewCard({ review, employeeMatch, notes, onAddNote, goldComb, onToggleGoldComb }) {
   const tone = review.rating <= 2 ? 'neg' : review.rating >= 4 ? 'pos' : 'neu';
   return (
     <div className={`review-card review-card--${tone}${goldComb ? ' review-card--gold' : ''}`}>
@@ -4861,11 +4841,7 @@ function ReviewCard({ review, employeeMatch, notes, onAddNote, goldComb, onToggl
       {review.message && <p className="review-message">{review.message}</p>}
       {employeeMatch && (
         <p className="review-employee-tag">
-          👤 Mentions: {canAward ? (
-            <button type="button" className="ledger-name-award" onClick={() => onAward(employeeMatch)} title={`Award 5 points to ${employeeMatch}`}>
-              {employeeMatch}<span className="award-plus">+5</span>
-            </button>
-          ) : employeeMatch}
+          👤 Mentions: {employeeMatch}
         </p>
       )}
       {onAddNote && <ReviewNotes notes={notes || []} onAdd={text => onAddNote(reviewKey(review), text)} />}
@@ -4920,7 +4896,7 @@ function ReviewDateRangeBar({ start, end, onChange }) {
   );
 }
 
-function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery, reviewNotes, onAddReviewNote, goldCombs, onToggleGoldComb, canAward, onAward, currentUser }) {
+function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery, reviewNotes, onAddReviewNote, goldCombs, onToggleGoldComb, currentUser }) {
   // Export is for DL/leadership looking at a store's reviews, not rank-and-file.
   const canExportReviews = !!currentUser && currentUser.role !== 'employee';
   const [viewMode, setViewMode] = useState('flat'); // 'flat' | 'dl'
@@ -5148,7 +5124,6 @@ function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery,
             key={i} review={r} employeeMatch={detectEmployeeMention(r.message, employeesForStore)}
             notes={reviewNotes?.[reviewKey(r)]} onAddNote={onAddReviewNote}
             goldComb={!!goldCombs?.[reviewKey(r)]} onToggleGoldComb={onToggleGoldComb ? () => onToggleGoldComb(reviewKey(r)) : undefined}
-            canAward={canAward} onAward={onAward}
           />
         ))}
         {!reviewList.length && <p className="empty-note" style={{ padding: '12px' }}>No reviews to show here.</p>}
@@ -6475,7 +6450,7 @@ function PresenterSetupTab({ presenting, onToggle }) {
       <p className="chart-title">🎭 Presenter Mode</p>
       <p className="step-body">Shows made-up numbers and names everywhere in the app so you can demo it without showing real data. Store names stay real; every sales figure, count, goal, rent amount, point balance, and person's name (stylists, managers, DLs, reviewers, HSA sign-ups) is swapped for a fake one. Review text is swapped for sample reviews.</p>
       <ul className="step-body">
-        <li><strong>Nothing is changed or saved.</strong> The fake numbers are generated in this browser from your real data on the fly. While presenter mode is on, every save, upload, import, delete, and point award is blocked. Anything you type is thrown away when you turn it off.</li>
+        <li><strong>Nothing is changed or saved.</strong> The fake numbers are generated in this browser from your real data on the fly. While presenter mode is on, every save, upload, import, delete, and redemption is blocked. Anything you type is thrown away when you turn it off.</li>
         <li><strong>Only you, only this browser.</strong> Nobody else who logs in sees fake data or has this option, even on this same computer. It stays on across page reloads for you until you turn it off.</li>
         <li>Turning it off reloads the page with your real data.</li>
       </ul>
@@ -7375,8 +7350,7 @@ grant select, insert, update, delete on weekly_report to anon, authenticated;`}<
 
 // ─── Tillie's Nest — points shop ───────────────────────────────────────────
 // Every logged-in role can reach this tab (unlike Setup) since anyone can
-// earn points via the click-to-award buttons scattered through the app and
-// needs somewhere to spend them. Just the shop — catalog management,
+// hold points and needs somewhere to spend them. Just the shop — catalog management,
 // the fulfillment queue, and everyone's balances live in Setup > Rewards
 // (RewardsSetupTab, owner-only), not here.
 function TilliesNestTab({ token, showToast }) {
@@ -7926,15 +7900,6 @@ export default function App() {
     setPresenting(initPresenterMode(session));
     setCurrentUser(session);
     if (!persisted) showToast("Signed in, but this browser's storage is full so it couldn't remember your login — you'll need to sign in again next time you visit. Nothing else is affected.", 'error');
-  };
-
-  // Wherever an employee's name shows up (owner-only), one click awards 5
-  // points via api/points.js. No confirm dialog — a mis-click is corrected
-  // from Tillie's Nest's "Everyone's Balances" panel, not an undo timer.
-  const handleAwardPoints = async name => {
-    const res = await pointsAward(currentUser.token, name);
-    if (!res.ok) showToast(res.error, 'error');
-    else showToast(`🎉 +5 points to ${name} — now ${res.balance}`);
   };
 
   // useCallback so useIdleLogout's effect below doesn't tear down and
@@ -9033,7 +8998,7 @@ export default function App() {
       <main className="app-main" key={presenting ? 'main-presenting' : 'main-live'}>
         {needsReport && <div className="empty-state"><p className="empty-title">No data yet</p><p>Go to the Setup tab and either upload this week's Stylist Report, or run a Sales-Accrual/Attendance historical import.</p></div>}
         {tab === 'Homepage' && (
-          <HomepageTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} fallbackEmployeesByStore={d.fallbackEmployeesByStore} news={news} events={events} reviews={d.reviews} onOpenNews={handleOpenNews} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
+          <HomepageTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} fallbackEmployeesByStore={d.fallbackEmployeesByStore} news={news} events={events} reviews={d.reviews} onOpenNews={handleOpenNews} />
         )}
         {tab === 'News' && (
           <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={currentUser} newsReads={d.newsReads} onSignOff={handleSignOffNews} />
@@ -9042,10 +9007,10 @@ export default function App() {
           <HsaTab events={events} hsaSignups={d.hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} onEditSignup={handleEditHsaSignup} onAddClass={handleAddHsaClass} onEditClass={handleEditHsaClass} onDeleteClass={handleDeleteEvent} />
         )}
         {!needsReport && tab === 'Overview' && (report || hasHistoricalData) && (
-          <OverviewTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={d.managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'} goals={d.goals} />
+          <OverviewTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={d.managers} isOwner={currentUser.role === 'owner'} goals={d.goals} />
         )}
         {!needsReport && tab === 'Employees' && (report || hasHistoricalData) && (
-          <EmployeesTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={d.managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} employeeRoster={d.employeeRoster} fallbackEmployeesByStore={d.fallbackEmployeesByStore} />
+          <EmployeesTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={d.managers} employeeRoster={d.employeeRoster} fallbackEmployeesByStore={d.fallbackEmployeesByStore} />
         )}
         {!needsReport && tab === 'Retail' && (report || hasHistoricalData) && (
           <StoreMetricTab
@@ -9053,7 +9018,7 @@ export default function App() {
             title="Retail" metricA={{ key: 'retail', label: 'Retail', fmt: fmt$ }} metricB={{ key: 'rpc', label: 'RPC', fmt: fmtNum }}
             goalType="bottleGoal" goals={d.goals} goalMetricKey="bottles" goalMetricLabel="Bottles" goalFmt={fmtInt}
             history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
-            managers={d.managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
+            managers={d.managers} isOwner={currentUser.role === 'owner'}
             showProducts
           />
         )}
@@ -9065,7 +9030,7 @@ export default function App() {
             attachMetric={{ rowKey: 'retailAttachPct', actualField: 'retailAttach', goalField: 'retailAttachGoal', label: 'Retail Attach %' }}
             refMetric={{ field: 'colorLastYear', label: 'Color (Last Year)' }}
             history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
-            canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
+            isOwner={currentUser.role === 'owner'}
             showPrevMonthColor
             managers={d.managers}
           />
@@ -9077,7 +9042,7 @@ export default function App() {
             goalType="signatureSGoal" goals={d.goals} goalMetricKey="signatureSCount" goalFmt={fmtInt}
             attachMetric={{ rowKey: 'signatureAttachPct', label: 'Retail Attach %' }}
             history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
-            managers={d.managers} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} isOwner={currentUser.role === 'owner'}
+            managers={d.managers} isOwner={currentUser.role === 'owner'}
           />
         )}
         {!needsReport && tab === 'Budgets' && (report || hasHistoricalData) && (
@@ -9098,14 +9063,13 @@ export default function App() {
           />
         )}
         {!needsReport && tab === 'DL' && (report || hasHistoricalData) && (
-          <DLTab report={d.report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={d.managers} milestoneGoals={d.milestoneGoals} canAward={currentUser.role === 'owner'} onAward={handleAwardPoints} />
+          <DLTab report={d.report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={d.managers} milestoneGoals={d.milestoneGoals} />
         )}
         {tab === 'Reviews' && (
           <ReviewsTab
             report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} reviews={d.reviews} query={queries.Reviews} onQuery={v => setQuery('Reviews', v)}
             reviewNotes={d.reviewNotes} onAddReviewNote={handleAddReviewNote}
             goldCombs={d.goldCombs} onToggleGoldComb={handleToggleGoldComb}
-            canAward={currentUser.role === 'owner'} onAward={handleAwardPoints}
             currentUser={currentUser}
           />
         )}

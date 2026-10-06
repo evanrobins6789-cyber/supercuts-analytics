@@ -1,7 +1,7 @@
 // Vercel serverless function — Node.js runtime.
-// Employee points/rewards ("Tillie's Nest"): the owner awards 5 points by
-// clicking a name anywhere one shows in the app; employees spend their own
-// balance on an owner-managed reward catalog. Points are keyed by the plain
+// Employee points/rewards ("Tillie's Nest"): employees spend their own
+// balance on an owner-managed reward catalog. (The old owner click-to-award
+// +5 was removed 2026-10-06; points will come from High Roller tiers.) Points are keyed by the plain
 // employee NAME STRING, not a roster foreign key — most places a name
 // renders (Employees/Stores/Retail/Color Sales/DL/60 Day tables) come from
 // parsed report data with no guaranteed link to the `employees` login-roster
@@ -12,8 +12,6 @@
 // existing pragmatic style (e.g. the O(n) PIN scan in serverAuth.js).
 
 import { createServiceClient, requireSession } from '../src/serverAuth.js';
-
-const AWARD_AMOUNT = 5;
 
 function serializeTransaction(t) {
   return {
@@ -91,19 +89,6 @@ export default async function handler(req, res) {
         .order('created_at', { ascending: false }).limit(10);
       if (error) throw new Error(error.message);
       res.status(200).json({ ok: true, balance, transactions: (txns || []).map(serializeTransaction) });
-      return;
-    }
-
-    if (action === 'award') {
-      if (!requireOwner()) return;
-      if (!employeeName || !String(employeeName).trim()) { res.status(400).json({ error: 'Missing employee name.' }); return; }
-      const cleanName = String(employeeName).trim();
-      const balance = await adjustBalance(supabase, cleanName, AWARD_AMOUNT);
-      const { error } = await supabase.from('points_transactions').insert({
-        employee_name: cleanName, delta: AWARD_AMOUNT, type: 'award', awarded_by: employee.name,
-      });
-      if (error) throw new Error(error.message);
-      res.status(200).json({ ok: true, balance });
       return;
     }
 

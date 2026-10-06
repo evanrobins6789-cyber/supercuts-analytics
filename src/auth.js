@@ -161,10 +161,6 @@ export function pointsBalance(token) {
   return postRead('pointsBalance', '/api/points', { action: 'balance', token });
 }
 
-export function pointsAward(token, employeeName) {
-  return postWrite('/api/points', { action: 'award', token, employeeName });
-}
-
 export function pointsAllBalances(token) {
   return postRead('pointsAllBalances', '/api/points', { action: 'allBalances', token });
 }
