@@ -6966,7 +6966,7 @@ function notifyFailure(labelName, fileName, detail) {
 // deterministic-id reasoning that keeps re-uploads from orphaning sign-ups.
 function HsaSetupTab({ classCount, uploading, onFile, onClear }) {
   const rosterUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/hsa-roster` : 'https://YOUR-SITE.vercel.app/api/hsa-roster';
-  const script = `// Google Apps Script — bound to a Google Sheet. Copies the full HSA
+  const script = `// Google Apps Script - bound to a Google Sheet. Copies the full HSA
 // sign-up list from the site into the Sheet, rewriting it from scratch each
 // time so it always matches the app. Makes one tab per class type (each
 // session is a colored block with its people underneath) plus an
@@ -6977,7 +6977,10 @@ const SHARED_SECRET = 'PASTE_YOUR_SECRET_HERE'; // must exactly match HSA_SHEET_
 
 const ALL_TAB = 'All Sign-ups';
 const NAVY = '#1F3A5F';
-// [session header color, sign-up row color] — each session gets the next pair.
+const DASH = '  ' + String.fromCharCode(8212) + '  '; // em dash
+const DOT = '   ' + String.fromCharCode(183) + '   '; // middle dot
+const EN_DASH = ' ' + String.fromCharCode(8211) + ' ';
+// [session header color, sign-up row color] - each session gets the next pair.
 const SESSION_COLORS = [
   ['#c9daf8', '#e8f0fe'], // blue
   ['#d9ead3', '#eef7ea'], // green
@@ -7045,30 +7048,28 @@ function writeTypeTab(ss, name, type, sessions, synced, tabColor) {
   const cols = ['Name', 'Phone', 'Store', 'DL', 'Entered By', 'Signed Up'];
   const W = cols.length;
   const total = sessions.reduce(function (n, s) { return n + s.people.length; }, 0);
-  const values = [], bgs = [], weights = [], merges = [];
+  const values = [], bgs = [], weights = [];
   function push(row, bg, weight) {
     while (row.length < W) row.push('');
     values.push(row);
     bgs.push(row.map(function () { return bg; }));
     weights.push(row.map(function () { return weight; }));
   }
-  push([type + '  —  ' + total + ' signed up across ' + sessions.length + ' class' + (sessions.length === 1 ? '' : 'es')], '#ffffff', 'bold');
+  push([type + DASH + total + ' signed up across ' + sessions.length + ' class' + (sessions.length === 1 ? '' : 'es')], '#ffffff', 'bold');
   push([synced], '#ffffff', 'normal');
   push(cols.slice(), NAVY, 'bold');
   sessions.forEach(function (s) {
     push([], '#ffffff', 'normal'); // spacer
-    const label = [fmtRange(s), s.location, s.time, s.people.length + ' signed up'].filter(String).join('   ·   ');
-    merges.push(values.length + 1);
+    const label = [fmtRange(s), s.location, s.time, s.people.length + ' signed up'].filter(String).join(DOT);
     push([label], s.color[0], 'bold');
     s.people.forEach(function (p) {
-      push([p[5], p[6], p[7], p[8], p[9], fmtShort(p[10])], s.color[1], 'normal');
+      push([fmtName(p[5]), fmtPhone(p[6]), p[7], p[8], p[9], fmtShort(p[10])], s.color[1], 'normal');
     });
   });
 
   const sheet = resetSheet(ss, name, values.length, W);
   const range = sheet.getRange(1, 1, values.length, W);
-  range.setNumberFormat('@').setValues(values).setBackgrounds(bgs).setFontWeights(weights).setVerticalAlignment('middle');
-  merges.forEach(function (r) { sheet.getRange(r, 1, 1, W).merge(); });
+  range.setNumberFormat('@').setWrap(false).setValues(values).setBackgrounds(bgs).setFontWeights(weights).setVerticalAlignment('middle');
   styleTop(sheet, W);
   [180, 120, 150, 150, 150, 90].forEach(function (w, i) { sheet.setColumnWidth(i + 1, w); });
   sheet.setTabColor(tabColor);
@@ -7078,11 +7079,11 @@ function writeTypeTab(ss, name, type, sessions, synced, tabColor) {
 function writeAllTab(ss, sessions, total, synced) {
   const cols = ['Class', 'Dates', 'Time', 'Location', 'Name', 'Phone', 'Store', 'DL', 'Entered By', 'Signed Up'];
   const W = cols.length;
-  const values = [['All sign-ups  —  ' + total + ' people across ' + sessions.length + ' classes'], [synced], cols.slice()];
+  const values = [['All sign-ups' + DASH + total + ' people across ' + sessions.length + ' classes'], [synced], cols.slice()];
   const bgs = [null, null, cols.map(function () { return NAVY; })];
   sessions.forEach(function (s) {
     s.people.forEach(function (p) {
-      values.push([s.type, fmtRange(s), s.time, s.location, p[5], p[6], p[7], p[8], p[9], fmtShort(p[10])]);
+      values.push([s.type, fmtRange(s), s.time, s.location, fmtName(p[5]), fmtPhone(p[6]), p[7], p[8], p[9], fmtShort(p[10])]);
       bgs.push(cols.map(function () { return s.color[1]; }));
     });
   });
@@ -7147,10 +7148,26 @@ function fmtDay(iso, withYear) {
 }
 function fmtRange(s) {
   if (!s.start) return 'No date';
-  return s.end && s.end !== s.start ? fmtDay(s.start, false) + ' – ' + fmtDay(s.end, true) : fmtDay(s.start, true);
+  return s.end && s.end !== s.start ? fmtDay(s.start, false) + EN_DASH + fmtDay(s.end, true) : fmtDay(s.start, true);
 }
 function fmtShort(iso) {
   return iso ? Utilities.formatDate(toDate(iso), Session.getScriptTimeZone(), 'MMM d') : '';
+}
+
+// (610) 555-1234 for any 10-digit US number (a leading +1/1 is dropped);
+// anything else is left exactly as typed.
+function fmtPhone(phone) {
+  let d = String(phone || '').replace(/[^0-9]/g, '');
+  if (d.length === 11 && d.charAt(0) === '1') d = d.slice(1);
+  if (d.length !== 10) return phone;
+  return '(' + d.slice(0, 3) + ') ' + d.slice(3, 6) + '-' + d.slice(6);
+}
+
+// Capitalizes names typed in all lowercase or ALL CAPS; mixed case is left alone.
+function fmtName(name) {
+  const n = String(name || '');
+  if (n !== n.toLowerCase() && n !== n.toUpperCase()) return n;
+  return n.toLowerCase().replace(/(^|[ '-])([a-z])/g, function (m, pre, c) { return pre + c.toUpperCase(); });
 }`;
 
   return (
