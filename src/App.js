@@ -6967,16 +6967,27 @@ function notifyFailure(labelName, fileName, detail) {
 function HsaSetupTab({ classCount, uploading, onFile, onClear }) {
   const rosterUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/hsa-roster` : 'https://YOUR-SITE.vercel.app/api/hsa-roster';
   const script = `// Google Apps Script — bound to a Google Sheet. Copies the full HSA
-// sign-up list from the site into a "Sign-ups" tab, rewriting it from
-// scratch each time, so the Sheet always matches the app (edits, removals,
-// and everyone who signed up before this was set up included). Create a new
-// Sheet, then Extensions > Apps Script, paste this in (replacing
-// everything), fill in SHARED_SECRET, then follow the numbered steps in
-// Setup > HSA.
+// sign-up list from the site into the Sheet, rewriting it from scratch each
+// time so it always matches the app. Makes one tab per class type (each
+// session is a colored block with its people underneath) plus an
+// "All Sign-ups" tab. Tabs you add yourself are never touched.
 
 const ENDPOINT_URL = '${rosterUrl}';
 const SHARED_SECRET = 'PASTE_YOUR_SECRET_HERE'; // must exactly match HSA_SHEET_SECRET in Vercel
-const TAB_NAME = 'Sign-ups';
+
+const ALL_TAB = 'All Sign-ups';
+const NAVY = '#1F3A5F';
+// [session header color, sign-up row color] — each session gets the next pair.
+const SESSION_COLORS = [
+  ['#c9daf8', '#e8f0fe'], // blue
+  ['#d9ead3', '#eef7ea'], // green
+  ['#fce5cd', '#fef4ea'], // orange
+  ['#d9d2e9', '#f1edf8'], // purple
+  ['#fff2cc', '#fffaeb'], // yellow
+  ['#d0e0e3', '#ecf4f5'], // teal
+  ['#ead1dc', '#f8edf2'], // pink
+];
+const TAB_COLORS = ['#3c78d8', '#6aa84f', '#e69138', '#8e7cc3', '#f1c232', '#45818e', '#c27ba0'];
 
 // Adds an "HSA > Sync sign-ups now" menu to the Sheet.
 function onOpen() {
@@ -6994,18 +7005,152 @@ function syncRoster() {
   if (status < 200 || status >= 300) {
     throw new Error('HSA sync failed (HTTP ' + status + '): ' + response.getContentText());
   }
-  const data = JSON.parse(response.getContentText());
+  const rows = JSON.parse(response.getContentText()).rows;
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(TAB_NAME) || ss.insertSheet(TAB_NAME);
-  const values = [data.header].concat(data.rows);
-  const width = data.header.length;
-  sheet.clearContents();
-  const range = sheet.getRange(1, 1, values.length, width);
-  range.setNumberFormat('@'); // plain text, so phone numbers and dates aren't reformatted
-  range.setValues(values);
-  sheet.getRange(1, 1, 1, width).setFontWeight('bold');
-  sheet.setFrozenRows(1);
-  sheet.getRange(1, width + 2).setValue('Last synced: ' + new Date().toLocaleString());
+  const synced = 'Last synced ' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'EEE, MMM d, h:mm a');
+
+  // Group sign-ups into sessions (same class, dates, time, and location),
+  // in date order. Each session keeps one color on every tab.
+  const sessions = [];
+  const byKey = {};
+  rows.forEach(function (r) {
+    const key = r.slice(0, 5).join('|');
+    if (!byKey[key]) {
+      byKey[key] = { type: r[0], start: r[1], end: r[2], time: r[3], location: r[4], people: [] };
+      sessions.push(byKey[key]);
+    }
+    byKey[key].people.push(r);
+  });
+  sessions.forEach(function (s, i) { s.color = SESSION_COLORS[i % SESSION_COLORS.length]; });
+
+  const types = [];
+  sessions.forEach(function (s) { if (types.indexOf(s.type) < 0) types.push(s.type); });
+  types.sort(function (a, b) {
+    if (a === '(class removed)') return 1;
+    if (b === '(class removed)') return -1;
+    return a.localeCompare(b);
+  });
+
+  writeAllTab(ss, sessions, rows.length, synced);
+  const tabNames = types.map(function (t, i) {
+    const name = tabName(t);
+    writeTypeTab(ss, name, t, sessions.filter(function (s) { return s.type === t; }), synced, TAB_COLORS[i % TAB_COLORS.length]);
+    return name;
+  });
+  removeStaleTabs(ss, tabNames);
+}
+
+// One tab per class type: a colored header bar per session, its people below.
+function writeTypeTab(ss, name, type, sessions, synced, tabColor) {
+  const cols = ['Name', 'Phone', 'Store', 'DL', 'Entered By', 'Signed Up'];
+  const W = cols.length;
+  const total = sessions.reduce(function (n, s) { return n + s.people.length; }, 0);
+  const values = [], bgs = [], weights = [], merges = [];
+  function push(row, bg, weight) {
+    while (row.length < W) row.push('');
+    values.push(row);
+    bgs.push(row.map(function () { return bg; }));
+    weights.push(row.map(function () { return weight; }));
+  }
+  push([type + '  —  ' + total + ' signed up across ' + sessions.length + ' class' + (sessions.length === 1 ? '' : 'es')], '#ffffff', 'bold');
+  push([synced], '#ffffff', 'normal');
+  push(cols.slice(), NAVY, 'bold');
+  sessions.forEach(function (s) {
+    push([], '#ffffff', 'normal'); // spacer
+    const label = [fmtRange(s), s.location, s.time, s.people.length + ' signed up'].filter(String).join('   ·   ');
+    merges.push(values.length + 1);
+    push([label], s.color[0], 'bold');
+    s.people.forEach(function (p) {
+      push([p[5], p[6], p[7], p[8], p[9], fmtShort(p[10])], s.color[1], 'normal');
+    });
+  });
+
+  const sheet = resetSheet(ss, name, values.length, W);
+  const range = sheet.getRange(1, 1, values.length, W);
+  range.setNumberFormat('@').setValues(values).setBackgrounds(bgs).setFontWeights(weights).setVerticalAlignment('middle');
+  merges.forEach(function (r) { sheet.getRange(r, 1, 1, W).merge(); });
+  styleTop(sheet, W);
+  [180, 120, 150, 150, 150, 90].forEach(function (w, i) { sheet.setColumnWidth(i + 1, w); });
+  sheet.setTabColor(tabColor);
+}
+
+// Everyone on one tab, rows shaded by session.
+function writeAllTab(ss, sessions, total, synced) {
+  const cols = ['Class', 'Dates', 'Time', 'Location', 'Name', 'Phone', 'Store', 'DL', 'Entered By', 'Signed Up'];
+  const W = cols.length;
+  const values = [['All sign-ups  —  ' + total + ' people across ' + sessions.length + ' classes'], [synced], cols.slice()];
+  const bgs = [null, null, cols.map(function () { return NAVY; })];
+  sessions.forEach(function (s) {
+    s.people.forEach(function (p) {
+      values.push([s.type, fmtRange(s), s.time, s.location, p[5], p[6], p[7], p[8], p[9], fmtShort(p[10])]);
+      bgs.push(cols.map(function () { return s.color[1]; }));
+    });
+  });
+  values.forEach(function (row) { while (row.length < W) row.push(''); });
+  bgs[0] = bgs[1] = cols.map(function () { return '#ffffff'; });
+
+  const sheet = resetSheet(ss, ALL_TAB, values.length, W, 0);
+  sheet.getRange(1, 1, values.length, W).setNumberFormat('@').setValues(values).setBackgrounds(bgs).setVerticalAlignment('middle');
+  sheet.getRange(1, 1, 1, W).setFontWeight('bold');
+  sheet.getRange(3, 1, 1, W).setFontWeight('bold');
+  styleTop(sheet, W);
+  [110, 190, 120, 110, 170, 115, 130, 140, 140, 85].forEach(function (w, i) { sheet.setColumnWidth(i + 1, w); });
+  sheet.setTabColor(NAVY);
+}
+
+function styleTop(sheet, W) {
+  sheet.getRange(1, 1).setFontSize(14);
+  sheet.getRange(2, 1).setFontColor('#777777').setFontStyle('italic');
+  sheet.getRange(3, 1, 1, W).setFontColor('#ffffff');
+  sheet.setFrozenRows(3);
+}
+
+// Gets (or creates) a tab and wipes its contents, formatting, and merges.
+function resetSheet(ss, name, rowsNeeded, colsNeeded, index) {
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    sheet = index === undefined ? ss.insertSheet(name) : ss.insertSheet(name, index);
+  } else {
+    sheet.setFrozenRows(0);
+    sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).breakApart();
+    sheet.clear();
+  }
+  if (sheet.getMaxRows() < rowsNeeded) sheet.insertRowsAfter(sheet.getMaxRows(), rowsNeeded - sheet.getMaxRows());
+  if (sheet.getMaxColumns() < colsNeeded) sheet.insertColumnsAfter(sheet.getMaxColumns(), colsNeeded - sheet.getMaxColumns());
+  return sheet;
+}
+
+// Deletes class-type tabs this script made earlier that no longer have any
+// sign-ups (plus the old single "Sign-ups" tab from the first version).
+function removeStaleTabs(ss, currentNames) {
+  const props = PropertiesService.getDocumentProperties();
+  const previous = JSON.parse(props.getProperty('managedTabs') || '[]').concat(['Sign-ups']);
+  previous.forEach(function (name) {
+    if (currentNames.indexOf(name) >= 0 || name === ALL_TAB) return;
+    const sheet = ss.getSheetByName(name);
+    if (sheet && ss.getSheets().length > 1) ss.deleteSheet(sheet);
+  });
+  props.setProperty('managedTabs', JSON.stringify(currentNames));
+}
+
+function tabName(type) {
+  const name = String(type || 'Other').replace(/[^A-Za-z0-9 &()+'.,-]/g, ' ').trim().slice(0, 90);
+  return name === ALL_TAB ? name + ' (class)' : (name || 'Other');
+}
+
+function toDate(iso) {
+  const p = String(iso).split('-').map(Number);
+  return new Date(p[0], p[1] - 1, p[2]);
+}
+function fmtDay(iso, withYear) {
+  return Utilities.formatDate(toDate(iso), Session.getScriptTimeZone(), withYear ? 'EEE, MMM d, yyyy' : 'EEE, MMM d');
+}
+function fmtRange(s) {
+  if (!s.start) return 'No date';
+  return s.end && s.end !== s.start ? fmtDay(s.start, false) + ' – ' + fmtDay(s.end, true) : fmtDay(s.start, true);
+}
+function fmtShort(iso) {
+  return iso ? Utilities.formatDate(toDate(iso), Session.getScriptTimeZone(), 'MMM d') : '';
 }`;
 
   return (
@@ -7024,7 +7169,7 @@ function syncRoster() {
 
       <div className="setup-sql-card">
         <p className="chart-title">Optional: keep a Google Sheet copy of every sign-up</p>
-        <p className="step-body">Every sign-up on the HSA tab is already visible in the app itself — this is only if you also want a copy in a spreadsheet. A small script inside your own Google Sheet pulls the full list from this site every 15 minutes (and whenever you click HSA → Sync sign-ups now), one row per sign-up, sorted by class. It rewrites the "Sign-ups" tab each time, so edits and removals made in the app show up too — but anything typed into that tab by hand gets overwritten; keep your own notes on a different tab. The list includes phone numbers, so share the Sheet carefully.</p>
+        <p className="step-body">Every sign-up on the HSA tab is already visible in the app itself — this is only if you also want a copy in a spreadsheet. A small script inside your own Google Sheet pulls the full list from this site every 15 minutes (and whenever you click HSA → Sync sign-ups now). It makes one tab per class type, with each session as its own colored block, plus an "All Sign-ups" tab with everyone. Those tabs are rewritten each time, so edits and removals made in the app show up too — but anything typed into them by hand gets overwritten; keep your own notes on a tab you make yourself (the script never touches those). The list includes phone numbers, so share the Sheet carefully.</p>
       </div>
       <div className="setup-step">
         <div className="step-num">1</div>
@@ -7037,7 +7182,7 @@ function syncRoster() {
       </div>
       <div className="setup-step">
         <div className="step-num">3</div>
-        <div><p className="step-title">Run it once</p><p className="step-body">Back in the script editor, pick <code>syncRoster</code> from the function dropdown and click Run. Click through the "unverified app" warning the same way as the Gmail script (Advanced → Go to (project name) (unsafe) → Allow). The Sheet should now have a "Sign-ups" tab with everyone on it.</p></div>
+        <div><p className="step-title">Run it once</p><p className="step-body">Back in the script editor, pick <code>syncRoster</code> from the function dropdown and click Run. Click through the "unverified app" warning the same way as the Gmail script (Advanced → Go to (project name) (unsafe) → Allow). The Sheet should now have an "All Sign-ups" tab plus one tab per class type.</p></div>
       </div>
       <div className="setup-step">
         <div className="step-num">4</div>
