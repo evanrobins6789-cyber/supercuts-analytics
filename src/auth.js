@@ -196,11 +196,3 @@ export function pointsDeleteReward(token, id) {
 export function pointsMarkFulfilled(token, id, fulfilled) {
   return postWrite('/api/points', { action: 'markFulfilled', token, id, fulfilled });
 }
-
-// HSA class sign-ups — the sign-up itself is saved straight to Supabase by
-// the caller (same loadData/saveData path as homepage news/events); this is
-// only the best-effort Google Sheets export, so a failure here is read as
-// `sheetSynced: false`, not thrown.
-export function hsaSheetSync(token, payload) {
-  return postWrite('/api/hsa-sheet', { token, ...payload });
-}

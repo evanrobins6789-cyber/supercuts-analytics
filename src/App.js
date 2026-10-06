@@ -12,7 +12,7 @@ import {
   getSession, setSession, clearSession, checkEligible, signUp, logIn, logOut,
   loadScoped, loadScopedByPrefix, saveScoped, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
   pointsBalance, pointsAward, pointsAllBalances, pointsTransactions, pointsDeleteTransaction,
-  pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled, hsaSheetSync,
+  pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled,
   leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates,
 } from './auth';
 import { LEADER_ROSTER_SECTIONS as REAL_LEADER_ROSTER_SECTIONS, getLeaderForStoreCode as realGetLeaderForStoreCode } from './leaderRoster';
@@ -6965,30 +6965,47 @@ function notifyFailure(labelName, fileName, detail) {
 // see parseHsaScheduleFromGrid in parser.js for the column matching and the
 // deterministic-id reasoning that keeps re-uploads from orphaning sign-ups.
 function HsaSetupTab({ classCount, uploading, onFile, onClear }) {
-  const script = `// Google Apps Script — bound to a Google Sheet, appends one row per HSA
-// sign-up. Create a new Sheet, then Extensions > Apps Script, paste this
-// in (replacing everything), fill in SHARED_SECRET, then deploy as
-// described in the numbered steps in Setup > HSA.
+  const rosterUrl = typeof window !== 'undefined' ? `${window.location.origin}/api/hsa-roster` : 'https://YOUR-SITE.vercel.app/api/hsa-roster';
+  const script = `// Google Apps Script — bound to a Google Sheet. Copies the full HSA
+// sign-up list from the site into a "Sign-ups" tab, rewriting it from
+// scratch each time, so the Sheet always matches the app (edits, removals,
+// and everyone who signed up before this was set up included). Create a new
+// Sheet, then Extensions > Apps Script, paste this in (replacing
+// everything), fill in SHARED_SECRET, then follow the numbered steps in
+// Setup > HSA.
 
+const ENDPOINT_URL = '${rosterUrl}';
 const SHARED_SECRET = 'PASTE_YOUR_SECRET_HERE'; // must exactly match HSA_SHEET_SECRET in Vercel
+const TAB_NAME = 'Sign-ups';
 
-function doPost(e) {
-  try {
-    const body = JSON.parse(e.postData.contents);
-    if (body.secret !== SHARED_SECRET) {
-      return ContentService.createTextOutput(JSON.stringify({ ok: false, error: 'Invalid secret' }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-    const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-    sheet.appendRow([
-      new Date(), body.date || '', body.event || '', body.location || '', body.time || '',
-      body.name || '', body.phone || '', body.store || '', body.dl || '', body.signedUpBy || '',
-    ]);
-    return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: err.message }))
-      .setMimeType(ContentService.MimeType.JSON);
+// Adds an "HSA > Sync sign-ups now" menu to the Sheet.
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('HSA').addItem('Sync sign-ups now', 'syncRoster').addToUi();
+}
+
+function syncRoster() {
+  const response = UrlFetchApp.fetch(ENDPOINT_URL, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ secret: SHARED_SECRET }),
+    muteHttpExceptions: true,
+  });
+  const status = response.getResponseCode();
+  if (status < 200 || status >= 300) {
+    throw new Error('HSA sync failed (HTTP ' + status + '): ' + response.getContentText());
   }
+  const data = JSON.parse(response.getContentText());
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(TAB_NAME) || ss.insertSheet(TAB_NAME);
+  const values = [data.header].concat(data.rows);
+  const width = data.header.length;
+  sheet.clearContents();
+  const range = sheet.getRange(1, 1, values.length, width);
+  range.setNumberFormat('@'); // plain text, so phone numbers and dates aren't reformatted
+  range.setValues(values);
+  sheet.getRange(1, 1, 1, width).setFontWeight('bold');
+  sheet.setFrozenRows(1);
+  sheet.getRange(1, width + 2).setValue('Last synced: ' + new Date().toLocaleString());
 }`;
 
   return (
@@ -7006,27 +7023,27 @@ function doPost(e) {
       {classCount > 0 && <button className="btn-ghost btn-danger" onClick={onClear}>Clear class schedule</button>}
 
       <div className="setup-sql-card">
-        <p className="chart-title">Optional: auto-export sign-ups to a Google Sheet</p>
-        <p className="step-body">Every sign-up on the HSA tab is already visible in the app itself — this is only if you also want a live copy in a spreadsheet. Same free, no-paid-service pattern as the Gmail report automation in Setup &gt; Email Reports: a small script you deploy yourself inside your own Google account.</p>
+        <p className="chart-title">Optional: keep a Google Sheet copy of every sign-up</p>
+        <p className="step-body">Every sign-up on the HSA tab is already visible in the app itself — this is only if you also want a copy in a spreadsheet. A small script inside your own Google Sheet pulls the full list from this site every 15 minutes (and whenever you click HSA → Sync sign-ups now), one row per sign-up, sorted by class. It rewrites the "Sign-ups" tab each time, so edits and removals made in the app show up too — but anything typed into that tab by hand gets overwritten; keep your own notes on a different tab. The list includes phone numbers, so share the Sheet carefully.</p>
       </div>
       <div className="setup-step">
         <div className="step-num">1</div>
-        <div><p className="step-title">Create the Sheet</p><p className="step-body">Make a new Google Sheet. Add a header row: <code>Timestamp | Date | Event | Location | Time | Name | Phone | Store | DL | Signed Up By</code>.</p></div>
-      </div>
-      <div className="setup-step">
-        <div className="step-num">2</div>
-        <div><p className="step-title">Add the script</p><p className="step-body">In that Sheet: Extensions → Apps Script → paste in the code below (replacing everything) → paste a secret of your choosing into <code>SHARED_SECRET</code>.</p></div>
+        <div><p className="step-title">Create the Sheet + add the script</p><p className="step-body">Make a new Google Sheet → Extensions → Apps Script → paste in the code below (replacing everything) → make up a long password and paste it into <code>SHARED_SECRET</code> → Save.</p></div>
       </div>
       <pre className="setup-sql">{script}</pre>
       <div className="setup-step">
+        <div className="step-num">2</div>
+        <div><p className="step-title">Add the matching secret in Vercel</p><p className="step-body">Vercel project → Settings → Environment Variables → add <code>HSA_SHEET_SECRET</code> set to the exact same password → redeploy.</p></div>
+      </div>
+      <div className="setup-step">
         <div className="step-num">3</div>
-        <div><p className="step-title">Deploy it as a Web App</p><p className="step-body">Deploy → New deployment → gear icon → type: <code>Web app</code> → Execute as: <code>Me</code> → Who has access: <code>Anyone</code> → Deploy. Click through the "unverified app" authorization the same way as the Gmail script. Copy the Web app URL it gives you.</p></div>
+        <div><p className="step-title">Run it once</p><p className="step-body">Back in the script editor, pick <code>syncRoster</code> from the function dropdown and click Run. Click through the "unverified app" warning the same way as the Gmail script (Advanced → Go to (project name) (unsafe) → Allow). The Sheet should now have a "Sign-ups" tab with everyone on it.</p></div>
       </div>
       <div className="setup-step">
         <div className="step-num">4</div>
-        <div><p className="step-title">Add both values in Vercel</p><p className="step-body">Vercel project → Settings → Environment Variables → add <code>HSA_SHEET_WEBHOOK_URL</code> (the Web app URL from step 3) and <code>HSA_SHEET_SECRET</code> (the exact same secret you pasted into the script) → redeploy.</p></div>
+        <div><p className="step-title">Set it to run automatically</p><p className="step-body">Click the clock icon ("Triggers") → "+ Add Trigger" → function: <code>syncRoster</code> → Time-driven → Minutes timer → Every 15 minutes → Save.</p></div>
       </div>
-      <p className="step-body">This export is best-effort — if it's not set up yet, or the two secrets stop matching, or the sheet URL changes, sign-ups still work and show up in the app; only the spreadsheet copy is skipped.</p>
+      <p className="step-body">If a sync fails (wrong secret, site down), the Sheet just keeps its last copy and Google emails you about the failed run. Sign-ups in the app are never affected.</p>
     </div>
   );
 }
@@ -8376,9 +8393,9 @@ export default function App() {
   }, []);
 
   // Sign-ups are saved straight to Supabase the same way homepage news/events
-  // already are (non-sensitive, direct anon-key path) — the Google Sheets
-  // export (hsaSheetSync) is a secondary, best-effort mirror on top, never
-  // something a failure here should roll back or alarm the user about.
+  // already are (non-sensitive, direct anon-key path). The optional Google
+  // Sheet mirror pulls the whole roster on its own timer (api/hsa-roster.js),
+  // so nothing here needs to notify it.
   const handleHsaSignUp = useCallback((classInfo, name, phone, store, dl) => {
     // `enteredBy` is whoever is actually logged in and filling out the form
     // (a DL signing up a stylist, say) — distinct from `name`, the person
@@ -8391,10 +8408,6 @@ export default function App() {
       });
       return next;
     });
-    hsaSheetSync(currentUser?.token, {
-      date: classInfo.date, event: classInfo.eventType, location: classInfo.location, time: classInfo.time,
-      name: entry.name, phone: entry.phone, store: entry.store, dl: entry.dl,
-    }).catch(() => {}); // best-effort — a broken Sheets export shouldn't disrupt the in-app sign-up above
   }, [currentUser]);
 
   const handleRemoveHsaSignup = useCallback(id => {
@@ -8410,8 +8423,8 @@ export default function App() {
   // Lets whoever originally submitted a sign-up (or the owner) fix a typo'd
   // name/phone/store later, without needing the owner to remove and re-add
   // it. `id`/`classId`/`enteredBy`/`signedUpAt` are left untouched — only
-  // the editable fields change. Not re-synced to the Google Sheet mirror
-  // (hsaSheetSync is append-only); the original row there just goes stale.
+  // the editable fields change. The Google Sheet mirror picks up the edit on
+  // its next sync.
   const handleEditHsaSignup = useCallback((id, name, phone, store, dl) => {
     setHsaSignups(prev => {
       const next = prev.map(s => s.id === id ? { ...s, name: name.trim(), phone: phone.trim(), store: store || '', dl: dl || '' } : s);
