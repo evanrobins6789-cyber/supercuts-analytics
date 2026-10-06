@@ -490,6 +490,12 @@
 .homepage-hero-icon { margin-right: 10px; }
 .homepage-hero-subtitle { font-weight: 400; opacity: 0.85; }
 .homepage-hero-sub { font-size: 13px; color: #B9C6D6; margin-top: 6px; max-width: 640px; }
+.homepage-hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; position: relative; z-index: 1; }
+.homepage-hero-action {
+  background: #fff; color: var(--navy); border: none; border-radius: 999px; padding: 9px 18px;
+  font-size: 13px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+}
+.homepage-hero-action:hover { background: #E8EEF6; }
 .homepage-hero-dots { display: flex; gap: 6px; margin-top: 16px; }
 .homepage-hero-dot {
   width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.35);

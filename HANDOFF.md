@@ -34,6 +34,11 @@
 - Confirm the Signature Service tab now shows 1016/$12,142.36 for Aug 1–9 (already corrected directly in Supabase, not just in code) — and if you have a cleaner source for the 1017/$12,154.36 figure you originally gave me, worth checking where that extra unit/$12 comes from.
 - None of the 2026-08-13 changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
 
+Last updated: 2026-10-06 (night). **Homepage: owner-only "📣 Post Update" and "📅 Post Event" buttons in the hero.** Pushed to `main`.
+- **The ask**: at the top of the Homepage, only for the leadership owners, a button to post news/updates and one to post an upcoming event to the calendar. "Leadership owners" was read as `role === 'owner'` (DLs/managers don't see them).
+- **How**: `HomepageQuickPostModal` (`src/App.js`) opens the existing `NewsComposer`/`EventComposer` in the shared `news-modal-*` overlay and calls the same `handleAddNews`/`handleAddEvent` as Setup → Homepage, so data shape, PDF chunking and group handling are identical. The modal closes on submit. Editing and deleting are still only in Setup → Homepage. Buttons are hidden while Presenter Mode is on (writes are blocked then anyway).
+- **Verified**: `CI=true npm run build` clean. **Not verified**: no browser session. Check as the owner that both buttons show in the hero, a post and an event save and appear on the Homepage, and that a DL login doesn't see the buttons.
+
 Last updated: 2026-10-06 (evening). **Removed the owner click-to-award +5 points.** Pushed to `main`.
 - **The ask**: remove the point-awarding ability for now (may come back later), keep Tillie's Nest, and feed it from the November **High Roller** competition instead (stylists hit tiers on cuts, SS, retail and gift card sales and earn points to spend in Tillie's Nest).
 - **Removed**: every `canAward`/`onAward` button wrap (Homepage spotlight, `EmployeeTable`, 60 Day table, `ReviewCard`, and the props through Overview/Stores/Retail/Color/SS/DL/Reviews), `handleAwardPoints`, `pointsAward` (`src/auth.js`), the `award` action in `api/points.js`, and the `.ledger-name-award`/`.award-plus` CSS.

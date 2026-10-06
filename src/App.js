@@ -1533,7 +1533,31 @@ function NewsCarousel({ news, onOpenPost }) {
   );
 }
 
-function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore, news, events, reviews, onOpenNews }) {
+// Owner shortcut on the Homepage itself — same composers (and the same
+// add handlers) as Setup → Homepage, just in a modal so a post or event can
+// go up without leaving the page. Editing/deleting still lives in Setup.
+function HomepageQuickPostModal({ kind, onClose, onAddNews, onAddEvent, existingGroups, onImageError }) {
+  useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="news-modal-overlay" onClick={onClose}>
+      <div className="news-modal-panel" onClick={e => e.stopPropagation()}>
+        <button type="button" className="news-modal-close" onClick={onClose} aria-label="Close">✕</button>
+        <p className="section-label">{kind === 'news' ? '📣 Post News & Updates' : '📅 Post an Upcoming Event'}</p>
+        {kind === 'news' ? (
+          <NewsComposer initial={null} onSubmit={fields => { onAddNews(fields); onClose(); }} onImageError={onImageError} existingGroups={existingGroups} />
+        ) : (
+          <EventComposer initial={null} onSubmit={fields => { onAddEvent(fields); onClose(); }} onImageError={onImageError} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore, news, events, reviews, onOpenNews, canPost, onAddNews, onAddEvent, newsGroups, onImageError }) {
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
   const reportUsable = report && !isReportStale(report);
@@ -1573,13 +1597,28 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
   const top10Metrics = top10Mode === 'employee' ? EMPLOYEE_METRICS : STORE_METRICS;
   const [lightboxImage, setLightboxImage] = useState(null);
   const { activeKey: bitmojiKey, img: bitmojiImg } = useBitmojiCycler(HOMEPAGE_BITMOJI_SLOTS);
+  const [quickPost, setQuickPost] = useState(null); // null | 'news' | 'event'
+  const closeQuickPost = useCallback(() => setQuickPost(null), []);
+  const existingGroups = useMemo(() => (newsGroups || []).map(g => g.name), [newsGroups]);
 
   return (
     <div className="tab-content">
+      {quickPost && (
+        <HomepageQuickPostModal
+          kind={quickPost} onClose={closeQuickPost} onAddNews={onAddNews} onAddEvent={onAddEvent}
+          existingGroups={existingGroups} onImageError={onImageError}
+        />
+      )}
       <div className="homepage-hero">
         <p className="homepage-hero-eyebrow">{fmtDateLong(todayISO)}</p>
         <p className="homepage-hero-title">Welcome back 👋</p>
         <p className="homepage-hero-sub">Here's what's new, what's coming up, and who's leading the pack this period.</p>
+        {canPost && (
+          <div className="homepage-hero-actions">
+            <button type="button" className="homepage-hero-action" onClick={() => setQuickPost('news')}>📣 Post Update</button>
+            <button type="button" className="homepage-hero-action" onClick={() => setQuickPost('event')}>📅 Post Event</button>
+          </div>
+        )}
         <BitmojiPeek img={bitmojiImg} active={bitmojiKey === 'hero'} corner="bottom-right" />
       </div>
 
@@ -8998,7 +9037,10 @@ export default function App() {
       <main className="app-main" key={presenting ? 'main-presenting' : 'main-live'}>
         {needsReport && <div className="empty-state"><p className="empty-title">No data yet</p><p>Go to the Setup tab and either upload this week's Stylist Report, or run a Sales-Accrual/Attendance historical import.</p></div>}
         {tab === 'Homepage' && (
-          <HomepageTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} fallbackEmployeesByStore={d.fallbackEmployeesByStore} news={news} events={events} reviews={d.reviews} onOpenNews={handleOpenNews} />
+          <HomepageTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} fallbackEmployeesByStore={d.fallbackEmployeesByStore} news={news} events={events} reviews={d.reviews} onOpenNews={handleOpenNews}
+            canPost={currentUser.role === 'owner' && !presenting} onAddNews={handleAddNews} onAddEvent={handleAddEvent}
+            newsGroups={newsGroups} onImageError={msg => showToast(msg, 'error')}
+          />
         )}
         {tab === 'News' && (
           <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={currentUser} newsReads={d.newsReads} onSignOff={handleSignOffNews} />
