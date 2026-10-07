@@ -350,6 +350,10 @@ const STORE_METRICS = [
 const fmtCPD = (cur, ly) => `${cur == null ? '—' : Math.round(cur)}|${ly == null ? '—' : Math.round(ly)}`;
 const CPD_METRIC = { key: 'cpd', label: 'CPD', fmt: (v, row) => fmtCPD(v, row?.cpdLY) };
 const OVERVIEW_METRICS = [...STORE_METRICS, CPD_METRIC];
+// Gift card sales (not redemptions) — owner-only, so OverviewTab only adds
+// this when it's handed gift card history (App passes it on the owner's
+// login only). "count|$", same as SS.
+const GIFT_CARD_METRIC = { key: 'giftCards', label: 'Gift Cards', fmt: (v, row) => fmtSS(row?.giftCardCount, v) };
 
 // Employee-level metrics shown on Employees and within each Stores card.
 const EMPLOYEE_METRICS = [
@@ -2832,7 +2836,7 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews, currentUser, n
 
 // ─── Overview tab ───────────────────────────────────────────────────────────
 // ─── Overview tab (top-10/bottom-10 leaderboards, plus the full store list) ─
-function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery, managers, isOwner, goals }) {
+function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery, managers, isOwner, goals, giftCardHistory }) {
   const [sortBy, setSortBy] = useState('tsth');
   const getSalesGoal = code => goals?.[code]?.salesGoal ?? null;
   const [expanded, setExpanded] = useState({});
@@ -2843,7 +2847,9 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
   const usingDefaultRange = isReportStale(report) && !(dateRange.start && dateRange.end);
   const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const isHistorical = !!(effectiveRange.start && effectiveRange.end);
-  const metric = OVERVIEW_METRICS.find(m => m.key === selected) || OVERVIEW_METRICS[0];
+  const showGiftCards = !!(isOwner && giftCardHistory);
+  const metrics = showGiftCards ? [...OVERVIEW_METRICS, GIFT_CARD_METRIC] : OVERVIEW_METRICS;
+  const metric = metrics.find(m => m.key === selected) || metrics[0];
 
   const storeRows = useMemo(() => {
     if (isHistorical) {
@@ -2869,9 +2875,19 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
       ly: getStoreCutsPerDay(history, weeklyHistory, shiftYearISO(cpdStart, -1), shiftYearISO(cpdEnd, -1)),
     };
   }, [history, weeklyHistory, cpdStart, cpdEnd]);
+  // Gift cards come from their own history (never daily_history, whose
+  // giftCards field is always 0 — Sales-Accrual doesn't carry them), over the
+  // same range CPD uses.
+  const giftData = useMemo(
+    () => (showGiftCards && cpdStart && cpdEnd ? getGiftCardRangeTotals(giftCardHistory, cpdStart, cpdEnd) : null),
+    [showGiftCards, giftCardHistory, cpdStart, cpdEnd]
+  );
   const rowsWithCpd = useMemo(
-    () => storeRows.map(r => ({ ...r, cpd: cpdOf(cpdData?.cur?.[r.code]), cpdLY: cpdOf(cpdData?.ly?.[r.code]) })),
-    [storeRows, cpdData]
+    () => storeRows.map(r => ({
+      ...r, cpd: cpdOf(cpdData?.cur?.[r.code]), cpdLY: cpdOf(cpdData?.ly?.[r.code]),
+      giftCards: giftData?.[r.code]?.giftCards || 0, giftCardCount: giftData?.[r.code]?.giftCardCount || 0,
+    })),
+    [storeRows, cpdData, giftData]
   );
 
   const isSearching = !!query.trim();
@@ -2890,7 +2906,10 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
 
   const baseTotals = isHistorical ? rollupRows(storeRows) : report.companyTotals;
   const storeCodes = storeRows.map(r => r.code);
-  const t = { ...baseTotals, cpd: companyCpd(cpdData?.cur, storeCodes), cpdLY: companyCpd(cpdData?.ly, storeCodes) };
+  const t = {
+    ...baseTotals, cpd: companyCpd(cpdData?.cur, storeCodes), cpdLY: companyCpd(cpdData?.ly, storeCodes),
+    giftCards: rowsWithCpd.reduce((sum, r) => sum + r.giftCards, 0), giftCardCount: rowsWithCpd.reduce((sum, r) => sum + r.giftCardCount, 0),
+  };
   const toggle = name => setExpanded(prev => ({ ...prev, [name]: !prev[name] }));
 
   return (
@@ -2901,7 +2920,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
 
       <p className="section-hint">Tap any metric to see the top 10 and bottom 10 stores for it.</p>
       <div className="summary-grid">
-        {OVERVIEW_METRICS.map(m => (
+        {metrics.map(m => (
           <button
             key={m.key}
             className={`summary-tile ${selected === m.key ? 'summary-tile--active' : ''}`}
@@ -2921,7 +2940,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
       <div className="ledger-head-row">
         <p className="section-label">{filtered.length} of {storeRows.length} stores{isHistorical ? ' (historical)' : ''}</p>
         <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
-          {OVERVIEW_METRICS.map(o => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
+          {metrics.map(o => <option key={o.key} value={o.key}>Sort: {o.label}</option>)}
         </select>
       </div>
 
@@ -2966,6 +2985,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
                   {s.cph != null && <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(s.cph)}</span></div>}
                   <div className="dl-stat"><span className="dl-stat-label">SS</span><span className="dl-stat-value">{fmtSS(s.signatureSCount, s.signatureS)}</span></div>
                   <div className="dl-stat"><span className="dl-stat-label">CPD</span><span className="dl-stat-value">{fmtCPD(s.cpd, s.cpdLY)}</span></div>
+                  {showGiftCards && <div className="dl-stat"><span className="dl-stat-label">Gift Cards</span><span className="dl-stat-value">{fmtSS(s.giftCardCount, s.giftCards)}</span></div>}
                 </div>
               </button>
               {isOpen && hasEmployeeData && (
@@ -9371,7 +9391,7 @@ export default function App() {
           <HsaTab events={events} hsaSignups={d.hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} onEditSignup={handleEditHsaSignup} onAddClass={handleAddHsaClass} onEditClass={handleEditHsaClass} onDeleteClass={handleDeleteEvent} />
         )}
         {!needsReport && tab === 'Overview' && (report || hasHistoricalData) && (
-          <OverviewTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={d.managers} isOwner={currentUser.role === 'owner'} goals={d.goals} />
+          <OverviewTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={d.managers} isOwner={currentUser.role === 'owner'} goals={d.goals} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} />
         )}
         {!needsReport && tab === 'Employees' && (report || hasHistoricalData) && (
           <EmployeesTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={d.managers} employeeRoster={d.employeeRoster} fallbackEmployeesByStore={d.fallbackEmployeesByStore} />

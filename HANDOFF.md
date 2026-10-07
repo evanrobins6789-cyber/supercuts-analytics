@@ -35,6 +35,10 @@
 - Confirm the Signature Service tab now shows 1016/$12,142.36 for Aug 1–9 (already corrected directly in Supabase, not just in code) — and if you have a cleaner source for the 1017/$12,154.36 figure you originally gave me, worth checking where that extra unit/$12 comes from.
 - None of the 2026-08-13 changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
 
+Last updated: 2026-10-07 (later). **Gift cards added to the Overview tab, owner only.** Pushed to `main`.
+- The ask: "add it to the overview page too." `GIFT_CARD_METRIC` (`src/App.js`, "count|$" like SS) gives a summary tile with Top/Bottom 10, a sort option, and a stat on each store card. It's only added when `OverviewTab` gets `giftCardHistory`, and App passes that only for `role === 'owner'`. It uses the same range as CPD, so it follows the live report's range when one is current. It's deliberately not in `STORE_METRICS`, so the Homepage Top 10 and other roles are unaffected.
+- Verified: `CI=true npm run build` clean. Not checked in a browser.
+
 Last updated: 2026-10-07. **New owner-only Gift Cards tab (sales, not redemptions) + owner-only Gift Card Goal.** Pushed to `main`.
 - **The ask**: a tab only the owner can see, for gift card sales (not redemptions), laid out like Retail/SS, plus a goal on the Goals tab that only the owner can see. Goal = $ sold per store per month (user's choice).
 - **Data source**: Sales-Accrual does NOT include gift card sales. Proof: no gift card rows in the latest exports, $0 `giftCards` on every stored `daily_history` day Jan–Oct, and the Gift Cards report shows sales on Oct 7 that the Oct 7 Sales-Accrual lacks. The source is the separate **"Gift Cards" report** (Sale Center | Invoice No | Sale Date | Sales | Sales(Inc. Tax) | Value | Redeemed Value | Sold By). Only `Sales` counts; Redeemed Value is ignored. **Sale Date must be included when running it**: the default export has no date column, and the parser rejects that with a clear message.
