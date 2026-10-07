@@ -1230,6 +1230,100 @@ export function mergeAttendanceIntoHistory(history, attendanceRecords) {
   return next;
 }
 
+// ─── Gift Cards report (gift card SALES, never redemptions) ────────────────
+// Sales-Accrual leaves gift card sales out entirely (confirmed against real
+// exports: a day with gift cards sold here has no matching rows there), so
+// this separate "Gift Cards" export is the only source. Columns: Sale Center
+// | Invoice No | Sale Date | Sales | Sales(Inc. Tax) | Value | Redeemed Value
+// | Sold By. Only "Sales" (exc. tax) is counted; Redeemed Value is ignored.
+// Sale Date is required — without it a multi-day export can't be placed on
+// real days. The header's "From : 01 Aug 2026 To : 07 Oct 2026" line gives
+// the full covered range (including days nobody sold one), so a re-upload
+// can replace those days cleanly instead of leaving stale store-days behind.
+const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+function headerDateISO(text) {
+  const m = String(text).match(/(\d{1,2})\s+([A-Za-z]{3})[A-Za-z]*\s+(\d{4})/);
+  if (!m || !MONTHS[m[2].toLowerCase()]) return null;
+  return `${m[3]}-${String(MONTHS[m[2].toLowerCase()]).padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+}
+
+export async function parseGiftCardFile(file) {
+  const grid = await readWorkbookGrid(file);
+  const hdrRowIdx = grid.findIndex(row => row.some(c => cellText(c).toLowerCase() === 'sale center'));
+  if (hdrRowIdx === -1) throw new Error('Could not find a "Sale Center" column — is this the Gift Cards report?');
+  const headerRow = grid[hdrRowIdx];
+  const col = {
+    center: findCol(headerRow, 'Sale Center'),
+    date: findCol(headerRow, 'Sale Date'),
+    sales: findCol(headerRow, 'Sales'),
+    soldBy: findCol(headerRow, 'Sold By'),
+  };
+  if (col.sales === -1) throw new Error('Could not find the "Sales" column in this file.');
+  if (col.date === -1) throw new Error('This Gift Cards export has no "Sale Date" column — re-run the report with Sale Date included so each sale lands on the right day.');
+
+  let rangeStart = null;
+  let rangeEnd = null;
+  for (let r = 0; r < hdrRowIdx; r++) {
+    const text = grid[r].map(cellText).join(' ');
+    const from = text.match(/From\s*:\s*([^:]+?)\s+To\s*:/i);
+    const to = text.match(/To\s*:\s*(\d{1,2}\s+[A-Za-z]+\s+\d{4})/i);
+    if (from && to) { rangeStart = headerDateISO(from[1]); rangeEnd = headerDateISO(to[1]); break; }
+  }
+
+  const daily = new Map(); // `${code}|${isoDate}` -> { code, date, giftCards, giftCardCount, employees: { name: { giftCards, giftCardCount } } }
+  let saleCount = 0;
+  for (let r = hdrRowIdx + 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (!rowHasData(row)) continue;
+    const code = extractCode(cellText(row[col.center]));
+    if (!code) continue; // includes the file's own "Total:" row
+    const isoDate = toISODate(cellText(row[col.date]));
+    if (!isoDate) continue;
+    const amount = numOf(row[col.sales]);
+    if (!amount) continue;
+    // A negative line is a refund/void of a sale — nets the $ and the count.
+    const countDelta = amount > 0 ? 1 : -1;
+    const key = `${code}|${isoDate}`;
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, giftCards: 0, giftCardCount: 0, employees: {} });
+    const rec = daily.get(key);
+    rec.giftCards += amount;
+    rec.giftCardCount += countDelta;
+    const seller = col.soldBy !== -1 ? cellText(row[col.soldBy]).replace(/\s+/g, ' ') : '';
+    if (seller) {
+      if (!rec.employees[seller]) rec.employees[seller] = { giftCards: 0, giftCardCount: 0 };
+      rec.employees[seller].giftCards += amount;
+      rec.employees[seller].giftCardCount += countDelta;
+    }
+    saleCount++;
+  }
+  if (!daily.size && !(rangeStart && rangeEnd)) throw new Error('No gift card sales found in this file.');
+  const records = Array.from(daily.values()).map(r => ({
+    ...r,
+    giftCards: Math.round(r.giftCards * 100) / 100,
+    employees: Object.fromEntries(Object.entries(r.employees).map(([n, v]) => [n, { giftCards: Math.round(v.giftCards * 100) / 100, giftCardCount: v.giftCardCount }])),
+  }));
+  const dates = records.map(r => r.date).sort();
+  return {
+    records,
+    saleCount,
+    rangeStart: rangeStart || dates[0] || null,
+    rangeEnd: rangeEnd || dates[dates.length - 1] || null,
+  };
+}
+
+// Every day in the file's covered range is replaced outright (all stores),
+// so re-uploading a corrected or overlapping export never double-counts and
+// never leaves a store-day behind that the newer file no longer has.
+export function mergeGiftCardsIntoHistory(giftHistory, parsed) {
+  const next = {};
+  Object.entries(giftHistory || {}).forEach(([key, rec]) => {
+    if (parsed.rangeStart && parsed.rangeEnd && rec.date >= parsed.rangeStart && rec.date <= parsed.rangeEnd) return;
+    next[key] = rec;
+  });
+  parsed.records.forEach(r => { next[`${r.code}|${r.date}`] = r; });
+  return next;
+}
+
 // ─── Weekly snapshot (fed by the regular Stylist Report upload) ────────────
 // Turns an already-parsed Stylist Report into one record per store for that
 // exact week (keyed by its real start/end dates), so every normal Monday

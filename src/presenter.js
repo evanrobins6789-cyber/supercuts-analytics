@@ -97,7 +97,7 @@ const fakePhone = real => {
 // consistent — they're just not the real figures.
 const FIELD_GROUP = {
   sales: 'service', service: 'service', serviceSales: 'service',
-  retail: 'retail', giftCards: 'retail',
+  retail: 'retail', giftCards: 'retail', giftCardCount: 'giftCount',
   color: 'color', colorSales: 'color',
   otherServices: 'other',
   signatureS: 'sigAmt', signatureSCount: 'sigCount',
@@ -106,7 +106,7 @@ const FIELD_GROUP = {
   colorTicketCount: 'colorTix', colorTicketsWithRetail: 'colorTix',
   signatureTicketCount: 'sigTix', signatureTicketsWithRetail: 'sigTix',
 };
-const COUNT_FIELDS = new Set(['haircuts', 'bottles', 'signatureSCount', 'colorTicketCount', 'colorTicketsWithRetail', 'signatureTicketCount', 'signatureTicketsWithRetail']);
+const COUNT_FIELDS = new Set(['giftCardCount', 'haircuts', 'bottles', 'signatureSCount', 'colorTicketCount', 'colorTicketsWithRetail', 'signatureTicketCount', 'signatureTicketsWithRetail']);
 
 function factor(code, group, year) {
   const c = String(code ?? 'all');
@@ -314,6 +314,7 @@ export function presenterView(real, realEmployeesByStore) {
   return {
     report: fakeReport(real.report),
     history: fakeHistory(real.history),
+    giftCardHistory: fakeHistory(real.giftCardHistory),
     weeklyHistory: fakeWeeklyHistory(real.weeklyHistory),
     goals: fakeGoalsLike(real.goals),
     milestoneGoals: fakeGoalsLike(real.milestoneGoals),

@@ -13,7 +13,12 @@ import { rollup } from '../src/parser.js';
 import { getCodeForStoreName } from '../src/storeDirectory.js';
 
 const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases']);
-const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_'];
+const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_', 'gift_card_history_'];
+
+// Gift card sales and the gift card goal are owner-only: no other role gets
+// gift_card_history_* back at all, and giftCardGoal is stripped out of the
+// store_goals they do see (and refused if a non-owner tries to write it).
+const OWNER_ONLY_GOAL_FIELDS = ['giftCardGoal'];
 
 // Subset of SENSITIVE_KEYS that are a flat { [storeCode]: {...fields} }
 // object and support scoped PATCH writes below — a merge-in for just the
@@ -77,7 +82,20 @@ function filterPayload(key, payload, employee) {
   const allowed = new Set(employee.store_codes || []);
   if (key === 'stylist_report') return filterStylistReport(payload, allowed);
   if (key === 'reviews') return filterReviews(payload, allowed);
-  if (key === 'store_goals' || key === 'store_managers' || key === 'milestone_goals') return filterCodeKeyedObject(payload, allowed);
+  if (key === 'store_goals') {
+    const scoped = filterCodeKeyedObject(payload, allowed);
+    if (!scoped) return scoped;
+    const out = {};
+    Object.entries(scoped).forEach(([code, g]) => {
+      if (!g || typeof g !== 'object') { out[code] = g; return; }
+      const rest = { ...g };
+      OWNER_ONLY_GOAL_FIELDS.forEach(f => { delete rest[f]; });
+      out[code] = rest;
+    });
+    return out;
+  }
+  if (key === 'store_managers' || key === 'milestone_goals') return filterCodeKeyedObject(payload, allowed);
+  if (key.startsWith('gift_card_history_')) return {};
   // Leases (rent/landlord/critical-date data) are owner-only, full stop —
   // unlike store_goals/store_managers/milestone_goals, no other role has a
   // legitimate reason to see even their own store's entry, so this isn't a
@@ -134,6 +152,10 @@ export default async function handler(req, res) {
         // non-owner can't patch even their own store's lease entry.
         if (key === 'store_leases') {
           res.status(403).json({ error: 'Only the owner can modify lease data.' });
+          return;
+        }
+        if (key === 'store_goals' && Object.values(patch).some(v => v && typeof v === 'object' && OWNER_ONLY_GOAL_FIELDS.some(f => f in v))) {
+          res.status(403).json({ error: 'Only the owner can set gift card goals.' });
           return;
         }
         const allowed = new Set(employee.store_codes || []);

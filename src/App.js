@@ -5,7 +5,7 @@ import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDat
 import {
   parseStylistReport, parseEmployeeStartDates, parseGoalFile, downloadGoalTemplate, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
   parseColorAttachGoalsFile,
-  parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory,
+  parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory, parseGiftCardFile, mergeGiftCardsIntoHistory,
   buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile, parseMasterSalonListFile, parseHsaScheduleFile,
 } from './parser';
 import {
@@ -4273,9 +4273,200 @@ const NEW_HIRE_SORT_OPTIONS = [
 ];
 
 // ─── Goals tab ──────────────────────────────────────────────────────────────
-const GOAL_FIELD_LABELS = { salesGoal: 'sales', colorGoal: 'color', bottleGoal: 'bottle', signatureSGoal: 'signature service', bottleToColorGoal: 'bottle-to-color %', bottleToSSGoal: 'bottle-to-SS %' };
+// ─── Gift Cards tab (owner-only) ────────────────────────────────────────────
+// Same look as the Retail/Signature Service tabs (StoreMetricTab), but fed
+// from the separate gift card history (Setup > Historical Import > Gift Cards
+// Files) instead of daily_history, and broken out by "Sold By" rather than
+// the stylist sales columns EmployeeTable shows. Sales only — redemptions
+// are never counted (see parseGiftCardFile).
+function getGiftCardRangeTotals(giftCardHistory, startISO, endISO) {
+  const byStore = {};
+  Object.values(giftCardHistory || {}).forEach(r => {
+    if (r.date < startISO || r.date > endISO) return;
+    if (!byStore[r.code]) byStore[r.code] = { giftCards: 0, giftCardCount: 0, sellers: {} };
+    const t = byStore[r.code];
+    t.giftCards += r.giftCards || 0;
+    t.giftCardCount += r.giftCardCount || 0;
+    Object.entries(r.employees || {}).forEach(([name, v]) => {
+      if (!t.sellers[name]) t.sellers[name] = { name, giftCards: 0, giftCardCount: 0 };
+      t.sellers[name].giftCards += v.giftCards || 0;
+      t.sellers[name].giftCardCount += v.giftCardCount || 0;
+    });
+  });
+  return byStore;
+}
 
-function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttachGoals, fallbackEmployeesByStore }) {
+function GiftCardsTab({ giftCardHistory, goals, query, onQuery, dateRange, onDateRangeChange, onGoToUpload }) {
+  const [sortBy, setSortBy] = useState('giftCards');
+  const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
+  const [expanded, setExpanded] = useState({});
+  const [expandedLeader, setExpandedLeader] = useState({});
+  const usingDefaultRange = !(dateRange?.start && dateRange?.end);
+  const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
+  const hasAnyData = Object.keys(giftCardHistory || {}).length > 0;
+  const getGoal = code => (goals?.[code]?.giftCardGoal != null ? goals[code].giftCardGoal : null);
+
+  // Every store with a sale in range OR a goal set, so a store with a goal
+  // and no sales yet still shows up (as behind goal) instead of vanishing.
+  const rows = useMemo(() => {
+    const totals = getGiftCardRangeTotals(giftCardHistory, effectiveRange.start, effectiveRange.end);
+    const codes = new Set([...Object.keys(totals), ...Object.keys(goals || {}).filter(c => getGoal(c) != null)]);
+    return [...codes].map(code => {
+      const t = totals[code] || { giftCards: 0, giftCardCount: 0, sellers: {} };
+      const goal = getGoal(code);
+      return {
+        code, name: STORE_CODE_TO_NAME[code] || `Store ${code}`,
+        giftCards: t.giftCards, giftCardCount: t.giftCardCount,
+        sellers: sortByMetric(Object.values(t.sellers), 'giftCards', 'desc'),
+        goal, vsGoal: goal != null ? t.giftCards - goal : null,
+      };
+    });
+  }, [giftCardHistory, goals, effectiveRange.start, effectiveRange.end]);
+
+  const filterByQuery = (list, includeLeader) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return list;
+    return includeLeader
+      ? list.map(g => ({ ...g, stores: g.leaderName.toLowerCase().includes(q) ? g.stores : g.stores.filter(s => s.name.toLowerCase().includes(q)) })).filter(g => g.stores.length > 0)
+      : list.filter(r => r.name.toLowerCase().includes(q));
+  };
+  const groups = useMemo(() => filterByQuery(groupStoresByLeader(rows), true), [rows, query]);
+  const sortedFlat = useMemo(() => sortByMetric(filterByQuery(rows, false), sortBy, 'desc'), [rows, query, sortBy]);
+  const sumOf = (list, key) => list.reduce((s, r) => s + (r[key] || 0), 0);
+  const goalSum = list => list.reduce((s, r) => s + (r.goal ?? 0), 0);
+  const diffCell = diff => <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${fmt$(diff)}` : '—'}</td>;
+  const totalStoresShown = viewMode === 'dl' ? groups.reduce((n, g) => n + g.stores.length, 0) : sortedFlat.length;
+  const colCount = 5;
+
+  const storeRow = s => {
+    const isOpen = !!expanded[s.code];
+    const hasSellers = s.sellers.length > 0;
+    return (
+      <React.Fragment key={s.code}>
+        <tr className={hasSellers ? 'store-row-clickable' : ''} onClick={hasSellers ? () => setExpanded(prev => ({ ...prev, [s.code]: !prev[s.code] })) : undefined}>
+          <td className="ledger-name-col">{hasSellers && <span className={`mini-chevron ${isOpen ? 'mini-chevron--open' : ''}`}>▸</span>} {s.name}</td>
+          <td>{fmt$(s.giftCards)}</td>
+          <td>{fmtInt(s.giftCardCount)}</td>
+          <td>{s.goal != null ? fmt$(s.goal) : '—'}</td>
+          {diffCell(s.vsGoal)}
+        </tr>
+        {isOpen && hasSellers && (
+          <tr className="store-expand-row">
+            <td colSpan={colCount}>
+              <div className="ledger-scroll">
+                <table className="ledger-table">
+                  <thead><tr><th className="ledger-name-col">Sold By</th><th>Gift Card $</th><th># Sold</th></tr></thead>
+                  <tbody>
+                    {s.sellers.map(e => (
+                      <tr key={e.name}><td className="ledger-name-col">{e.name}</td><td>{fmt$(e.giftCards)}</td><td>{fmtInt(e.giftCardCount)}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </td>
+          </tr>
+        )}
+      </React.Fragment>
+    );
+  };
+  const tableHead = <thead><tr><th className="ledger-name-col">Store</th><th>Gift Card $</th><th># Sold</th><th>Goal</th><th>vs Goal</th></tr></thead>;
+  const totalsRow = (label, list) => {
+    const goalTotal = goalSum(list);
+    return (
+      <tr className="ledger-avg-row">
+        <td className="ledger-name-col">{label}</td>
+        <td>{fmt$(sumOf(list, 'giftCards'))}</td>
+        <td>{fmtInt(sumOf(list, 'giftCardCount'))}</td>
+        <td>{goalTotal > 0 ? fmt$(goalTotal) : '—'}</td>
+        {diffCell(goalTotal > 0 ? sumOf(list, 'giftCards') - goalTotal : null)}
+      </tr>
+    );
+  };
+
+  if (!hasAnyData) {
+    return (
+      <div className="empty-state">
+        <p className="empty-title">No gift card sales yet</p>
+        <p>Run the "Gift Cards" report with Sale Date included, then upload it under Setup → Historical Import → Gift Cards Files.</p>
+        <button className="btn-primary" onClick={onGoToUpload}>Go to upload</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="tab-content">
+      <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
+      {usingDefaultRange && <p className="section-hint">Showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}). Gift card sales only, not redemptions. Only you can see this tab.</p>}
+      <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
+
+      <div className="view-toggle">
+        <button className={`view-toggle-btn ${viewMode === 'dl' ? 'active' : ''}`} onClick={() => setViewMode('dl')}>Grouped by DL</button>
+        <button className={`view-toggle-btn ${viewMode === 'flat' ? 'active' : ''}`} onClick={() => setViewMode('flat')}>All Stores</button>
+      </div>
+
+      <div className="ledger-head-row">
+        <p className="section-label">Gift Cards — {totalStoresShown} stores{viewMode === 'dl' ? ', grouped by DL' : ''}</p>
+        <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+          <option value="giftCards">Sort: Gift Card $</option>
+          <option value="giftCardCount">Sort: # Sold</option>
+          <option value="vsGoal">Sort: vs Goal</option>
+          <option value="name">Sort: Name (A–Z)</option>
+        </select>
+      </div>
+
+      {viewMode === 'dl' && (
+        <div className="dl-list">
+          {groups.map(g => {
+            const isLeaderOpen = !!expandedLeader[g.leaderName];
+            const amount = sumOf(g.stores, 'giftCards');
+            const goalTotal = goalSum(g.stores);
+            return (
+              <div key={g.leaderName} className="dl-card">
+                <button className="dl-card-head" onClick={() => setExpandedLeader(prev => ({ ...prev, [g.leaderName]: !prev[g.leaderName] }))}>
+                  <div className="dl-card-name-wrap">
+                    <span className={`dl-chevron ${isLeaderOpen ? 'dl-chevron--open' : ''}`}>▸</span>
+                    <span className="dl-card-name">{g.leaderName}</span>
+                    <span className="dl-card-count">{g.role} · {g.stores.length} store{g.stores.length !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div className="dl-card-stats">
+                    <div className="dl-stat"><span className="dl-stat-label">Gift Card $</span><span className="dl-stat-value">{fmt$(amount)}</span></div>
+                    <div className="dl-stat"><span className="dl-stat-label"># Sold</span><span className="dl-stat-value">{fmtInt(sumOf(g.stores, 'giftCardCount'))}</span></div>
+                    <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{goalTotal > 0 ? fmt$(goalTotal) : '—'}</span></div>
+                    <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={amount} milestone={goalTotal} /></div>
+                  </div>
+                </button>
+                {isLeaderOpen && (
+                  <div className="ledger-scroll dl-store-table">
+                    <table className="ledger-table">
+                      {tableHead}
+                      <tbody>{sortByMetric(g.stores, sortBy, 'desc').map(storeRow)}</tbody>
+                      <tfoot>{totalsRow(`${g.leaderName} total`, g.stores)}</tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {viewMode === 'flat' && (
+        <div className="ledger-scroll">
+          <table className="ledger-table">
+            {tableHead}
+            <tbody>{sortedFlat.map(storeRow)}</tbody>
+            <tfoot>{totalsRow('Company total', sortedFlat)}</tfoot>
+          </table>
+        </div>
+      )}
+      {totalStoresShown === 0 && <p className="empty-note" style={{ textAlign: 'center' }}>{query.trim() ? `No stores match "${query}".` : 'No gift card sales in this date range.'}</p>}
+    </div>
+  );
+}
+
+const GOAL_FIELD_LABELS = { salesGoal: 'sales', colorGoal: 'color', bottleGoal: 'bottle', signatureSGoal: 'signature service', bottleToColorGoal: 'bottle-to-color %', bottleToSSGoal: 'bottle-to-SS %', giftCardGoal: 'gift card' };
+
+function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttachGoals, fallbackEmployeesByStore, isOwner }) {
   const [query, setQuery] = useState('');
   const [drafts, setDrafts] = useState({}); // { code: { salesGoal, colorGoal, bottleGoal, signatureSGoal } } — in-progress edits
   const [importing, setImporting] = useState(null); // 'colorGoal' | 'bottleGoal' | null
@@ -4342,7 +4533,7 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttac
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
-      <p className="section-hint">Set a weekly Sales, Color, Bottle, and Signature Service goal per store. Sales tracks total revenue (services + retail combined); Color goal tracks $ sold in color services specifically. Bottle and Signature Service goals track a unit count instead — bottles of retail product sold, and number of Signature Services performed. Color, Bottle, and Signature Service show up as "Goal"/"vs Goal" columns on their tabs; Sales goals show up on the Overview tab. Bottle-to-Color % and Bottle-to-SS % are target ratios of bottles sold per color service / per Signature Service performed — enter a whole percent (e.g. "15" for 15%).</p>
+      <p className="section-hint">Set a weekly Sales, Color, Bottle, and Signature Service goal per store. Sales tracks total revenue (services + retail combined); Color goal tracks $ sold in color services specifically. Bottle and Signature Service goals track a unit count instead — bottles of retail product sold, and number of Signature Services performed. Color, Bottle, and Signature Service show up as "Goal"/"vs Goal" columns on their tabs; Sales goals show up on the Overview tab. Bottle-to-Color % and Bottle-to-SS % are target ratios of bottles sold per color service / per Signature Service performed — enter a whole percent (e.g. "15" for 15%).{isOwner && ' Gift Card Goal is $ of gift cards sold per store per month — only you (the owner) can see or set it, and it shows on the Gift Cards tab.'}</p>
 
       <p className="section-hint">Download a blank sheet listing your stores (grouped by DL), fill in the Goal column, then import it below with whichever button matches what you filled in.</p>
       <div className="goal-import-row">
@@ -4394,6 +4585,15 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttac
           />
           {importing === 'bottleToSSGoal' ? <span className="spinner small" /> : '📥'} Import Bottle-to-SS % Goals from file
         </label>
+        {isOwner && (
+          <label className="goal-import-btn">
+            <input
+              type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+              onChange={e => { if (e.target.files[0]) handleImportFile('giftCardGoal', e.target.files[0]); e.target.value = ''; }}
+            />
+            {importing === 'giftCardGoal' ? <span className="spinner small" /> : '📥'} Import Gift Card Goals from file
+          </label>
+        )}
       </div>
 
       {onImportColorAttachGoals && (
@@ -4420,6 +4620,7 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttac
               <th>Signature Service Goal</th>
               <th>Bottle-to-Color % Goal</th>
               <th>Bottle-to-SS % Goal</th>
+              {isOwner && <th>Gift Card Goal</th>}
             </tr>
           </thead>
           <tbody>
@@ -4432,6 +4633,7 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttac
                 <td>{goalField(s.code, 'signatureSGoal', '0')}</td>
                 <td>{goalField(s.code, 'bottleToColorGoal', '0%')}</td>
                 <td>{goalField(s.code, 'bottleToSSGoal', '0%')}</td>
+                {isOwner && <td>{goalField(s.code, 'giftCardGoal')}</td>}
               </tr>
             ))}
           </tbody>
@@ -5433,8 +5635,9 @@ function historyMonthCoverage(history) {
     .sort((a, b) => a.month.localeCompare(b.month));
 }
 
-function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBatch, onClearHistory, reviews, onImportReviewsBatch }) {
+function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBatch, onClearHistory, reviews, onImportReviewsBatch, giftCardHistory, onImportGiftCardBatch }) {
   const [processingSales, setProcessingSales] = useState(false);
+  const [processingGiftCards, setProcessingGiftCards] = useState(false);
   const [processingAttendance, setProcessingAttendance] = useState(false);
   const [processingReviews, setProcessingReviews] = useState(false);
   const [log, setLog] = useState([]);
@@ -5478,6 +5681,19 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
       setProcessingReviews(false);
     }
   };
+
+  const handleGiftCardFiles = async fileList => {
+    setProcessingGiftCards(true);
+    try {
+      const lines = await onImportGiftCardBatch(fileList);
+      setLog(prev => [...lines, ...prev]);
+    } catch (err) {
+      setLog(prev => [`✗ Unexpected error: ${err.message}`, ...prev]);
+    } finally {
+      setProcessingGiftCards(false);
+    }
+  };
+  const giftCardDates = Object.values(giftCardHistory || {}).map(r => r.date).sort();
 
   const reviewDates = reviews?.reviews?.length ? reviews.reviews.map(r => r.postedAt).filter(Boolean).sort() : [];
 
@@ -5533,7 +5749,25 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
             <p className="upload-slot-hint">Select all your Reviews exports at once — one per month is fine, overlapping rows are skipped</p>
           </div>
         </label>
+
+        {onImportGiftCardBatch && (
+          <label className={`upload-slot history-upload-slot ${processingGiftCards ? 'upload-slot--filled' : ''}`}>
+            <input
+              type="file" accept=".xlsx,.xls,.csv" multiple style={{ display: 'none' }}
+              onChange={e => { const files = Array.from(e.target.files); if (files.length) handleGiftCardFiles(files); e.target.value = ''; }}
+            />
+            <div className="upload-slot-icon">{processingGiftCards ? <span className="spinner small" /> : '🎁'}</div>
+            <div className="upload-slot-body">
+              <p className="upload-slot-title">Gift Cards Files</p>
+              <p className="upload-slot-hint">The "Gift Cards" report, run with Sale Date included. Counts gift card sales only, not redemptions. Re-uploading a range replaces those days.</p>
+            </div>
+          </label>
+        )}
       </div>
+
+      {onImportGiftCardBatch && giftCardDates.length > 0 && (
+        <p className="section-hint">Gift card sales on file: {fmtDateLong(giftCardDates[0])} → {fmtDateLong(giftCardDates[giftCardDates.length - 1])}.</p>
+      )}
 
       {reviews && (
         <div className="summary-grid">
@@ -5965,7 +6199,7 @@ function topEmployeeLine(employees, n = 5) {
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
-function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads) {
+function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory) {
   const employeesForCodeCtx = code => {
     if (report && !isReportStale(report)) return report.stores.find(st => st.code === code)?.employees || null;
     return fallbackEmployeesByStore?.[code] || null;
@@ -6407,10 +6641,33 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     }
   }
 
+  // Gift card SALES (never redemptions) — owner-only, so this is only ever
+  // passed in on the owner's login (App passes null otherwise).
+  const giftRecords = Object.values(giftCardHistory || {});
+  if (giftRecords.length) {
+    lines.push('');
+    lines.push('GIFT CARD SALES (owner-only data — from the separate Gift Cards report; sales only, not redemptions; "Gift Card Goal" is a monthly $ target per store):');
+    const months = [...new Set(giftRecords.map(r => r.date.slice(0, 7)))].sort();
+    months.forEach(month => {
+      const [y, m] = month.split('-').map(Number);
+      const end = `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+      const totals = getGiftCardRangeTotals(giftCardHistory, `${month}-01`, end);
+      const all = Object.values(totals);
+      lines.push(`${month}: company ${fmt$(all.reduce((s, t) => s + t.giftCards, 0))}, ${all.reduce((s, t) => s + t.giftCardCount, 0)} sold`);
+      Object.entries(totals).sort((a, b) => b[1].giftCards - a[1].giftCards).forEach(([code, t]) => {
+        const goal = goals?.[code]?.giftCardGoal;
+        const sellers = Object.values(t.sellers).sort((a, b) => b.giftCards - a.giftCards).map(e => `${e.name} ${fmt$(e.giftCards)} (${e.giftCardCount})`).join(', ');
+        lines.push(`  ${STORE_CODE_TO_NAME[code] || `Store ${code}`}: ${fmt$(t.giftCards)}, ${t.giftCardCount} sold${goal != null ? `, goal ${fmt$(goal)}` : ''}${sellers ? ` — sold by ${sellers}` : ''}`);
+      });
+    });
+    const withGoals = Object.entries(goals || {}).filter(([, g]) => g?.giftCardGoal != null);
+    if (withGoals.length) lines.push(`Gift Card Goals set: ${withGoals.map(([code, g]) => `${STORE_CODE_TO_NAME[code] || code} ${fmt$(g.giftCardGoal)}`).join(', ')}`);
+  }
+
   return lines.join('\n');
 }
 
-function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads }) {
+function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -6423,7 +6680,7 @@ function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads);
+      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory);
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -7652,7 +7909,7 @@ function RewardsSetupTab({ token, showToast }) {
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Budgets', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Setup'];
+const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Gift Cards', 'Budgets', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Setup'];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
@@ -7687,6 +7944,13 @@ export default function App() {
   useEffect(() => { historyRef.current = history; }, [history]);
   const reviewsRef = useRef(reviews);
   useEffect(() => { reviewsRef.current = reviews; }, [reviews]);
+  // Gift card sales (owner-only) live in their own gift_card_history_YYYY-MM
+  // rows, never in daily_history — Sales-Accrual doesn't carry gift card
+  // sales, and mergeSalesIntoHistory would overwrite them with 0 on every
+  // re-import if they shared a record. Same `code|date` keying as history.
+  const [giftCardHistory, setGiftCardHistory] = useState({});
+  const giftCardHistoryRef = useRef(giftCardHistory);
+  useEffect(() => { giftCardHistoryRef.current = giftCardHistory; }, [giftCardHistory]);
   // Same reasoning as historyRef above — the Goals tab shows four import
   // buttons (Sales/Color/Bottle/Signature Service) side by side, and firing
   // more than one in quick succession used to let them all read the same
@@ -7717,7 +7981,7 @@ export default function App() {
   const [uploadingRoster, setUploadingRoster] = useState(false);
   const [uploadingReviews, setUploadingReviews] = useState(false);
   const [selectedMetric, setSelectedMetric] = useState('tsth');
-  const [queries, setQueries] = useState({ Overview: '', Employees: '', Retail: '', 'Color Sales': '', 'Signature Service': '', Budgets: '', Goals: '', DL: '', Reviews: '' });
+  const [queries, setQueries] = useState({ Overview: '', Employees: '', Retail: '', 'Color Sales': '', 'Signature Service': '', 'Gift Cards': '', Budgets: '', Goals: '', DL: '', Reviews: '' });
   const [pointsSummary, setPointsSummary] = useState(null);
 
   useEffect(() => {
@@ -7900,6 +8164,18 @@ export default function App() {
         });
       }
     }).catch(() => setLoading(false));
+  }, [currentUser]);
+
+  // Owner-only: the server returns nothing for other roles anyway, so don't
+  // even ask.
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'owner') { setGiftCardHistory({}); return; }
+    loadScopedByPrefix('gift_card_history_', currentUser.token).then(res => {
+      const merged = {};
+      (res.data || []).forEach(chunk => Object.assign(merged, chunk.payload));
+      setGiftCardHistory(merged);
+      if (res.error) showToast(`Couldn't load gift card sales (${res.error}) — try refreshing the page.`, 'error');
+    });
   }, [currentUser]);
 
   // Tillie's Nest points summary for the AI assistant's context — own
@@ -8909,6 +9185,52 @@ export default function App() {
     return queued;
   }, []);
 
+  // Gift Cards report (owner-only). Each file replaces every day in its own
+  // From/To range (see mergeGiftCardsIntoHistory), then each touched month is
+  // rewritten whole as one gift_card_history_YYYY-MM row — these are tiny
+  // (one record per store-day that sold a card), no per-store split needed.
+  const handleImportGiftCardBatch = useCallback(fileList => {
+    const task = async () => {
+      let working = giftCardHistoryRef.current;
+      const touchedMonths = new Set();
+      const lines = [];
+      for (const file of fileList) {
+        try {
+          const parsed = await parseGiftCardFile(file);
+          working = mergeGiftCardsIntoHistory(working, parsed);
+          parsed.records.forEach(r => touchedMonths.add(r.date.slice(0, 7)));
+          if (parsed.rangeStart && parsed.rangeEnd) {
+            expandDateRangeDays(parsed.rangeStart, parsed.rangeEnd).forEach(d => touchedMonths.add(d.slice(0, 7)));
+          }
+          const total = parsed.records.reduce((s, r) => s + r.giftCards, 0);
+          lines.push(`✓ ${file.name} — ${parsed.saleCount} gift card sale${parsed.saleCount !== 1 ? 's' : ''}, ${fmt$(total)}${parsed.rangeStart ? ` (${fmtDateLong(parsed.rangeStart)} – ${fmtDateLong(parsed.rangeEnd)})` : ''}`);
+        } catch (err) {
+          lines.push(`✗ ${file.name} — ${err.message}`);
+        }
+      }
+      giftCardHistoryRef.current = working;
+      setGiftCardHistory(working);
+      const failedMonths = [];
+      let lastError = null;
+      for (const month of touchedMonths) {
+        const chunk = {};
+        Object.entries(working).forEach(([key, rec]) => { if (rec.date.slice(0, 7) === month) chunk[key] = rec; });
+        const result = await saveData(`gift_card_history_${month}`, chunk);
+        if (!result.ok) { failedMonths.push(month); lastError = result.error; }
+      }
+      if (isConfigured() && failedMonths.length) {
+        lines.push(`✗ Couldn't sync ${failedMonths.join(', ')} to Supabase (${lastError}) — try the import again.`);
+        showToast(`Imported, but couldn't sync gift cards to Supabase (${lastError})`, 'error');
+      } else {
+        showToast(`Processed ${fileList.length} gift card file${fileList.length !== 1 ? 's' : ''}`);
+      }
+      return lines;
+    };
+    const queued = importChainRef.current.then(task, task);
+    importChainRef.current = queued.then(() => {}, () => {});
+    return queued;
+  }, []);
+
   // Unlike the ongoing single-file Setup > Upload reviews slot (which treats
   // each export as the full current list and replaces it outright), a
   // historical backfill is typically several month-limited exports that each
@@ -8970,8 +9292,8 @@ export default function App() {
   // real state. The real state itself is never touched, and all writes are
   // blocked (presenter.js), so nothing here can reach stored data.
   const presenterData = useMemo(() => (presenting ? presenterView({
-    report, history, weeklyHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary,
-  }, fallbackEmployeesByStore) : null), [presenting, report, history, weeklyHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, fallbackEmployeesByStore]);
+    report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary,
+  }, fallbackEmployeesByStore) : null), [presenting, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, fallbackEmployeesByStore]);
   const presenterFallbackEmployees = useMemo(
     () => (presenterData ? getEmployeesByStoreFromHistory(presenterData.history, presenterData.weeklyHistory) : null),
     [presenterData]
@@ -8997,17 +9319,17 @@ export default function App() {
   if (!currentUser) return <LoginScreen onLoggedIn={handleLoggedIn} />;
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
-  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner'));
+  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner') && (t !== 'Gift Cards' || currentUser.role === 'owner'));
   // A live weekly Stylist Report upload is no longer the only way to power
   // these tabs — Sales-Accrual + Attendance historical imports feed the
   // exact same tables via each tab's own current-month fallback (see
   // getCurrentMonthRange). Only actually block on "nothing at all yet".
   const hasHistoricalData = Object.keys(history || {}).length > 0 || Object.keys(weeklyHistory || {}).length > 0;
-  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases';
+  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases' && tab !== 'Gift Cards';
 
   const d = presenterData
     ? { ...presenterData, fallbackEmployeesByStore: presenterFallbackEmployees }
-    : { report, history, weeklyHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, fallbackEmployeesByStore };
+    : { report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, fallbackEmployeesByStore };
 
   return (
     <div className="app">
@@ -9087,6 +9409,14 @@ export default function App() {
             managers={d.managers} isOwner={currentUser.role === 'owner'}
           />
         )}
+        {tab === 'Gift Cards' && currentUser.role === 'owner' && (
+          <GiftCardsTab
+            giftCardHistory={d.giftCardHistory} goals={d.goals}
+            query={queries['Gift Cards']} onQuery={v => setQuery('Gift Cards', v)}
+            dateRange={dateRange} onDateRangeChange={setDateRange}
+            onGoToUpload={() => { setTab('Setup'); setSetupSection('history'); }}
+          />
+        )}
         {!needsReport && tab === 'Budgets' && (report || hasHistoricalData) && (
           <BudgetsTab
             query={queries.Budgets} onQuery={v => setQuery('Budgets', v)}
@@ -9095,7 +9425,7 @@ export default function App() {
           />
         )}
         {tab === 'Goals' && (
-          <GoalsTab report={d.report} goals={d.goals} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} onImportColorAttachGoals={handleImportColorAttachGoals} fallbackEmployeesByStore={d.fallbackEmployeesByStore} />
+          <GoalsTab report={d.report} goals={d.goals} isOwner={currentUser.role === 'owner'} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} onImportColorAttachGoals={handleImportColorAttachGoals} fallbackEmployeesByStore={d.fallbackEmployeesByStore} />
         )}
         {tab === 'Leases' && (
           <LeasesTab
@@ -9134,7 +9464,7 @@ export default function App() {
               onReorderNewsGroup: handleReorderNewsGroup, onSetNewsGroupColor: handleSetNewsGroupColor,
               onImageError: msg => showToast(msg, 'error'),
             }}
-            historyProps={{ history: d.history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory, reviews: d.reviews, onImportReviewsBatch: handleImportReviewsBatch }}
+            historyProps={{ history: d.history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory, reviews: d.reviews, onImportReviewsBatch: handleImportReviewsBatch, giftCardHistory: d.giftCardHistory, onImportGiftCardBatch: handleImportGiftCardBatch }}
             uploadProps={{
               report: d.report, uploading, onFile: handleFile, onClear: handleClearAll,
               employeeRoster: d.employeeRoster, uploadingRoster, onRosterFile: handleRosterFile, onClearRoster: handleClearRoster,
@@ -9151,7 +9481,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} />
+      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} />
     </div>
   );
 }
