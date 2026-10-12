@@ -41,7 +41,7 @@ function sendMonthlyGoalAsk() {
   sendAsk_(RECIPIENTS, monthlyAskSubject_(month), {
     title: 'Your Goal for ' + month,
     intro: 'What is your goal for ' + month + '?',
-    detail: 'Just reply to this email with your goal. Everyone\'s goals will be sent out together tomorrow.',
+    detail: 'Just reply to this email with your goal (you can attach PDFs, spreadsheets, or photos too). Everyone\'s goals will be sent out together tomorrow.',
   });
 }
 
@@ -60,7 +60,7 @@ function sendThursdayTopicsAsk() {
   sendAsk_(RECIPIENTS, thursdayAskSubject_(call), {
     title: 'Thursday Call Topics',
     intro: 'What would you like to discuss on Thursday\'s call (' + call + ')?',
-    detail: 'Just reply to this email with your topics. The full agenda goes out tonight at midnight.',
+    detail: 'Just reply to this email with your topics (you can attach PDFs, spreadsheets, or photos too). The full agenda goes out tonight at midnight.',
   });
 }
 
@@ -103,7 +103,7 @@ function sendTestToMe() {
   sendAsk_(me, '[TEST] ' + monthlyAskSubject_(month), {
     title: 'Your Goal for ' + month,
     intro: 'What is your goal for ' + month + '?',
-    detail: 'Just reply to this email with your goal. Everyone\'s goals will be sent out together tomorrow.',
+    detail: 'Just reply to this email with your goal (you can attach PDFs, spreadsheets, or photos too). Everyone\'s goals will be sent out together tomorrow.',
   });
   sendSummary_(me, '[TEST] ' + month + ' Goals', {
     title: month + ' Goals', subtitle: 'Everyone\'s goal for the month',
@@ -112,7 +112,7 @@ function sendTestToMe() {
   sendAsk_(me, '[TEST] ' + thursdayAskSubject_(call), {
     title: 'Thursday Call Topics',
     intro: 'What would you like to discuss on Thursday\'s call (' + call + ')?',
-    detail: 'Just reply to this email with your topics. The full agenda goes out tonight at midnight.',
+    detail: 'Just reply to this email with your topics (you can attach PDFs, spreadsheets, or photos too). The full agenda goes out tonight at midnight.',
   });
   sendSummary_(me, '[TEST] Thursday Call Agenda - ' + call, {
     title: 'Thursday Call Agenda', subtitle: 'Topics for the ' + call + ' call',
@@ -164,21 +164,52 @@ function sendSummary_(recipients, subject, content) {
   const rows = recipients.map(function (r) {
     const a = byEmail[r.email.toLowerCase()];
     delete byEmail[r.email.toLowerCase()];
-    return { name: r.name, text: a ? a.text : null };
-  }).concat(Object.keys(byEmail).map(function (k) { return { name: byEmail[k].name, text: byEmail[k].text }; }));
+    return { name: r.name, answered: !!a, text: a ? a.text : '', files: a ? a.files : [] };
+  }).concat(Object.keys(byEmail).map(function (k) {
+    const a = byEmail[k];
+    return { name: a.name, answered: true, text: a.text, files: a.files };
+  }));
+
+  // Every file goes on the summary, renamed "Person - file.pdf", until the
+  // size budget runs out (Gmail caps a sent email at 25MB). Anything past
+  // that is listed as too large, and is still in the replies in this inbox.
+  const attachments = [];
+  let budget = MAX_ATTACHMENT_BYTES;
+  rows.forEach(function (row) {
+    row.fileNotes = row.files.map(function (f) {
+      const label = row.name + ' - ' + f.getName();
+      if (f.getSize() > budget) return { name: label, included: false };
+      budget -= f.getSize();
+      attachments.push(f.copyBlob().setName(label));
+      return { name: label, included: true };
+    });
+  });
 
   const cards = rows.map(function (row) {
-    const body = row.text
+    let body = row.text
       ? '<div style="font-size:14px;color:#333;line-height:1.5;margin-top:4px;">' + escapeHtml_(row.text).replace(/\n/g, '<br>') + '</div>'
-      : '<div style="font-size:13px;color:#9AA7B4;font-style:italic;margin-top:4px;">No reply</div>';
-    return '<div style="border:1px solid #E1E7ED;border-left:4px solid ' + (row.text ? '#2E7D4F' : '#9AA7B4') + ';border-radius:6px;padding:12px 14px;margin:0 0 10px;">' +
+      : (row.answered ? '' : '<div style="font-size:13px;color:#9AA7B4;font-style:italic;margin-top:4px;">No reply</div>');
+    if (row.fileNotes.length) {
+      body += '<div style="font-size:13px;color:#5A6B80;margin-top:8px;">' + row.fileNotes.map(function (n) {
+        return '&#128206; ' + escapeHtml_(n.name) + (n.included ? '' : ' <i>(too large to include here)</i>');
+      }).join('<br>') + '</div>';
+    }
+    return '<div style="border:1px solid #E1E7ED;border-left:4px solid ' + (row.answered ? '#2E7D4F' : '#9AA7B4') + ';border-radius:6px;padding:12px 14px;margin:0 0 10px;">' +
       '<div style="font-size:15px;font-weight:bold;color:#142A4A;">' + escapeHtml_(row.name) + '</div>' + body + '</div>';
   }).join('');
   const html = wrapHtml_(content.title,
     '<p style="font-size:14px;color:#5A6B80;margin:0 0 14px;">' + escapeHtml_(content.subtitle) + '</p>' + cards);
-  const plain = rows.map(function (row) { return row.name + ':\n' + (row.text || '(no reply)'); }).join('\n\n');
-  GmailApp.sendEmail(recipients.map(function (r) { return r.email; }).join(','), subject, plain, { htmlBody: html, name: FROM_NAME });
+  const plain = rows.map(function (row) {
+    const files = row.fileNotes.map(function (n) { return '  Attached: ' + n.name + (n.included ? '' : ' (too large to include here)'); });
+    return row.name + ':\n' + (row.text || (row.answered ? '' : '(no reply)')) + (files.length ? '\n' + files.join('\n') : '');
+  }).join('\n\n');
+  GmailApp.sendEmail(recipients.map(function (r) { return r.email; }).join(','), subject, plain,
+    { htmlBody: html, name: FROM_NAME, attachments: attachments });
 }
+
+// Gmail caps a sent email at 25MB after encoding (files grow about a third),
+// so 18MB of files is the safe ceiling.
+const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
 
 function wrapHtml_(title, inner) {
   return '<div style="background:#F4F6F8;padding:24px 12px;font-family:Arial,Helvetica,sans-serif;">' +
@@ -207,16 +238,32 @@ function collectReplies_(askSubject, lookbackDays) {
       // A reply sent from this account to someone else's copy isn't an answer.
       if (sender.email === me && msg.getTo().toLowerCase().indexOf(me) === -1) return;
       const text = stripQuoted_(msg.getPlainBody());
-      if (!text) return;
+      const files = replyFiles_(msg);
+      if (!text && !files.length) return;
       const entry = byEmail[sender.email] || (byEmail[sender.email] = { email: sender.email, name: sender.name, parts: [] });
-      entry.parts.push({ date: msg.getDate().getTime(), text: text });
+      entry.parts.push({ date: msg.getDate().getTime(), text: text, files: files });
     });
   });
   return Object.keys(byEmail).map(function (k) {
     const e = byEmail[k];
     e.parts.sort(function (a, b) { return a.date - b.date; });
-    return { email: e.email, name: e.name, text: e.parts.map(function (p) { return p.text; }).join('\n\n') };
+    return {
+      email: e.email, name: e.name,
+      text: e.parts.map(function (p) { return p.text; }).filter(String).join('\n\n'),
+      files: [].concat.apply([], e.parts.map(function (p) { return p.files; })),
+    };
   });
+}
+
+// Real attachments, plus photos pasted into the body (iPhone does this).
+// Small inline images are skipped: those are email-signature logos, not
+// something the person meant to send.
+const MIN_INLINE_IMAGE_BYTES = 30 * 1024;
+function replyFiles_(msg) {
+  const attached = msg.getAttachments({ includeInlineImages: false });
+  const inline = msg.getAttachments({ includeInlineImages: true, includeAttachments: false })
+    .filter(function (a) { return a.getSize() >= MIN_INLINE_IMAGE_BYTES; });
+  return attached.concat(inline);
 }
 
 function parseFrom_(from) {
