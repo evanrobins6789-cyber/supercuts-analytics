@@ -1,6 +1,7 @@
 # Handoff — Supercuts Analytics
 
 **Open items for next session:**
+- **Leadership goal/agenda emails (2026-10-12, below) are not set up yet.** The user needs to paste `apps-script/leadership-emails.gs` into a new Apps Script project, fill in `RECIPIENTS`, set the project time zone to Eastern, run `setupTriggers`, and ideally `sendTestToMe`. Then confirm the first real Wednesday ask goes out and the Thursday 12am agenda picks up the replies.
 - **Gift Cards tab + Gift Card Goal (2026-10-07, below) need the real upload and a browser check.** Upload `~/Downloads/Gift Cards(1).xlsx` via Setup → Historical Import → Gift Cards Files (expect "75 gift card sales, $4,564.00, Aug 1 – Oct 7"), then confirm as the owner: the Gift Cards tab shows it, store rows expand to Sold By, and the Gift Card Goal column saves. Then confirm a DL login sees neither the tab nor the goal column.
 - **News PDF storage fix (2026-10-02, below) is unverified in a real browser.** Confirm a new post saves without the timeout toast, then reload and confirm all 7 existing posts' PDFs still open. The user's post that failed with the timeout was never saved to Supabase and needs re-posting.
 - **Multi-PDF News posts (2026-10-02, below) are unverified in a real browser.** Only a clean build was done; see that entry's checklist.
@@ -34,6 +35,14 @@
 - Check whether any existing Sales Goals now look off now that "Sales" includes retail (a store that was borderline on-goal may now look ahead, since the baseline it's compared against got bigger).
 - Confirm the Signature Service tab now shows 1016/$12,142.36 for Aug 1–9 (already corrected directly in Supabase, not just in code) — and if you have a cleaner source for the 1017/$12,154.36 figure you originally gave me, worth checking where that extra unit/$12 comes from.
 - None of the 2026-08-13 changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
+
+Last updated: 2026-10-12. **New standalone Apps Script for leadership goal + Thursday-call agenda emails (`apps-script/leadership-emails.gs`).** No site code changed. Pushed to `main`.
+- **The ask**: (1) 1st of the month, an email asking each person's goal for the month; (2) 2nd, everyone gets all the goals listed; (3) Wednesday morning, an email asking what each person wants discussed on the Thursday morning call; (4) Wednesday night at midnight, everyone gets the agenda summary.
+- **The user's choices (AskUserQuestion)**: a fixed recipient list typed into the script; people answer by **replying to the email**; goals are free text; asks go out at 8am, and summaries at 12am (the 2nd, and Thursday 12am). Times are Eastern.
+- **How**: everything runs in Gmail. The asks are sent one copy per person, so replies come back only to the script's account and not reply-all. The summary finds the ask threads by their exact subject, which includes the month or the call date so each one is unique (`collectReplies_`), takes every message after the first, removes quoted text and phone signatures (`stripQuoted_`), and lists each person in RECIPIENTS order. Anyone who didn't answer shows "No reply", and anyone who replied but isn't on the list is added at the end. Multiple replies from one person are joined. The script must run on the same Gmail account that receives the replies.
+- **Timing caveat**: Apps Script `atHour(...).nearMinute(0)` fires within about ±15 minutes, so a "midnight" summary can land at 11:45pm. The date helpers work on either side of midnight.
+- **Kept pure ASCII** for the same copy/paste mangling reason as the HSA script. It isn't embedded in Setup > Email Reports, because it needs nothing from the site.
+- **Verified**: the file is ASCII-only and passes `node --check`, and `stripQuoted_` was tested in Node against Gmail, iPhone, and Outlook reply shapes, plus a reply that starts with "On Thursday...". **Not verified**: nothing has run in Apps Script or Gmail yet.
 
 Last updated: 2026-10-07 (later). **Gift cards added to the Overview tab, owner only.** Pushed to `main`.
 - The ask: "add it to the overview page too." `GIFT_CARD_METRIC` (`src/App.js`, "count|$" like SS) gives a summary tile with Top/Bottom 10, a sort option, and a stat on each store card. It's only added when `OverviewTab` gets `giftCardHistory`, and App passes that only for `role === 'owner'`. It uses the same range as CPD, so it follows the live report's range when one is current. It's deliberately not in `STORE_METRICS`, so the Homepage Top 10 and other roles are unaffected.
