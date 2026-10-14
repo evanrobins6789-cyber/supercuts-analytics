@@ -903,8 +903,7 @@
 .hsa-roster-edit:hover { background: var(--navy); color: #fff; }
 .hsa-type-group { margin-bottom: 18px; }
 .hsa-type-group-count { font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 400; color: var(--ink-soft); }
-.hsa-owner-tools { margin-bottom: 4px; display: flex; flex-wrap: wrap; gap: 8px; }
-.hsa-owner-tools > .hsa-class-card { flex: 1 1 100%; }
+.hsa-owner-tools { margin-bottom: 4px; }
 .hsa-class-actions { display: flex; align-items: center; gap: 8px; }
 /* Deliberately not `.btn-ghost` — that class is styled for the dark navy
    header (white text/border on transparent) and renders nearly invisible

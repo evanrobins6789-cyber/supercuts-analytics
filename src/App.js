@@ -1968,17 +1968,11 @@ function HsaTab({ events, hsaSignups, currentUser, onSignUp, onRemoveSignup, onE
       {isOwner && (
         <div className="hsa-owner-tools">
           {!addingClass ? (
-            <>
-              <button className="btn-primary" onClick={() => setAddingClass('blank')}>+ Add Class</button>
-              <button className="btn-primary" onClick={() => setAddingClass('education')}>+ Add Education Class</button>
-            </>
+            <button className="btn-primary" onClick={() => setAddingClass(true)}>+ Add Class</button>
           ) : (
             <div className="hsa-class-card hsa-class-card--editing">
-              <p className="hsa-class-title">{addingClass === 'education' ? 'New Education Class' : 'New class'}</p>
+              <p className="hsa-class-title">New class</p>
               <HsaClassForm
-                // "+ Add Education Class" is the same form with the class
-                // type pre-filled (still editable).
-                initial={addingClass === 'education' ? { eventType: 'Education Class' } : undefined}
                 existingEventTypes={existingEventTypes} submitLabel="Add class"
                 onSubmit={(date, eventType, location, time, endDate) => { onAddClass(date, eventType, location, time, endDate); setAddingClass(false); }}
                 onCancel={() => setAddingClass(false)}
