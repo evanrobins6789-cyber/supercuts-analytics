@@ -36,6 +36,8 @@
 - Confirm the Signature Service tab now shows 1016/$12,142.36 for Aug 1–9 (already corrected directly in Supabase, not just in code) — and if you have a cleaner source for the 1017/$12,154.36 figure you originally gave me, worth checking where that extra unit/$12 comes from.
 - None of the 2026-08-13 changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
 
+Last updated: 2026-10-14 (later). **HSA tab: new owner-only "+ Add Education Class" button next to "+ Add Class" at the top.** It opens the same `HsaClassForm` with the class type pre-filled as "Education Class" (still editable) and saves through the same `handleAddHsaClass`, so it's a normal `manual: true` HSA class (survives re-uploads, shows on the Homepage calendar, in Tilly, and on the HSA Sheet sync as its own "Education Class" tab once someone signs up). No "Education" type existed in live data before this, so the name was my choice; rename it in `HsaTab` if the user wants something else. `addingClass` state changed from a boolean to `false | 'blank' | 'education'`. Verified: `CI=true npm run build` clean. Not checked in a browser.
+
 Last updated: 2026-10-14. **Removed the red "If your name doesn't start with Evan and end in Robins…" banner from the top of the Setup tab** (`SetupTab` in `src/App.js`, plus its unused `.setup-access-banner` CSS). Setup's actual access control is unchanged: the owner-only role plus the setup-wide password gate. Verified: `CI=true npm run build` clean. Pushed to `main`.
 
 Last updated: 2026-10-12. **New standalone Apps Script for leadership goal + Thursday-call agenda emails (`apps-script/leadership-emails.gs`).** No site code changed. Pushed to `main`.
