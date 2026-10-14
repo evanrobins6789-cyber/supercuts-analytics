@@ -62,10 +62,21 @@ const HANDLERS = {
     }
     return `Stylist report saved — ${parsed.storeCount} stores, ${parsed.employeeCount} employees.`;
   },
+  // Merges instead of replacing: each Rallio "New reviews this week" email
+  // only covers ~30 hours, so replacing would wipe the months of history
+  // already on file. Same identity as reviewKey() in App.js. A review that's
+  // already stored is swapped for the incoming copy, so a reply/completed
+  // status added later on Rallio's side still comes through.
   reviews: async (grid, fileName) => {
     const parsed = parseReviewsFromGrid(grid, fileName);
-    await saveRow('reviews', parsed);
-    return `Reviews saved — ${parsed.reviews.length} reviews.`;
+    const reviewKey = r => `${r.code}|${r.postedAt}|${r.userName}|${r.rating}`;
+    const existing = (await loadRow('reviews'))?.reviews || [];
+    const incoming = new Map(parsed.reviews.map(r => [reviewKey(r), r]));
+    const kept = existing.map(r => incoming.get(reviewKey(r)) || r);
+    const keptKeys = new Set(existing.map(reviewKey));
+    const newOnes = parsed.reviews.filter(r => !keptKeys.has(reviewKey(r)));
+    await saveRow('reviews', { ...parsed, reviews: [...kept, ...newOnes] });
+    return `Reviews saved — ${parsed.reviews.length} in file, ${newOnes.length} new, ${kept.length + newOnes.length} on file.`;
   },
   employee_start_dates: async (grid, fileName) => {
     const parsed = parseEmployeeStartDatesFromGrid(grid, fileName);
