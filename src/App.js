@@ -7601,9 +7601,6 @@ function SetupTab({ configured, section, onSection, managersProps, milestoneGoal
   ];
   return (
     <div className="tab-content setup-tab">
-      <div className="setup-access-banner">
-        🚫 If your name doesn't start with Evan and end in Robins, you're not supposed to be here.
-      </div>
       <div className={`setup-status ${configured ? 'setup-status--ok' : 'setup-status--warn'}`}>
         {configured
           ? '✓ Connected to Supabase — your data syncs across devices.'

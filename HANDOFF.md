@@ -36,6 +36,8 @@
 - Confirm the Signature Service tab now shows 1016/$12,142.36 for Aug 1–9 (already corrected directly in Supabase, not just in code) — and if you have a cleaner source for the 1017/$12,154.36 figure you originally gave me, worth checking where that extra unit/$12 comes from.
 - None of the 2026-08-13 changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
 
+Last updated: 2026-10-14. **Removed the red "If your name doesn't start with Evan and end in Robins…" banner from the top of the Setup tab** (`SetupTab` in `src/App.js`, plus its unused `.setup-access-banner` CSS). Setup's actual access control is unchanged: the owner-only role plus the setup-wide password gate. Verified: `CI=true npm run build` clean. Pushed to `main`.
+
 Last updated: 2026-10-12. **New standalone Apps Script for leadership goal + Thursday-call agenda emails (`apps-script/leadership-emails.gs`).** No site code changed. Pushed to `main`.
 - **The ask**: (1) 1st of the month, an email asking each person's goal for the month; (2) 2nd, everyone gets all the goals listed; (3) Wednesday morning, an email asking what each person wants discussed on the Thursday morning call; (4) Wednesday night at midnight, everyone gets the agenda summary.
 - **The user's choices (AskUserQuestion)**: a fixed recipient list typed into the script; people answer by **replying to the email**; goals are free text; asks go out at 8am, and summaries at 12am (the 2nd, and Thursday 12am). Times are Eastern.
