@@ -5368,11 +5368,12 @@ function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery,
     return filterLabels;
   };
 
-  // Prints exactly the Pin List on screen (same stores, search, and filters).
+  // Prints exactly the Pin List on screen (same stores, search, and filters),
+  // grouped by DL with each DL on their own pages.
   const exportPinListPDF = () => {
     const filterLabels = activeFilterLabels().filter(l => l !== 'Mentions an employee by name');
     if (query.trim()) filterLabels.push(`Store search: "${query.trim()}"`);
-    exportPinListToPDF({ stores: pinListRows, dateRange: reviewDateRange, filterLabels }).catch(err => {
+    exportPinListToPDF({ groups: groupStoresByLeader(pinListRows), dateRange: reviewDateRange, filterLabels }).catch(err => {
       console.error('Pin List PDF export failed', err);
       alert('Could not generate the PDF. Please try again.');
     });

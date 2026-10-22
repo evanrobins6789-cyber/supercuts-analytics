@@ -309,11 +309,13 @@ export async function exportReviewsToPDF({ storeName, reviews, dateRange, filter
 }
 
 // Printable Pin List (Reviews tab → "Only reviews mentioning an employee by
-// name" → 📌 Pin List). One section per store, each employee with their
-// mention count and an empty "Given" box to tick off as pins are handed out.
-// `stores` is the same pinListRows the screen shows:
-// [{ name, employees: [{ name, count }] }].
-export async function exportPinListToPDF({ stores, dateRange, filterLabels }) {
+// name" → 📌 Pin List). Grouped by District Leader: each DL starts on a fresh
+// page and no page ever mixes two DLs, so each DL's pages can be handed to
+// them separately. Within a DL, one section per store, each employee with
+// their mention count and an empty "Given" box to tick off as pins go out.
+// `groups` is groupStoresByLeader(pinListRows) from App.js:
+// [{ leaderName, role, stores: [{ name, employees: [{ name, count }] }] }].
+export async function exportPinListToPDF({ groups, dateRange, filterLabels }) {
   const { jsPDF } = await import('jspdf');
   const doc = new jsPDF({ unit: 'pt', format: 'letter' });
 
@@ -322,28 +324,36 @@ export async function exportPinListToPDF({ stores, dateRange, filterLabels }) {
     : dateRange?.start ? `From ${fmtDate(dateRange.start)}`
     : dateRange?.end ? `Through ${fmtDate(dateRange.end)}`
     : 'All time';
-  const totalPins = stores.reduce((s, st) => s + st.employees.reduce((a, e) => a + e.count, 0), 0);
-  const totalPeople = stores.reduce((s, st) => s + st.employees.length, 0);
+  const pinsIn = stores => stores.reduce((s, st) => s + st.employees.reduce((a, e) => a + e.count, 0), 0);
   const generatedStamp = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
 
   const ROW_H = 20;
   const COL_COUNT_X = PAGE_MARGIN + CONTENT_WIDTH - 90; // right edge of "Mentions"
   const COL_BOX_X = PAGE_MARGIN + CONTENT_WIDTH - 40;   // "Given" checkbox
 
-  const drawHeader = () => {
+  // Every page's header names the DL it belongs to, so a page pulled out of
+  // the stack still says whose it is.
+  const drawHeader = group => {
     doc.setFillColor(NAVY);
     doc.rect(0, 0, PAGE_WIDTH, HEADER_HEIGHT, 'F');
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(17);
     doc.setTextColor('#ffffff');
-    doc.text('Pin List', PAGE_MARGIN, 28);
+    doc.text(group ? `Pin List · ${group.leaderName}` : 'Pin List', PAGE_MARGIN, 28);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9.5);
     doc.setTextColor('#B9C6D6');
-    doc.text('Employees mentioned by name in reviews · one mention, one pin', PAGE_MARGIN, 42);
+    const sub = group
+      ? `${group.role && group.role !== group.leaderName ? `${group.role} · ` : ''}${group.stores.length} store${group.stores.length !== 1 ? 's' : ''} · one mention, one pin`
+      : 'Employees mentioned by name in reviews · one mention, one pin';
+    doc.text(sub, PAGE_MARGIN, 42);
     doc.setFontSize(9);
     doc.text(rangeLabel, PAGE_WIDTH - PAGE_MARGIN, 28, { align: 'right' });
-    doc.text(`${totalPins} pin${totalPins !== 1 ? 's' : ''} · ${totalPeople} employee${totalPeople !== 1 ? 's' : ''}`, PAGE_WIDTH - PAGE_MARGIN, 42, { align: 'right' });
+    if (group) {
+      const pins = pinsIn(group.stores);
+      const people = group.stores.reduce((s, st) => s + st.employees.length, 0);
+      doc.text(`${pins} pin${pins !== 1 ? 's' : ''} · ${people} employee${people !== 1 ? 's' : ''}`, PAGE_WIDTH - PAGE_MARGIN, 42, { align: 'right' });
+    }
   };
   const drawFooter = pageNum => {
     doc.setFont('helvetica', 'normal');
@@ -355,24 +365,26 @@ export async function exportPinListToPDF({ stores, dateRange, filterLabels }) {
 
   let y = HEADER_HEIGHT + 22;
   let pageNum = 1;
-  drawHeader();
-  const newPage = () => {
+  drawHeader(groups[0] || null);
+  const newPage = group => {
     drawFooter(pageNum);
     doc.addPage();
     pageNum += 1;
     y = HEADER_HEIGHT + 22;
-    drawHeader();
+    drawHeader(group);
   };
-  const ensureRoom = needed => { if (y + needed > PAGE_HEIGHT - FOOTER_SAFE) newPage(); };
 
-  if (filterLabels && filterLabels.length) {
+  const drawFilters = () => {
+    if (!filterLabels || !filterLabels.length) return;
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9.5);
     doc.setTextColor(INK_SOFT);
     doc.text(`Filters: ${filterLabels.join(' · ').replace(/★/g, ' stars')}`, PAGE_MARGIN, y);
     y += 18;
-  }
-  if (!stores.length) {
+  };
+
+  if (!groups.length) {
+    drawFilters();
     doc.setFont('helvetica', 'italic');
     doc.setFontSize(10);
     doc.setTextColor(INK_SOFT);
@@ -391,7 +403,7 @@ export async function exportPinListToPDF({ stores, dateRange, filterLabels }) {
 
   // Header for one store; `cont` marks a store that spilled onto a new page.
   const drawStoreHead = (store, cont) => {
-    const pins = store.employees.reduce((a, e) => a + e.count, 0);
+    const pins = pinsIn([store]);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(12);
     doc.setTextColor(NAVY);
@@ -407,28 +419,32 @@ export async function exportPinListToPDF({ stores, dateRange, filterLabels }) {
     drawColumnHeads();
   };
 
-  stores.forEach(store => {
-    // Keep a store's header with at least its first two rows.
-    ensureRoom(42 + ROW_H * Math.min(2, store.employees.length));
-    drawStoreHead(store, false);
-    store.employees.forEach((e, i) => {
-      if (y + ROW_H > PAGE_HEIGHT - FOOTER_SAFE) { newPage(); drawStoreHead(store, true); }
-      if (i % 2 === 0) {
-        doc.setFillColor(PAPER);
-        doc.rect(PAGE_MARGIN, y, CONTENT_WIDTH, ROW_H, 'F');
-      }
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(10);
-      doc.setTextColor(INK);
-      doc.text(e.name, PAGE_MARGIN + 10, y + 13.5);
-      doc.setFont('helvetica', 'bold');
-      doc.text(String(e.count), COL_COUNT_X, y + 13.5, { align: 'right' });
-      doc.setDrawColor(INK_SOFT);
-      doc.setFillColor('#ffffff');
-      doc.rect(COL_BOX_X, y + 4, 12, 12, 'FD');
-      y += ROW_H;
+  groups.forEach((group, gi) => {
+    if (gi > 0) newPage(group); // never share a page with the previous DL
+    drawFilters();
+    group.stores.forEach(store => {
+      // Keep a store's header with at least its first two rows.
+      if (y + 42 + ROW_H * Math.min(2, store.employees.length) > PAGE_HEIGHT - FOOTER_SAFE) newPage(group);
+      drawStoreHead(store, false);
+      store.employees.forEach((e, i) => {
+        if (y + ROW_H > PAGE_HEIGHT - FOOTER_SAFE) { newPage(group); drawStoreHead(store, true); }
+        if (i % 2 === 0) {
+          doc.setFillColor(PAPER);
+          doc.rect(PAGE_MARGIN, y, CONTENT_WIDTH, ROW_H, 'F');
+        }
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        doc.setTextColor(INK);
+        doc.text(e.name, PAGE_MARGIN + 10, y + 13.5);
+        doc.setFont('helvetica', 'bold');
+        doc.text(String(e.count), COL_COUNT_X, y + 13.5, { align: 'right' });
+        doc.setDrawColor(INK_SOFT);
+        doc.setFillColor('#ffffff');
+        doc.rect(COL_BOX_X, y + 4, 12, 12, 'FD');
+        y += ROW_H;
+      });
+      y += 16;
     });
-    y += 16;
   });
 
   drawFooter(pageNum);
