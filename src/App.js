@@ -1609,9 +1609,10 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
   const top10Metrics = top10Mode === 'employee' ? EMPLOYEE_METRICS : STORE_METRICS;
 
   // Managers and DLs only have their own stores' data, so their charts come
-  // from api/store-rank.js instead: a manager gets their store's company rank
-  // with the 5 stores above and below (Stores view; Employees stays their own
-  // store), a DL gets the company-wide Top 10 stores and employees.
+  // from api/store-rank.js instead, in the Stores view only: a manager gets
+  // their store's company rank with the 5 stores above and below, a DL gets
+  // the company-wide Top 10 stores. The Employees view is unchanged — still
+  // just the DL's / manager's own employees.
   const rankStart = reportUsable ? report.startDateISO : top10Range.start;
   const rankEnd = reportUsable ? report.endDateISO : top10Range.end;
   const rankKey = rankToken && rankStart && rankEnd ? `${rankStart}|${rankEnd}` : null;
@@ -1626,13 +1627,13 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
     return () => { cancelled = true; };
   }, [rankKey, rankToken, rankStart, rankEnd]);
   const rankData = rank.key === rankKey ? rank.data : null;
-  const usesCompanyRank = !!rankKey && (rankRole === 'district_leader' || top10Mode === 'store');
+  const usesCompanyRank = !!rankKey && top10Mode === 'store';
   const rankLoading = usesCompanyRank && !rankData && !(rank.key === rankKey && rank.error);
   const rankFailed = usesCompanyRank && rank.key === rankKey && !!rank.error;
   const chartPropsFor = key => {
     if (!usesCompanyRank || !rankData) return { rows: top10Rows };
     if (rankRole === 'district_leader') {
-      return { rows: (top10Mode === 'employee' ? rankData.top10?.employees?.[key] : rankData.top10?.stores?.[key]) || [] };
+      return { rows: rankData.top10?.stores?.[key] || [] };
     }
     const win = Object.values(rankData.windows?.[key] || {})[0];
     return win ? { rows: [], rankWindow: win.map(r => ({ ...r, [key]: r.value })) } : { rows: [] };
@@ -1702,7 +1703,7 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
             {usesCompanyRank && (
               <p className="section-hint">
                 {rankRole === 'district_leader'
-                  ? `Company-wide Top 10 ${top10Mode === 'employee' ? 'employees' : 'stores'}${rankData ? ` (${rankData.storeCount} stores)` : ''}.`
+                  ? `Company-wide Top 10 stores${rankData ? ` (out of ${rankData.storeCount})` : ''}.`
                   : `Where your store ranks company-wide${rankData ? ` out of ${rankData.storeCount} stores` : ''}, with the 5 stores above and below you.`}
               </p>
             )}
@@ -6790,7 +6791,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
 
 // Manager logins: month-to-date company-wide rank for their store(s) on
 // every Overview metric, plus the 5 stores above and below. DL logins: the
-// company-wide Top 10 stores and employees (both from api/store-rank.js).
+// company-wide Top 10 stores (both from api/store-rank.js).
 // Fetched at question time since the manager's own data can't produce it.
 async function buildRankContext(rankToken) {
   if (!rankToken) return '';
@@ -6798,13 +6799,11 @@ async function buildRankContext(rankToken) {
   const res = await storeRank(rankToken, range.start, range.end);
   if (!res.ok) return '';
   if (res.top10) {
-    // District Leader: company-wide Top 10 stores and employees.
-    const out = ['', `COMPANY-WIDE TOP 10s (month to date ${range.start} to ${range.end}, all ${res.storeCount} stores — this DL's other data only covers their own stores):`];
+    // District Leader: company-wide Top 10 stores (no other DLs' employees).
+    const out = ['', `COMPANY-WIDE TOP 10 STORES (month to date ${range.start} to ${range.end}, all ${res.storeCount} stores — this DL's other data only covers their own stores and employees):`];
     STORE_METRICS.forEach(m => {
       const stores = res.top10.stores?.[m.key] || [];
       if (stores.length) out.push(`Top 10 stores by ${m.label}: ${stores.map((r, i) => `${i + 1}. ${r.name} ${m.fmt(r[m.key], r)}`).join('; ')}`);
-      const emps = res.top10.employees?.[m.key] || [];
-      if (emps.length && m.key !== 'signatureS') out.push(`Top 10 employees by ${m.label}: ${emps.map((e, i) => `${i + 1}. ${e.name} (${e.store}) ${m.fmt(e[m.key], e)}`).join('; ')}`);
     });
     return out.join('\n');
   }

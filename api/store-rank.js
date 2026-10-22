@@ -8,15 +8,14 @@
 // No employee-level data and no stores outside that window leave the server.
 // Used by the manager's Overview tab and Homepage Top 10 charts.
 //
-// District Leaders instead get the company-wide Top 10 stores and Top 10
-// employees (Homepage Top 10 charts), since their own data is also scoped
-// to just their stores.
+// District Leaders instead get the company-wide Top 10 stores (Homepage Top
+// 10 charts, Stores view), since their own data is also scoped to just their
+// stores. No employee-level data is returned to either role.
 //
 // Request: POST { token, start, end } (ISO dates, the tab's range).
 // Manager response: { ok, storeCount, windows: { [metricKey]: { [ownCode]: [row] } } }
 // where row = { rank, code, name, value, isMine, signatureSCount, cpdLY }.
-// DL response: { ok, storeCount, top10: { stores: { [metricKey]: [storeRow] },
-// employees: { [metricKey]: [{ name, store, [metricKey] }] } } }.
+// DL response: { ok, storeCount, top10: { stores: { [metricKey]: [storeRow] } } }.
 // Every metric is computed in one call so clicking between Overview tiles
 // doesn't need another round trip.
 
@@ -108,18 +107,12 @@ export default async function handler(req, res) {
     });
 
     if (employee.role === 'district_leader') {
-      // Company-wide Top 10s, same "skip blanks, then top 10" rule as the
-      // Homepage's TopTenChart. Employee rows carry only name, store, and
-      // the one metric being ranked.
-      const top10Of = (list, key) => sortByMetric(list.filter(r => r[key] != null), key, 'desc').slice(0, 10);
-      const employees = Object.entries(totals).flatMap(([code, t]) => {
-        const storeName = STORE_CODE_TO_NAME[code] || `Store ${code}`;
-        return historyTotalsToReportShape(t).employees.map(e => ({ ...e, store: storeName }));
-      });
-      const top10 = { stores: {}, employees: {} };
+      // Company-wide Top 10 stores, same "skip blanks, then top 10" rule as
+      // the Homepage's TopTenChart. Store-level only: a DL still never gets
+      // another DL's employees.
+      const top10 = { stores: {} };
       METRIC_KEYS.forEach(key => {
-        top10.stores[key] = top10Of(rows, key);
-        if (key !== 'cpd') top10.employees[key] = top10Of(employees, key).map(e => ({ name: e.name, store: e.store, [key]: e[key] }));
+        top10.stores[key] = sortByMetric(rows.filter(r => r[key] != null), key, 'desc').slice(0, 10);
       });
       res.status(200).json({ ok: true, storeCount: rows.length, top10 });
       return;
