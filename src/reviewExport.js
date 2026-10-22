@@ -162,7 +162,7 @@ export async function exportReviewsToPDF({ storeName, reviews, dateRange, filter
   doc.setFontSize(9.5);
   doc.setTextColor(INK_SOFT);
   if (filterLabels && filterLabels.length) {
-    doc.text(`Filters: ${filterLabels.join(' · ')}`, PAGE_MARGIN, y);
+    doc.text(`Filters: ${filterLabels.join(' · ').replace(/★/g, ' stars')}`, PAGE_MARGIN, y);
     y += 16;
   }
 
@@ -306,4 +306,132 @@ export async function exportReviewsToPDF({ storeName, reviews, dateRange, filter
   const stamp = new Date().toISOString().slice(0, 10);
   const safeName = String(storeName).replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '');
   doc.save(`${safeName}-reviews-${stamp}.pdf`);
+}
+
+// Printable Pin List (Reviews tab → "Only reviews mentioning an employee by
+// name" → 📌 Pin List). One section per store, each employee with their
+// mention count and an empty "Given" box to tick off as pins are handed out.
+// `stores` is the same pinListRows the screen shows:
+// [{ name, employees: [{ name, count }] }].
+export async function exportPinListToPDF({ stores, dateRange, filterLabels }) {
+  const { jsPDF } = await import('jspdf');
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+
+  const rangeLabel = dateRange?.start && dateRange?.end
+    ? `${fmtDate(dateRange.start)} – ${fmtDate(dateRange.end)}`
+    : dateRange?.start ? `From ${fmtDate(dateRange.start)}`
+    : dateRange?.end ? `Through ${fmtDate(dateRange.end)}`
+    : 'All time';
+  const totalPins = stores.reduce((s, st) => s + st.employees.reduce((a, e) => a + e.count, 0), 0);
+  const totalPeople = stores.reduce((s, st) => s + st.employees.length, 0);
+  const generatedStamp = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+  const ROW_H = 20;
+  const COL_COUNT_X = PAGE_MARGIN + CONTENT_WIDTH - 90; // right edge of "Mentions"
+  const COL_BOX_X = PAGE_MARGIN + CONTENT_WIDTH - 40;   // "Given" checkbox
+
+  const drawHeader = () => {
+    doc.setFillColor(NAVY);
+    doc.rect(0, 0, PAGE_WIDTH, HEADER_HEIGHT, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(17);
+    doc.setTextColor('#ffffff');
+    doc.text('Pin List', PAGE_MARGIN, 28);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor('#B9C6D6');
+    doc.text('Employees mentioned by name in reviews · one mention, one pin', PAGE_MARGIN, 42);
+    doc.setFontSize(9);
+    doc.text(rangeLabel, PAGE_WIDTH - PAGE_MARGIN, 28, { align: 'right' });
+    doc.text(`${totalPins} pin${totalPins !== 1 ? 's' : ''} · ${totalPeople} employee${totalPeople !== 1 ? 's' : ''}`, PAGE_WIDTH - PAGE_MARGIN, 42, { align: 'right' });
+  };
+  const drawFooter = pageNum => {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor('#9AA7B4');
+    doc.text(`Generated ${generatedStamp}`, PAGE_MARGIN, PAGE_HEIGHT - 16);
+    doc.text(`Page ${pageNum} of {total_pages}`, PAGE_WIDTH - PAGE_MARGIN, PAGE_HEIGHT - 16, { align: 'right' });
+  };
+
+  let y = HEADER_HEIGHT + 22;
+  let pageNum = 1;
+  drawHeader();
+  const newPage = () => {
+    drawFooter(pageNum);
+    doc.addPage();
+    pageNum += 1;
+    y = HEADER_HEIGHT + 22;
+    drawHeader();
+  };
+  const ensureRoom = needed => { if (y + needed > PAGE_HEIGHT - FOOTER_SAFE) newPage(); };
+
+  if (filterLabels && filterLabels.length) {
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(INK_SOFT);
+    doc.text(`Filters: ${filterLabels.join(' · ').replace(/★/g, ' stars')}`, PAGE_MARGIN, y);
+    y += 18;
+  }
+  if (!stores.length) {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(10);
+    doc.setTextColor(INK_SOFT);
+    doc.text('No mentions match the current view.', PAGE_MARGIN, y);
+  }
+
+  const drawColumnHeads = () => {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(INK_SOFT);
+    doc.text('EMPLOYEE', PAGE_MARGIN + 10, y + 10);
+    doc.text('MENTIONS', COL_COUNT_X, y + 10, { align: 'right' });
+    doc.text('GIVEN', COL_BOX_X + 6, y + 10, { align: 'center' });
+    y += 16;
+  };
+
+  // Header for one store; `cont` marks a store that spilled onto a new page.
+  const drawStoreHead = (store, cont) => {
+    const pins = store.employees.reduce((a, e) => a + e.count, 0);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(NAVY);
+    doc.text(`${store.name}${cont ? ' (continued)' : ''}`, PAGE_MARGIN, y + 12);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(INK_SOFT);
+    doc.text(`${pins} pin${pins !== 1 ? 's' : ''}`, PAGE_MARGIN + CONTENT_WIDTH, y + 12, { align: 'right' });
+    y += 18;
+    doc.setDrawColor(NAVY);
+    doc.line(PAGE_MARGIN, y, PAGE_MARGIN + CONTENT_WIDTH, y);
+    y += 4;
+    drawColumnHeads();
+  };
+
+  stores.forEach(store => {
+    // Keep a store's header with at least its first two rows.
+    ensureRoom(42 + ROW_H * Math.min(2, store.employees.length));
+    drawStoreHead(store, false);
+    store.employees.forEach((e, i) => {
+      if (y + ROW_H > PAGE_HEIGHT - FOOTER_SAFE) { newPage(); drawStoreHead(store, true); }
+      if (i % 2 === 0) {
+        doc.setFillColor(PAPER);
+        doc.rect(PAGE_MARGIN, y, CONTENT_WIDTH, ROW_H, 'F');
+      }
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      doc.setTextColor(INK);
+      doc.text(e.name, PAGE_MARGIN + 10, y + 13.5);
+      doc.setFont('helvetica', 'bold');
+      doc.text(String(e.count), COL_COUNT_X, y + 13.5, { align: 'right' });
+      doc.setDrawColor(INK_SOFT);
+      doc.setFillColor('#ffffff');
+      doc.rect(COL_BOX_X, y + 4, 12, 12, 'FD');
+      y += ROW_H;
+    });
+    y += 16;
+  });
+
+  drawFooter(pageNum);
+  if (typeof doc.putTotalPages === 'function') doc.putTotalPages('{total_pages}');
+  doc.save(`pin-list-${new Date().toISOString().slice(0, 10)}.pdf`);
 }

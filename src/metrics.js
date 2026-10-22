@@ -280,3 +280,41 @@ export function sortByMetric(rows, key, order = 'desc') {
   }
   return arr;
 }
+
+// "2026-09-01" -> "2025-09-01". Feb 29 falls back to Feb 28 in a non-leap
+// year, so a last-year range is always a real date range.
+export function shiftYearISO(iso, years) {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  const ny = y + years;
+  const lastDay = new Date(ny, m, 0).getDate();
+  return `${ny}-${String(m).padStart(2, '0')}-${String(Math.min(d, lastDay)).padStart(2, '0')}`;
+}
+
+// Cuts Per Day inputs per store for a date range: total haircuts (same
+// getRangeTotals figure the Cuts tile uses) and the number of days that
+// store actually did cuts. Counting only days with cuts > 0 means holiday/
+// snow-day closures (company-wide zero days, see HANDOFF.md) don't drag the
+// average down. A weekly Stylist Report week only contributes its days for a
+// store that has no daily Sales-Accrual rows in that week (weekly data has
+// no per-day detail, so all its days count).
+export function getStoreCutsPerDay(history, weeklyHistory, start, end) {
+  const totals = getRangeTotals(history, weeklyHistory, start, end);
+  const days = {};
+  const addDay = (code, d) => { if (!days[code]) days[code] = new Set(); days[code].add(d); };
+  Object.values(history || {}).forEach(r => {
+    if (r.date >= start && r.date <= end && (r.haircuts || 0) > 0) addDay(r.code, r.date);
+  });
+  Object.values(weeklyHistory || {}).forEach(w => {
+    if (w.startDate < start || w.endDate > end) return;
+    const weekDays = expandDateRangeDays(w.startDate, w.endDate);
+    Object.entries(w.stores || {}).forEach(([code, v]) => {
+      if ((v.haircuts || 0) <= 0) return;
+      if (weekDays.some(d => days[code]?.has(d))) return;
+      weekDays.forEach(d => addDay(code, d));
+    });
+  });
+  const out = {};
+  Object.entries(totals).forEach(([code, t]) => { out[code] = { cuts: t.haircuts || 0, days: days[code]?.size || 0 }; });
+  return out;
+}
+export const cpdOf = entry => (entry && entry.days > 0 ? entry.cuts / entry.days : null);

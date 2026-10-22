@@ -252,6 +252,12 @@
 .leaderboard-value { font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; font-weight: 600; color: var(--red-deep); white-space: nowrap; }
 .leaderboard-bar-track { height: 5px; background: var(--line); border-radius: 3px; margin-top: 4px; overflow: hidden; }
 .leaderboard-bar-fill { height: 100%; background: linear-gradient(90deg, var(--red-deep), var(--red)); border-radius: 3px; }
+/* Manager "where you rank" window: real company-wide ranks, own store highlighted. */
+.rank-window .rank-badge { width: auto; min-width: 30px; padding: 0 6px; border-radius: 13px; }
+.rank-window .leaderboard-row--mine { background: #FFF6D6; border: 1px solid var(--gold); border-radius: 10px; padding: 7px 8px; margin: 2px -9px; }
+.rank-window .leaderboard-row--mine .leaderboard-name { font-weight: 700; }
+.rank-window .leaderboard-row--mine .rank-badge { background: var(--gold); color: #3A2E00; }
+.rank-window-sub { font-size: 12px; color: var(--ink-soft); margin: -6px 0 10px; }
 
 /* ─── Charts ─────────────────────────────────────────────────────────── */
 .chart-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; box-shadow: var(--shadow); }
@@ -504,8 +510,11 @@
 .homepage-corevalue-card { animation: homepage-fade-in 0.4s ease; }
 .homepage-corevalue-title {
   font-family: 'Barlow Condensed', sans-serif; font-size: 19px; font-weight: 700;
-  text-transform: uppercase; color: var(--navy); display: flex; align-items: center; flex-wrap: wrap;
+  text-transform: uppercase; color: var(--navy); line-height: 1.2;
 }
+/* Plain inline flow, not flex: flex dropped the space before the subtitle
+   span, which rendered "Serve Others First" as "SERVEOTHERS FIRST". */
+.homepage-corevalue-title .homepage-hero-icon { margin-right: 6px; }
 .homepage-corevalue-title .homepage-hero-subtitle {
   font-family: inherit; font-size: inherit; font-weight: inherit; text-transform: inherit; color: inherit; opacity: 1;
 }

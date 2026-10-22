@@ -13,16 +13,17 @@ import {
   loadScoped, loadScopedByPrefix, saveScoped, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
   pointsBalance, pointsAllBalances, pointsTransactions, pointsDeleteTransaction,
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled,
-  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates,
+  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank,
 } from './auth';
 import { LEADER_ROSTER_SECTIONS as REAL_LEADER_ROSTER_SECTIONS, getLeaderForStoreCode as realGetLeaderForStoreCode } from './leaderRoster';
 import { isPresenting, initPresenterMode, setPresenterMode, presenterView, fakeLeaderSections, fakePersonName } from './presenter';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
 import { LEASE_STORE_CODE_TO_NAME, LEASE_INACTIVE_CODES, leaseStoreName, matchStoreCodeFromPath, extractTermDatesFromFilename } from './leaseStoreDirectory';
-import { exportReviewsToPDF } from './reviewExport';
+import { exportReviewsToPDF, exportPinListToPDF } from './reviewExport';
 import {
   EMPTY_RANGE_TOTALS, addRangeInto, expandDateRangeDays, mergeEmployeesInto, finalizeEmployee,
   getRangeTotals, historyTotalsToReportShape, rollupRows, addDaysISO, isoWeekStart, getLastFullWeekRange, sortByMetric,
+  shiftYearISO, getStoreCutsPerDay, cpdOf,
 } from './metrics';
 import { BITMOJI_POOLS } from './bitmoji';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
@@ -520,43 +521,6 @@ function getCurrentMonthRange() {
   return { start: toISO(first), end: toISO(now) };
 }
 
-// "2026-09-01" -> "2025-09-01". Feb 29 falls back to Feb 28 in a non-leap
-// year, so a last-year range is always a real date range.
-function shiftYearISO(iso, years) {
-  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
-  const ny = y + years;
-  const lastDay = new Date(ny, m, 0).getDate();
-  return `${ny}-${String(m).padStart(2, '0')}-${String(Math.min(d, lastDay)).padStart(2, '0')}`;
-}
-
-// Cuts Per Day inputs per store for a date range: total haircuts (same
-// getRangeTotals figure the Cuts tile uses) and the number of days that
-// store actually did cuts. Counting only days with cuts > 0 means holiday/
-// snow-day closures (company-wide zero days, see HANDOFF.md) don't drag the
-// average down. A weekly Stylist Report week only contributes its days for a
-// store that has no daily Sales-Accrual rows in that week (weekly data has
-// no per-day detail, so all its days count).
-function getStoreCutsPerDay(history, weeklyHistory, start, end) {
-  const totals = getRangeTotals(history, weeklyHistory, start, end);
-  const days = {};
-  const addDay = (code, d) => { if (!days[code]) days[code] = new Set(); days[code].add(d); };
-  Object.values(history || {}).forEach(r => {
-    if (r.date >= start && r.date <= end && (r.haircuts || 0) > 0) addDay(r.code, r.date);
-  });
-  Object.values(weeklyHistory || {}).forEach(w => {
-    if (w.startDate < start || w.endDate > end) return;
-    const weekDays = expandDateRangeDays(w.startDate, w.endDate);
-    Object.entries(w.stores || {}).forEach(([code, v]) => {
-      if ((v.haircuts || 0) <= 0) return;
-      if (weekDays.some(d => days[code]?.has(d))) return;
-      weekDays.forEach(d => addDay(code, d));
-    });
-  });
-  const out = {};
-  Object.entries(totals).forEach(([code, t]) => { out[code] = { cuts: t.haircuts || 0, days: days[code]?.size || 0 }; });
-  return out;
-}
-const cpdOf = entry => (entry && entry.days > 0 ? entry.cuts / entry.days : null);
 // Company-level CPD = average per store per day (total cuts ÷ total
 // store-days), so it reads on the same scale as a single store's CPD.
 function companyCpd(byStore, codes) {
@@ -684,6 +648,35 @@ function Leaderboard({ rows, metric, formatter, title, count = 8, order = 'desc'
         </div>
       ))}
       {!ranked.length && <p className="empty-note">No results.</p>}
+    </div>
+  );
+}
+
+// Manager-only stand-in for Top 10 / Bottom 10 on the Overview tab: their
+// store plus the 5 stores directly above and below it, numbered by real
+// company-wide rank. Rows come from api/store-rank.js, since a manager's
+// own data never includes other stores' numbers.
+function RankWindow({ rows, storeCount, formatter, title }) {
+  const maxVal = Math.max(...rows.map(s => Math.abs(s.value || 0)), 1);
+  const mine = rows.find(r => r.isMine);
+  return (
+    <div className="leaderboard rank-window">
+      <p className="leaderboard-title">{title}</p>
+      {mine && <p className="rank-window-sub">{mine.name} is #{mine.rank} of {storeCount} stores company-wide</p>}
+      {rows.map(s => (
+        <div className={`leaderboard-row ${s.isMine ? 'leaderboard-row--mine' : ''}`} key={s.code}>
+          <div className="rank-badge">{s.rank}</div>
+          <div className="leaderboard-body">
+            <div className="leaderboard-row-head">
+              <span className="leaderboard-name">{s.name}{s.isMine ? ' (you)' : ''}</span>
+              <span className="leaderboard-value">{formatter(s.value, s)}</span>
+            </div>
+            <div className="leaderboard-bar-track">
+              <div className="leaderboard-bar-fill" style={{ width: `${Math.max(4, (Math.abs(s.value || 0) / maxVal) * 100)}%` }} />
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1387,13 +1380,13 @@ function CoreValuesWidget({ bitmojiImg, bitmojiActive }) {
   return (
     <div className="homepage-widget">
       <div className="homepage-widget-head">
-        <p className="homepage-widget-title">🧭 Core Values</p>
+        <p className="homepage-widget-title">🧭 Our Core Values</p>
         <span className="homepage-spotlight-count">{index + 1} / {CORE_VALUES.length}</span>
       </div>
       <div key={v.n} className="homepage-corevalue-card">
         <p className="homepage-corevalue-title">
-          <span className="homepage-hero-icon">{v.icon}</span>{v.title}
-          {v.subtitle && <span className="homepage-hero-subtitle"> {v.subtitle}</span>}
+          <span className="homepage-hero-icon">{v.icon}</span>{v.title}{v.subtitle ? ' ' : ''}
+          {v.subtitle && <span className="homepage-hero-subtitle">{v.subtitle}</span>}
         </p>
         <div className="homepage-corevalue-body-wrap"><p className="homepage-corevalue-body">{v.body}</p></div>
       </div>
@@ -2836,7 +2829,7 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews, currentUser, n
 
 // ─── Overview tab ───────────────────────────────────────────────────────────
 // ─── Overview tab (top-10/bottom-10 leaderboards, plus the full store list) ─
-function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery, managers, isOwner, goals, giftCardHistory }) {
+function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery, managers, isOwner, goals, giftCardHistory, rankToken }) {
   const [sortBy, setSortBy] = useState('tsth');
   const getSalesGoal = code => goals?.[code]?.salesGoal ?? null;
   const [expanded, setExpanded] = useState({});
@@ -2882,6 +2875,22 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
     () => (showGiftCards && cpdStart && cpdEnd ? getGiftCardRangeTotals(giftCardHistory, cpdStart, cpdEnd) : null),
     [showGiftCards, giftCardHistory, cpdStart, cpdEnd]
   );
+  // Managers: company-wide rank window from the server, over the same range
+  // as CPD. `rank` holds the response for one range at a time.
+  const [rank, setRank] = useState({ key: null, data: null, error: null });
+  const rankKey = rankToken && cpdStart && cpdEnd ? `${cpdStart}|${cpdEnd}` : null;
+  useEffect(() => {
+    if (!rankKey) return;
+    let cancelled = false;
+    setRank({ key: rankKey, data: null, error: null });
+    storeRank(rankToken, cpdStart, cpdEnd).then(res => {
+      if (cancelled) return;
+      setRank({ key: rankKey, data: res.ok ? res : null, error: res.ok ? null : res.error });
+    });
+    return () => { cancelled = true; };
+  }, [rankKey, rankToken, cpdStart, cpdEnd]);
+  const rankWindows = rank.key === rankKey ? rank.data?.windows?.[metric.key] : null;
+
   const rowsWithCpd = useMemo(
     () => storeRows.map(r => ({
       ...r, cpd: cpdOf(cpdData?.cur?.[r.code]), cpdLY: cpdOf(cpdData?.ly?.[r.code]),
@@ -2918,7 +2927,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
       {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores or employees…" />
 
-      <p className="section-hint">Tap any metric to see the top 10 and bottom 10 stores for it.</p>
+      <p className="section-hint">{rankToken ? 'Tap any metric to see where your store ranks company-wide, with the 5 stores above and below you.' : 'Tap any metric to see the top 10 and bottom 10 stores for it.'}</p>
       <div className="summary-grid">
         {metrics.map(m => (
           <button
@@ -2932,10 +2941,26 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
         ))}
       </div>
 
-      <div className="leaderboard-grid">
-        <Leaderboard rows={filtered} metric={metric.key} formatter={metric.fmt} title={`Top 10 — ${metric.label}`} count={10} order="desc" />
-        <Leaderboard rows={filtered} metric={metric.key} formatter={metric.fmt} title={`Bottom 10 — ${metric.label}`} count={10} order="asc" />
-      </div>
+      {rankToken ? (
+        rankWindows && Object.keys(rankWindows).length ? (
+          <div className="leaderboard-grid">
+            {Object.entries(rankWindows).map(([code, rows]) => (
+              <RankWindow key={code} rows={rows} storeCount={rank.data.storeCount} formatter={metric.fmt} title={`Your Company Rank — ${metric.label}`} />
+            ))}
+          </div>
+        ) : (
+          <p className="empty-note">
+            {rank.key !== rankKey || (!rank.data && !rank.error) ? 'Loading your company ranking…'
+              : rank.error ? `Couldn't load your company ranking: ${rank.error}`
+              : 'No ranking data for your store in this date range.'}
+          </p>
+        )
+      ) : (
+        <div className="leaderboard-grid">
+          <Leaderboard rows={filtered} metric={metric.key} formatter={metric.fmt} title={`Top 10 — ${metric.label}`} count={10} order="desc" />
+          <Leaderboard rows={filtered} metric={metric.key} formatter={metric.fmt} title={`Bottom 10 — ${metric.label}`} count={10} order="asc" />
+        </div>
+      )}
 
       <div className="ledger-head-row">
         <p className="section-label">{filtered.length} of {storeRows.length} stores{isHistorical ? ' (historical)' : ''}</p>
@@ -5334,13 +5359,28 @@ function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery,
     return { reviewList, employeesForStore };
   };
 
-  const exportStoreReviewsPDF = s => {
-    const { reviewList, employeesForStore } = getStoreReviewData(s);
+  const activeFilterLabels = () => {
     const filterLabels = [];
     if (category) filterLabels.push(`Category: ${activeCat.label} (negative only)`);
     else if (sentiment === 'pos') filterLabels.push('Positive (4–5★) only');
     else if (sentiment === 'neg') filterLabels.push('Negative (1–3★) only');
     if (mentionedOnly) filterLabels.push('Mentions an employee by name');
+    return filterLabels;
+  };
+
+  // Prints exactly the Pin List on screen (same stores, search, and filters).
+  const exportPinListPDF = () => {
+    const filterLabels = activeFilterLabels().filter(l => l !== 'Mentions an employee by name');
+    if (query.trim()) filterLabels.push(`Store search: "${query.trim()}"`);
+    exportPinListToPDF({ stores: pinListRows, dateRange: reviewDateRange, filterLabels }).catch(err => {
+      console.error('Pin List PDF export failed', err);
+      alert('Could not generate the PDF. Please try again.');
+    });
+  };
+
+  const exportStoreReviewsPDF = s => {
+    const { reviewList, employeesForStore } = getStoreReviewData(s);
+    const filterLabels = activeFilterLabels();
     exportReviewsToPDF({
       storeName: s.name,
       dateRange: reviewDateRange,
@@ -5532,6 +5572,11 @@ function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery,
         <>
           <p className="section-hint">Quick reference for handing out pins — one mention, one pin. Respects the sentiment/category filters above.</p>
           <SearchBox value={query} onChange={onQuery} placeholder="Search stores…" />
+          {canExportReviews && (
+            <button type="button" className="review-export-btn" style={{ alignSelf: 'flex-start' }} onClick={exportPinListPDF} disabled={!pinListRows.length}>
+              ⬇ Export Pin List PDF (to print)
+            </button>
+          )}
           <div className="dl-list">
             {pinListRows.map(s => (
               <div key={s.code} className="dl-card">
@@ -6687,7 +6732,26 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   return lines.join('\n');
 }
 
-function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory }) {
+// Manager logins only: month-to-date company-wide rank for their store(s) on
+// every Overview metric, plus the 5 stores above and below (api/store-rank.js).
+// Fetched at question time since the manager's own data can't produce it.
+async function buildRankContext(rankToken) {
+  if (!rankToken) return '';
+  const range = getCurrentMonthRange();
+  const res = await storeRank(rankToken, range.start, range.end);
+  if (!res.ok) return '';
+  const lines = ['', `COMPANY-WIDE STORE RANKINGS (month to date ${range.start} to ${range.end}, out of ${res.storeCount} stores; this manager only sees their own store plus the 5 stores ranked directly above and below — rank 1 = highest value):`];
+  OVERVIEW_METRICS.forEach(m => {
+    Object.values(res.windows?.[m.key] || {}).forEach(rows => {
+      const mine = rows.find(r => r.isMine);
+      if (!mine) return;
+      lines.push(`${m.label}: ${mine.name} is #${mine.rank} (${m.fmt(mine.value, mine)}). Nearby: ${rows.map(r => `#${r.rank} ${r.name} ${m.fmt(r.value, r)}`).join('; ')}`);
+    });
+  });
+  return lines.join('\n');
+}
+
+function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, rankToken }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -6700,7 +6764,8 @@ function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory);
+      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory)
+        + await buildRankContext(rankToken);
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -9388,7 +9453,7 @@ export default function App() {
           <HsaTab events={events} hsaSignups={d.hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} onEditSignup={handleEditHsaSignup} onAddClass={handleAddHsaClass} onEditClass={handleEditHsaClass} onDeleteClass={handleDeleteEvent} />
         )}
         {!needsReport && tab === 'Overview' && (report || hasHistoricalData) && (
-          <OverviewTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={d.managers} isOwner={currentUser.role === 'owner'} goals={d.goals} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} />
+          <OverviewTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={d.managers} isOwner={currentUser.role === 'owner'} goals={d.goals} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} rankToken={currentUser.role === 'manager' ? currentUser.token : null} />
         )}
         {!needsReport && tab === 'Employees' && (report || hasHistoricalData) && (
           <EmployeesTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={d.managers} employeeRoster={d.employeeRoster} fallbackEmployeesByStore={d.fallbackEmployeesByStore} />
@@ -9498,7 +9563,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} />
+      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} rankToken={currentUser.role === 'manager' ? currentUser.token : null} />
     </div>
   );
 }

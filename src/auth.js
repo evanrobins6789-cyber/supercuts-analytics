@@ -102,6 +102,12 @@ export function saveScoped(token, key, patch) {
   return postWrite('/api/scoped-data', { token, key, patch });
 }
 
+// Manager-only: the manager's store(s) plus the 5 stores ranked directly
+// above and below, company-wide, for every Overview metric (api/store-rank.js).
+export function storeRank(token, start, end) {
+  return postJson('/api/store-rank', { token, start, end });
+}
+
 // Owner-only Supabase Storage access for lease documents (api/lease-files.js).
 // Returns a signed upload URL/token for one file — the actual bytes go
 // straight from the browser to Supabase Storage (via supabase-js's
