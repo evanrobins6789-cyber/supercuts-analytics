@@ -778,21 +778,36 @@ const TOP_TEN_METRICS = [
 // One store-per-bar leaderboard chart. Single series (one metric) so no
 // legend box is needed — the title already says what's plotted; the top 3
 // bars get a medal emoji baked into their label for a little personality.
-function TopTenChart({ title, emoji, rows, metricKey, formatter, color }) {
+// `rankWindow` (manager logins): rows already ranked by api/store-rank.js —
+// the manager's store plus the 5 above and below, each with its real
+// company-wide `rank` — drawn in that order with "#rank" labels and the
+// other stores' bars faded so the manager's own bar stands out.
+function TopTenChart({ title, emoji, rows, metricKey, formatter, color, rankWindow }) {
   const chartRef = useRef(null);
-  const ranked = useMemo(() => sortByMetric(rows, metricKey, 'desc').filter(r => r[metricKey] != null).slice(0, 10), [rows, metricKey]);
-  const medal = i => (i === 0 ? '🥇 ' : i === 1 ? '🥈 ' : i === 2 ? '🥉 ' : '');
+  const ranked = useMemo(
+    () => rankWindow || sortByMetric(rows, metricKey, 'desc').filter(r => r[metricKey] != null).slice(0, 10),
+    [rows, metricKey, rankWindow]
+  );
+  const medal = i => {
+    const place = rankWindow ? ranked[i].rank - 1 : i;
+    const m = place === 0 ? '🥇 ' : place === 1 ? '🥈 ' : place === 2 ? '🥉 ' : '';
+    return rankWindow ? `${m}#${ranked[i].rank} ` : m;
+  };
   // Employee rows carry a `store` field (store rows don't) — same person's
   // name can legitimately appear more than once in an Employees ranking (a
   // District Leader or multi-store manager who also shows up as a stylist
   // at more than one of their own stores), so the store name is appended
   // whenever it's there to tell those rows apart.
-  const rowLabel = r => (r.store ? `${r.name} (${r.store})` : r.name);
+  const rowLabel = r => (r.store ? `${r.name} (${r.store})` : `${r.name}${r.isMine ? ' (you)' : ''}`);
 
   const data = useMemo(() => ({
     labels: ranked.map((r, i) => `${medal(i)}${rowLabel(r)}`),
-    datasets: [{ data: ranked.map(r => r[metricKey] || 0), backgroundColor: color, borderRadius: 4, barThickness: 18, maxBarThickness: 20 }],
-  }), [ranked, metricKey, color]);
+    datasets: [{
+      data: ranked.map(r => r[metricKey] || 0),
+      backgroundColor: rankWindow ? ranked.map(r => (r.isMine ? color : `${color}55`)) : color,
+      borderRadius: 4, barThickness: 18, maxBarThickness: 20,
+    }],
+  }), [ranked, metricKey, color, rankWindow]);
 
   // Draws the value at the tip of each bar (bar → value at the tip) in ink
   // color, never the series color — the layout.padding.right below reserves
@@ -860,7 +875,7 @@ function TopTenChart({ title, emoji, rows, metricKey, formatter, color }) {
   return (
     <div className="homepage-widget">
       <div className="homepage-widget-head">
-        <p className="homepage-widget-title">{emoji} Top 10 — {title}</p>
+        <p className="homepage-widget-title">{emoji} {rankWindow ? 'Your Rank' : 'Top 10'} — {title}</p>
         <button className="homepage-export-btn" onClick={handleExport} disabled={!ranked.length}>⬇ PNG</button>
       </div>
       {ranked.length ? (
@@ -1554,7 +1569,7 @@ function HomepageQuickPostModal({ kind, onClose, onAddNews, onAddEvent, existing
   );
 }
 
-function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore, news, events, reviews, onOpenNews, canPost, onAddNews, onAddEvent, newsGroups, onImageError }) {
+function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore, news, events, reviews, onOpenNews, canPost, onAddNews, onAddEvent, newsGroups, onImageError, rankToken, rankRole }) {
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
   const reportUsable = report && !isReportStale(report);
@@ -1592,6 +1607,36 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
   const [top10Mode, setTop10Mode] = useState('store'); // 'store' | 'employee'
   const top10Rows = top10Mode === 'employee' ? employeeRows : storeRows;
   const top10Metrics = top10Mode === 'employee' ? EMPLOYEE_METRICS : STORE_METRICS;
+
+  // Managers and DLs only have their own stores' data, so their charts come
+  // from api/store-rank.js instead: a manager gets their store's company rank
+  // with the 5 stores above and below (Stores view; Employees stays their own
+  // store), a DL gets the company-wide Top 10 stores and employees.
+  const rankStart = reportUsable ? report.startDateISO : top10Range.start;
+  const rankEnd = reportUsable ? report.endDateISO : top10Range.end;
+  const rankKey = rankToken && rankStart && rankEnd ? `${rankStart}|${rankEnd}` : null;
+  const [rank, setRank] = useState({ key: null, data: null, error: null });
+  useEffect(() => {
+    if (!rankKey) return;
+    let cancelled = false;
+    setRank({ key: rankKey, data: null, error: null });
+    storeRank(rankToken, rankStart, rankEnd).then(res => {
+      if (!cancelled) setRank({ key: rankKey, data: res.ok ? res : null, error: res.ok ? null : res.error });
+    });
+    return () => { cancelled = true; };
+  }, [rankKey, rankToken, rankStart, rankEnd]);
+  const rankData = rank.key === rankKey ? rank.data : null;
+  const usesCompanyRank = !!rankKey && (rankRole === 'district_leader' || top10Mode === 'store');
+  const rankLoading = usesCompanyRank && !rankData && !(rank.key === rankKey && rank.error);
+  const rankFailed = usesCompanyRank && rank.key === rankKey && !!rank.error;
+  const chartPropsFor = key => {
+    if (!usesCompanyRank || !rankData) return { rows: top10Rows };
+    if (rankRole === 'district_leader') {
+      return { rows: (top10Mode === 'employee' ? rankData.top10?.employees?.[key] : rankData.top10?.stores?.[key]) || [] };
+    }
+    const win = Object.values(rankData.windows?.[key] || {})[0];
+    return win ? { rows: [], rankWindow: win.map(r => ({ ...r, [key]: r.value })) } : { rows: [] };
+  };
   const [lightboxImage, setLightboxImage] = useState(null);
   const { activeKey: bitmojiKey, img: bitmojiImg } = useBitmojiCycler(HOMEPAGE_BITMOJI_SLOTS);
   const [quickPost, setQuickPost] = useState(null); // null | 'news' | 'event'
@@ -1654,11 +1699,21 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
               </div>
             )}
             {historicalAsOf && <p className="section-hint">Data current through {fmtDateLong(historicalAsOf)} (Sales-Accrual/Attendance — no current Stylist Report on file).</p>}
-            {top10Rows.length ? (
+            {usesCompanyRank && (
+              <p className="section-hint">
+                {rankRole === 'district_leader'
+                  ? `Company-wide Top 10 ${top10Mode === 'employee' ? 'employees' : 'stores'}${rankData ? ` (${rankData.storeCount} stores)` : ''}.`
+                  : `Where your store ranks company-wide${rankData ? ` out of ${rankData.storeCount} stores` : ''}, with the 5 stores above and below you.`}
+              </p>
+            )}
+            {rankFailed && <p className="empty-note">Couldn't load company rankings: {rank.error}</p>}
+            {rankLoading ? (
+              <p className="empty-note">Loading company rankings…</p>
+            ) : rankFailed ? null : (top10Rows.length || usesCompanyRank) ? (
               <div className="homepage-top10-grid">
                 {TOP_TEN_METRICS.map(m => (
                   <TopTenChart
-                    key={`${top10Mode}-${m.key}`} title={m.label} emoji={m.emoji} rows={top10Rows} metricKey={m.key}
+                    key={`${top10Mode}-${m.key}`} title={m.label} emoji={m.emoji} metricKey={m.key} {...chartPropsFor(m.key)}
                     formatter={top10Metrics.find(sm => sm.key === m.key).fmt} color={m.color}
                   />
                 ))}
@@ -6733,14 +6788,26 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   return lines.join('\n');
 }
 
-// Manager logins only: month-to-date company-wide rank for their store(s) on
-// every Overview metric, plus the 5 stores above and below (api/store-rank.js).
+// Manager logins: month-to-date company-wide rank for their store(s) on
+// every Overview metric, plus the 5 stores above and below. DL logins: the
+// company-wide Top 10 stores and employees (both from api/store-rank.js).
 // Fetched at question time since the manager's own data can't produce it.
 async function buildRankContext(rankToken) {
   if (!rankToken) return '';
   const range = getCurrentMonthRange();
   const res = await storeRank(rankToken, range.start, range.end);
   if (!res.ok) return '';
+  if (res.top10) {
+    // District Leader: company-wide Top 10 stores and employees.
+    const out = ['', `COMPANY-WIDE TOP 10s (month to date ${range.start} to ${range.end}, all ${res.storeCount} stores — this DL's other data only covers their own stores):`];
+    STORE_METRICS.forEach(m => {
+      const stores = res.top10.stores?.[m.key] || [];
+      if (stores.length) out.push(`Top 10 stores by ${m.label}: ${stores.map((r, i) => `${i + 1}. ${r.name} ${m.fmt(r[m.key], r)}`).join('; ')}`);
+      const emps = res.top10.employees?.[m.key] || [];
+      if (emps.length && m.key !== 'signatureS') out.push(`Top 10 employees by ${m.label}: ${emps.map((e, i) => `${i + 1}. ${e.name} (${e.store}) ${m.fmt(e[m.key], e)}`).join('; ')}`);
+    });
+    return out.join('\n');
+  }
   const lines = ['', `COMPANY-WIDE STORE RANKINGS (month to date ${range.start} to ${range.end}, out of ${res.storeCount} stores; this manager only sees their own store plus the 5 stores ranked directly above and below — rank 1 = highest value):`];
   OVERVIEW_METRICS.forEach(m => {
     Object.values(res.windows?.[m.key] || {}).forEach(rows => {
@@ -9445,6 +9512,7 @@ export default function App() {
           <HomepageTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} fallbackEmployeesByStore={d.fallbackEmployeesByStore} news={news} events={events} reviews={d.reviews} onOpenNews={handleOpenNews}
             canPost={currentUser.role === 'owner' && !presenting} onAddNews={handleAddNews} onAddEvent={handleAddEvent}
             newsGroups={newsGroups} onImageError={msg => showToast(msg, 'error')}
+            rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} rankRole={currentUser.role}
           />
         )}
         {tab === 'News' && (
@@ -9564,7 +9632,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} rankToken={currentUser.role === 'manager' ? currentUser.token : null} />
+      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
     </div>
   );
 }

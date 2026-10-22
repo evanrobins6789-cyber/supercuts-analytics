@@ -6,10 +6,17 @@
 // manager's own store plus the 5 stores directly above and below it, with
 // each store's real company-wide rank (e.g. 25-35 around a store in 30th).
 // No employee-level data and no stores outside that window leave the server.
+// Used by the manager's Overview tab and Homepage Top 10 charts.
 //
-// Request: POST { token, start, end } (ISO dates, the Overview tab's range).
-// Response: { ok, storeCount, windows: { [metricKey]: { [ownCode]: [row] } } }
+// District Leaders instead get the company-wide Top 10 stores and Top 10
+// employees (Homepage Top 10 charts), since their own data is also scoped
+// to just their stores.
+//
+// Request: POST { token, start, end } (ISO dates, the tab's range).
+// Manager response: { ok, storeCount, windows: { [metricKey]: { [ownCode]: [row] } } }
 // where row = { rank, code, name, value, isMine, signatureSCount, cpdLY }.
+// DL response: { ok, storeCount, top10: { stores: { [metricKey]: [storeRow] },
+// employees: { [metricKey]: [{ name, store, [metricKey] }] } } }.
 // Every metric is computed in one call so clicking between Overview tiles
 // doesn't need another round trip.
 
@@ -79,8 +86,8 @@ export default async function handler(req, res) {
     res.status(401).json({ error: sessionError });
     return;
   }
-  if (employee.role !== 'manager') {
-    res.status(403).json({ error: 'Store ranking is only available to store managers.' });
+  if (employee.role !== 'manager' && employee.role !== 'district_leader') {
+    res.status(403).json({ error: 'Store ranking is only available to store managers and District Leaders.' });
     return;
   }
   if (!ISO_DATE.test(start || '') || !ISO_DATE.test(end || '') || start > end) {
@@ -99,6 +106,24 @@ export default async function handler(req, res) {
       METRIC_KEYS.forEach(k => { if (k !== 'cpd') row[k] = shape[k]; });
       return row;
     });
+
+    if (employee.role === 'district_leader') {
+      // Company-wide Top 10s, same "skip blanks, then top 10" rule as the
+      // Homepage's TopTenChart. Employee rows carry only name, store, and
+      // the one metric being ranked.
+      const top10Of = (list, key) => sortByMetric(list.filter(r => r[key] != null), key, 'desc').slice(0, 10);
+      const employees = Object.entries(totals).flatMap(([code, t]) => {
+        const storeName = STORE_CODE_TO_NAME[code] || `Store ${code}`;
+        return historyTotalsToReportShape(t).employees.map(e => ({ ...e, store: storeName }));
+      });
+      const top10 = { stores: {}, employees: {} };
+      METRIC_KEYS.forEach(key => {
+        top10.stores[key] = top10Of(rows, key);
+        if (key !== 'cpd') top10.employees[key] = top10Of(employees, key).map(e => ({ name: e.name, store: e.store, [key]: e[key] }));
+      });
+      res.status(200).json({ ok: true, storeCount: rows.length, top10 });
+      return;
+    }
 
     const ownCodes = (employee.store_codes || []).filter(c => totals[c]);
     const windows = {};
