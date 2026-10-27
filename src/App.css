@@ -19,18 +19,24 @@
 .app { min-height: 100%; background: var(--paper); padding-bottom: 48px; }
 
 /* ─── Header ─────────────────────────────────────────────────────────── */
+/* Logo centered in the middle column; user/log out sit in the right column,
+   with an equal-width empty left column keeping the logo truly centered. */
 .app-header {
-  display: flex; align-items: flex-start; justify-content: space-between;
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px;
   padding: 22px 20px 16px; background: var(--navy); color: #fff;
 }
-.header-left { display: flex; align-items: center; gap: 12px; }
+.header-center { grid-column: 2; display: flex; justify-content: center; }
+.app-header .header-right { grid-column: 3; justify-self: end; }
+@media (max-width: 640px) {
+  .app-header { grid-template-columns: 1fr; justify-items: center; }
+  .header-center, .app-header .header-right { grid-column: 1; justify-self: center; }
+}
 .header-logo-img { height: 34px; width: auto; display: block; }
 .app-title {
   font-family: 'Barlow Condensed', sans-serif;
   font-weight: 700; font-size: 30px; letter-spacing: 0.01em; text-transform: uppercase;
   color: #fff;
 }
-.app-subtitle { font-size: 13px; color: #B9C6D6; margin-top: 2px; }
 .header-right { padding-top: 4px; display: flex; align-items: center; gap: 10px; }
 .header-user { color: #fff; font-size: 12.5px; }
 /* Presenter mode indicator + quick exit (owner-only, see presenter.js) */

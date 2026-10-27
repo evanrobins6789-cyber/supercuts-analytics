@@ -8182,7 +8182,6 @@ export default function App() {
   const [weeklyHistory, setWeeklyHistory] = useState({});
   const [dateRange, setDateRangeState] = useState({ start: null, end: null });
   const setDateRange = (start, end) => setDateRangeState({ start, end });
-  const [label, setLabel] = useState('');
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('Homepage');
   const [setupSection, setSetupSection] = useState('guide');
@@ -8459,7 +8458,6 @@ export default function App() {
     try {
       const parsed = await parseStylistReport(file);
       setReport(parsed);
-      setLabel(parsed.startDateISO && parsed.endDateISO ? fmtDateRangeLong(parsed.startDateISO, parsed.endDateISO) : (parsed.dateRangeLabel || ''));
       const result = await saveData('stylist_report', parsed);
 
       // Also feed this week into the permanent weekly history. Keyed by the
@@ -8513,7 +8511,6 @@ export default function App() {
     if (!window.confirm('Clear the uploaded stylist report and start over? This cannot be undone.')) return;
     await clearData('stylist_report');
     setReport(null);
-    setLabel('');
     setTab('Setup');
     setSetupSection('upload');
     showToast('Stylist report cleared');
@@ -9550,11 +9547,8 @@ export default function App() {
       {celebrate && <GoldCombCelebration />}
 
       <header className="app-header">
-        <div className="header-left">
+        <div className="header-center">
           <img src={supercutsWordmarkWhite} alt="Supercuts" className="header-logo-img" />
-          <div>
-            <p className="app-subtitle">{label || 'Weekly performance across every location'}</p>
-          </div>
         </div>
         <div className="header-right">
           {presenting && <button className="presenter-pill" onClick={() => handleTogglePresenter(false)} title="Presenter mode is on — made-up data. Click to turn off.">🎭 Presenter</button>}
