@@ -9,6 +9,12 @@
   4. Deploy and click-test with the table still open.
   5. Only then enable RLS on `weekly_report` (anon gets nothing). Undo is one line.
   The order matters: locking before the new code is live could make loads fail and a later save overwrite with empty data. Open question for the user: should any logged-in employee be able to write `hsa_signups` (as today)? No cost change expected, and no data moves or is deleted.
+- **2026-10-27 UI changes, none checked in a browser yet:** the centered-logo header, slimmer header/hero, hero blurb, calendar class colors and key, colored slim no-photo cards (Homepage + News tab), and News "General Updates" moved last. Main risks: the Bitmoji peek overlapping hero buttons, `color-mix()` card gradients (any current browser is fine), and mixed photo/no-photo rows.
+- **Waiting on the user (asked 2026-10-27, no answer yet):**
+  - Overview YOY: should **Total Hours** stay green-when-up, flip to red-when-up, or show no color?
+  - Loss Prevention: their own flag thresholds (`LP_RULES`), whether family counts for the employee discount, and whether DLs ever see any of it (default: owner only).
+  - News: 6 posts have no group (they now show under "General Updates"). The user may assign groups in Setup → Homepage. Never change post groups without being asked.
+  - Security fix: whether any logged-in employee can write `hsa_signups`.
 - **Overview year-over-year change under each tile (2026-10-27, below) only shows up once 2025 Sales-Accrual and Attendance are imported.** After that import, check in a browser: the tiles show a green ▲ or red ▼ % · difference line, the note above the grid names the right last-year dates and store count, and the line is readable on the selected (navy) tile.
 - **Homepage Top 10 for managers/DLs (2026-10-22 evening, below) unverified in a browser.** Manager: Stores view shows "Your Rank" charts with #ranks and their bar highlighted. DL: Stores shows company-wide Top 10 stores. Both roles: Employees view still shows only their own employees.
 - **Manager rank window, Core Values fix, Pin List PDF (2026-10-22, below) are unverified in a real browser.** Check as a manager login: Overview shows "Your Company Rank" (own store highlighted, real ranks like #15–#25) instead of Top/Bottom 10, and it follows the tile clicked and the date range. Check as the owner/DL: Top/Bottom 10 unchanged. Homepage: "Our Core Values" reads "Serve Others First" with a space.
@@ -46,6 +52,24 @@
 - Check whether any existing Sales Goals now look off now that "Sales" includes retail (a store that was borderline on-goal may now look ahead, since the baseline it's compared against got bigger).
 - Confirm the Signature Service tab now shows 1016/$12,142.36 for Aug 1–9 (already corrected directly in Supabase, not just in code) — and if you have a cleaner source for the 1017/$12,154.36 figure you originally gave me, worth checking where that extra unit/$12 comes from.
 - None of the 2026-08-13 changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
+
+Last updated: 2026-10-27 (end of session). **Session summary.** Every item below was pushed to `main`, build-clean, and not browser-checked:
+- **Overview:** YOY green/red under each tile, hidden until 2025 data exists.
+- **Header and hero:** subtitle removed, logo centered, both slimmer. Hero blurb added.
+- **Removed:** the "Latest Site Updates" hero panel. The user disliked it, so don't re-add it.
+- **Vercel toolbar:** turned off on `-llxh` (project setting, not code).
+- **Homepage:** calendar colors by class type, colored slim cards for posts and events without photos. News ungrouped posts moved last.
+- **Loss Prevention:** new tab with private storage.
+- **Security:** found the `weekly_report` anon exposure (plan in open items).
+
+**POS export reference (learned 2026-10-27, all from the same POS):**
+- **Sales-Accrual:** the newest layout (`Sales-Accrual(469).xlsx`) has: Item Type, Item Name, Center Name, Item Category, Qty, Sales (Exc. Tax), Sale Date, Invoice No, Guest Name, Stylist, Sold By, Sales(Inc. Tax), Redeemed, Collected, Invoice Closed Date, Item Subcategory, Discount Name, Discount, Payment Type, Sale Type (Sale/Refund), Closed By, Invoice created by, Invoice status, Price, Refund Reason.
+  - No ticket times. Closed Date is date-only.
+  - `parseSalesAccrualFile` handles every layout (exact header match). Totals were verified to the penny on files 468 and 469, and refunds net out as negatives.
+- **Attendance** (`Attendance(133).xlsx`): adds actual check-in/out times ("Actual Check-Ins" as one "10:47 AM - 07:02 PM" string), Schedule, Serviced/Booked Hours, Missed Check-Ins/Checkouts, and Check-in Status. The existing parser is unaffected.
+- **Register Closure:** one row per drawer closure. Includes Cash Adjustments plus a free-text reason (mostly ".", "idk", "?"), Cash Paid, Submitted By and Center Name.
+- **Campaigns Redemption:** every coupon or discount, with Applied By and Guest Name. Not used, because Sales-Accrual's Discount Name/Guest Name covers it.
+- **Login Activity:** totals per account only, no per-login events. 345 shared/generic accounts, 92 of them used. Weak for loss prevention, and not used.
 
 Last updated: 2026-10-27 (loss prevention). **New owner-only Loss Prevention tab.** Pushed to `main`. It needs the one-time SQL (open items).
 - **The ask**: track loss prevention and flag possible employee theft. Only the owner can see it. The user reviewed the reports and supplied the exports: Register Closure, Login Activity, Campaigns Redemption, and newer Sales-Accrual/Attendance layouts.
