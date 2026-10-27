@@ -351,6 +351,26 @@ const STORE_METRICS = [
 const fmtCPD = (cur, ly) => `${cur == null ? '—' : Math.round(cur)}|${ly == null ? '—' : Math.round(ly)}`;
 const CPD_METRIC = { key: 'cpd', label: 'CPD', fmt: (v, row) => fmtCPD(v, row?.cpdLY) };
 const OVERVIEW_METRICS = [...STORE_METRICS, CPD_METRIC];
+// Overview tiles' change vs the same dates last year: how to print the raw
+// difference for each metric (the % is computed the same way for all).
+// Metrics not listed here (gift cards) get no comparison.
+const YOY_DIFF_FMT = {
+  sales: fmt$, avgTicket: fmtRate, tsth: fmtRate, totalHours: n => fmtInt(Math.round(n)),
+  colorSales: fmt$, cpc: n => fmtNum(n), retail: fmt$, rpc: n => fmtNum(n),
+  otherServices: fmt$, opc: n => fmtNum(n), haircuts: fmtInt, cph: n => fmtNum(n, 2),
+  signatureS: fmt$, cpd: n => fmtNum(n, 1),
+};
+function yoyChange(key, cur, ly) {
+  const fmt = YOY_DIFF_FMT[key];
+  if (!fmt || cur == null || ly == null || !ly) return null;
+  const diff = cur - ly;
+  const sign = diff > 0 ? '+' : diff < 0 ? '−' : '';
+  return {
+    dir: diff > 0 ? 'up' : diff < 0 ? 'down' : 'flat',
+    pct: `${sign}${Math.abs((diff / ly) * 100).toFixed(1)}%`,
+    diff: `${sign}${fmt(Math.abs(diff))}`,
+  };
+}
 // Gift card sales (not redemptions) — owner-only, so OverviewTab only adds
 // this when it's handed gift card history (App passes it on the owner's
 // login only). "count|$", same as SS.
@@ -2975,6 +2995,24 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
     ...baseTotals, cpd: companyCpd(cpdData?.cur, storeCodes), cpdLY: companyCpd(cpdData?.ly, storeCodes),
     giftCards: rowsWithCpd.reduce((sum, r) => sum + r.giftCards, 0), giftCardCount: rowsWithCpd.reduce((sum, r) => sum + r.giftCardCount, 0),
   };
+  // Year-over-year on each tile: same range as CPD shifted back a year, from
+  // Sales-Accrual/Attendance history. Like-for-like stores only — a store
+  // with no data last year (new, or not imported) is left out of both sides,
+  // so it can't inflate the change. Hidden entirely until last year exists.
+  const lyTotals = useMemo(
+    () => (cpdStart && cpdEnd ? getRangeTotals(history, weeklyHistory, shiftYearISO(cpdStart, -1), shiftYearISO(cpdEnd, -1)) : null),
+    [history, weeklyHistory, cpdStart, cpdEnd]
+  );
+  const yoy = useMemo(() => {
+    const comp = rowsWithCpd.filter(r => lyTotals?.[r.code]);
+    if (!comp.length) return null;
+    const codes = comp.map(r => r.code);
+    return {
+      cur: { ...rollupRows(comp), cpd: companyCpd(cpdData?.cur, codes) },
+      ly: { ...rollupRows(codes.map(c => historyTotalsToReportShape(lyTotals[c]))), cpd: companyCpd(cpdData?.ly, codes) },
+      storeCount: codes.length,
+    };
+  }, [rowsWithCpd, lyTotals, cpdData]);
   const toggle = name => setExpanded(prev => ({ ...prev, [name]: !prev[name] }));
 
   return (
@@ -2984,17 +3022,22 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores or employees…" />
 
       <p className="section-hint">{rankToken ? 'Tap any metric to see where your store ranks company-wide, with the 5 stores above and below you.' : 'Tap any metric to see the top 10 and bottom 10 stores for it.'}</p>
+      {yoy && <p className="section-hint">Green/red under each tile: change vs the same dates last year ({fmtDateLong(shiftYearISO(cpdStart, -1))}–{fmtDateLong(shiftYearISO(cpdEnd, -1))}), comparing only the {yoy.storeCount} store{yoy.storeCount === 1 ? '' : 's'} with data in both years.</p>}
       <div className="summary-grid">
-        {metrics.map(m => (
-          <button
-            key={m.key}
-            className={`summary-tile ${selected === m.key ? 'summary-tile--active' : ''}`}
-            onClick={() => onSelect(m.key)}
-          >
-            <p className="summary-tile-label">{m.label}</p>
-            <p className="summary-tile-value">{m.fmt(t[m.key], t)}</p>
-          </button>
-        ))}
+        {metrics.map(m => {
+          const ch = yoy ? yoyChange(m.key, yoy.cur[m.key], yoy.ly[m.key]) : null;
+          return (
+            <button
+              key={m.key}
+              className={`summary-tile ${selected === m.key ? 'summary-tile--active' : ''}`}
+              onClick={() => onSelect(m.key)}
+            >
+              <p className="summary-tile-label">{m.label}</p>
+              <p className="summary-tile-value">{m.fmt(t[m.key], t)}</p>
+              {ch && <p className={`summary-tile-yoy yoy-${ch.dir}`} title="vs same dates last year">{ch.dir === 'up' ? '▲' : ch.dir === 'down' ? '▼' : '•'} {ch.pct} · {ch.diff}</p>}
+            </button>
+          );
+        })}
       </div>
 
       {rankToken ? (
@@ -6419,6 +6462,26 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       lines.push(`CUTS PER DAY (CPD), month-to-date ${start} through ${end} vs the same dates last year — average haircuts per day a store was open (days with 0 cuts, e.g. closures, don't count). Company figure is the average per store per day. Shown on the Overview tab as "this year|last year":`);
       lines.push(`Company: ${f(companyCpd(cur, codes))} this year vs ${f(companyCpd(ly, codes))} last year`);
       codes.forEach(code => lines.push(`${STORE_CODE_TO_NAME[code] || `Store ${code}`}: ${f(cpdOf(cur[code]))} vs ${f(cpdOf(ly[code]))} last year`));
+      lines.push('');
+    }
+  }
+
+  // Year-over-year — the green/red change under each Overview tile, here
+  // month-to-date vs the same dates last year, like-for-like stores only.
+  if (history && Object.keys(history).length) {
+    const { start, end } = getCurrentMonthRange();
+    const curT = getRangeTotals(history, weeklyHistory, start, end);
+    const lyT = getRangeTotals(history, weeklyHistory, shiftYearISO(start, -1), shiftYearISO(end, -1));
+    const codes = Object.keys(curT).filter(c => lyT[c]);
+    if (codes.length) {
+      const keys = [['sales', 'Net Sales'], ['haircuts', 'Cuts'], ['colorSales', 'Color Sales'], ['retail', 'Retail'], ['signatureS', 'SS $'], ['otherServices', 'Other Svcs'], ['tsth', 'TSTH'], ['avgTicket', 'Avg Ticket'], ['totalHours', 'Total Hours']];
+      const line = (cur, ly) => keys.map(([k, label]) => {
+        const ch = yoyChange(k, cur[k], ly[k]);
+        return ch ? `${label} ${YOY_DIFF_FMT[k](cur[k])} vs ${YOY_DIFF_FMT[k](ly[k])} (${ch.pct}, ${ch.diff})` : null;
+      }).filter(Boolean).join('; ');
+      lines.push(`YEAR-OVER-YEAR, month-to-date ${start} through ${end} vs the same dates last year, only the ${codes.length} store(s) with data in both years (shown in green/red under each Overview tile):`);
+      lines.push(`Company: ${line(rollupRows(codes.map(c => historyTotalsToReportShape(curT[c]))), rollupRows(codes.map(c => historyTotalsToReportShape(lyT[c]))))}`);
+      codes.forEach(c => lines.push(`${STORE_CODE_TO_NAME[c] || `Store ${c}`}: ${line(historyTotalsToReportShape(curT[c]), historyTotalsToReportShape(lyT[c]))}`));
       lines.push('');
     }
   }

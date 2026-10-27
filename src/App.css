@@ -228,6 +228,12 @@
 .summary-tile--active { background: var(--navy); border-color: var(--navy); }
 .summary-tile--active .summary-tile-label { color: #B9C6D6; }
 .summary-tile--active .summary-tile-value { color: #fff; }
+.summary-tile-yoy { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; font-weight: 600; margin-top: 3px; color: var(--ink-soft); }
+.summary-tile-yoy.yoy-up { color: var(--green); }
+.summary-tile-yoy.yoy-down { color: var(--red); }
+.summary-tile--active .summary-tile-yoy.yoy-up { color: #7FD6A0; }
+.summary-tile--active .summary-tile-yoy.yoy-down { color: #FF9A9A; }
+.summary-tile--active .summary-tile-yoy.yoy-flat { color: #B9C6D6; }
 .summary-tile-label { font-size: 11.5px; color: var(--ink-soft); font-family: 'Inter', sans-serif; text-transform: uppercase; letter-spacing: 0.03em; }
 .summary-tile-value { font-family: 'IBM Plex Mono', monospace; font-size: 22px; font-weight: 600; color: var(--navy); margin-top: 4px; }
 .btn-danger { border-color: var(--red); color: var(--red-deep); align-self: center; }
