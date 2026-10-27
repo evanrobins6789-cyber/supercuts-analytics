@@ -1677,6 +1677,7 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
           <p className="homepage-hero-title">Welcome back 👋</p>
           <p className="homepage-hero-eyebrow">{fmtDateLong(todayISO)}</p>
         </div>
+        <p className="homepage-hero-blurb">Catch up on the latest news, see what's coming up, and find out who's leading the pack. Let's make it a great day! ✂️</p>
         {canPost && (
           <div className="homepage-hero-actions">
             <button type="button" className="homepage-hero-action" onClick={() => setQuickPost('news')}>📣 Post Update</button>
