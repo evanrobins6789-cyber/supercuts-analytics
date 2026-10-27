@@ -42,7 +42,7 @@ function cleanStoreName(raw) {
 export function normalizeName(raw) {
   return String(raw).replace(/\s+/g, ' ').trim().toLowerCase();
 }
-function readWorkbookGrid(file) {
+export function readWorkbookGrid(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = ev => {

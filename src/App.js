@@ -13,8 +13,9 @@ import {
   loadScoped, loadScopedByPrefix, saveScoped, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
   pointsBalance, pointsAllBalances, pointsTransactions, pointsDeleteTransaction,
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled,
-  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank,
+  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank, lpLoad, lpSave,
 } from './auth';
+import { LP_RULES, parseLpSalesFile, parseLpAttendanceFile, parseLpRegisterFile, mergeLpDays, lpMonthPayload, analyzeLp, lpDefaultRange } from './lossPrevention';
 import { LEADER_ROSTER_SECTIONS as REAL_LEADER_ROSTER_SECTIONS, getLeaderForStoreCode as realGetLeaderForStoreCode } from './leaderRoster';
 import { isPresenting, initPresenterMode, setPresenterMode, presenterView, fakeLeaderSections, fakePersonName } from './presenter';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
@@ -5871,6 +5872,217 @@ function historyMonthCoverage(history) {
     .sort((a, b) => a.month.localeCompare(b.month));
 }
 
+// ─── Loss Prevention tab (owner only) ──────────────────────────────────────
+// Items to review, not conclusions. Data and rules live in
+// src/lossPrevention.js; Sales-Accrual/Attendance detail is captured from
+// Setup → Historical Import, Register Closure is uploaded here.
+const lpStoreName = code => STORE_CODE_TO_NAME[code] || `Store ${code}`;
+const lpPct = r => `${Math.round(r * 100)}%`;
+
+function LpSection({ title, hint, count, children }) {
+  return (
+    <details className="lp-section">
+      <summary><span className="lp-section-title">{title}</span><span className="lp-section-count">{count}</span></summary>
+      {hint && <p className="section-hint">{hint}</p>}
+      <div className="ledger-scroll">{children}</div>
+    </details>
+  );
+}
+
+function LpEventTable({ groups, columns }) {
+  if (!groups.length) return <p className="empty-note">Nothing in this date range.</p>;
+  return (
+    <table className="ledger-table lp-table">
+      <thead><tr><th>Person</th><th>Store</th>{columns.map(c => <th key={c.label}>{c.label}</th>)}</tr></thead>
+      <tbody>
+        {groups.flatMap(g => g.items.map((e, i) => (
+          <tr key={`${g.key}-${i}`} className={i === 0 ? 'lp-group-start' : ''}>
+            <td>{i === 0 ? `${g.name} (${g.items.length})` : ''}</td>
+            <td>{i === 0 ? lpStoreName(g.code) : ''}</td>
+            {columns.map(c => <td key={c.label}>{c.render(e)}</td>)}
+          </tr>
+        )))}
+      </tbody>
+    </table>
+  );
+}
+
+function LossPreventionTab({ lpData, lpStatus, onImportRegister, onGoToHistoryImport }) {
+  const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const fallback = useMemo(() => lpDefaultRange(lpData, todayISO), [lpData, todayISO]);
+  const [range, setRange] = useState({ start: null, end: null });
+  const start = range.start || fallback?.start;
+  const end = range.end || fallback?.end;
+  const a = useMemo(() => (start && end ? analyzeLp(lpData, start, end, todayISO) : null), [lpData, start, end, todayISO]);
+  const [uploading, setUploading] = useState(false);
+  const [log, setLog] = useState([]);
+  const handleRegisterFiles = async files => {
+    setUploading(true);
+    try { setLog(await onImportRegister(files)); } catch (err) { setLog([`✗ Unexpected error: ${err.message}`]); } finally { setUploading(false); }
+  };
+  const d = iso => fmtDateShortLp(iso);
+
+  return (
+    <div className="tab-content">
+      <p className="section-hint">
+        Only you can see this tab. Everything here is an <strong>item to review</strong>, found by comparing people to
+        their peers and to the rules in <code>src/lossPrevention.js</code>. A flag is a reason to look closer, not proof.
+      </p>
+      {lpStatus.error && <p className="empty-note lp-error">Couldn't load loss prevention data: {lpStatus.error}</p>}
+
+      <div className="history-upload-row">
+        <label className={`upload-slot history-upload-slot ${uploading ? 'upload-slot--filled' : ''}`}>
+          <input type="file" accept=".xlsx,.xls,.csv" multiple style={{ display: 'none' }}
+            onChange={e => { const files = Array.from(e.target.files); if (files.length) handleRegisterFiles(files); e.target.value = ''; }} />
+          <div className="upload-slot-icon">{uploading ? <span className="spinner small" /> : '💵'}</div>
+          <div className="upload-slot-body">
+            <p className="upload-slot-title">Register Closure Files</p>
+            <p className="upload-slot-hint">The "Register Closure" report. Re-uploading a range replaces those days.</p>
+          </div>
+        </label>
+        <button type="button" className="upload-slot history-upload-slot lp-howto" onClick={onGoToHistoryImport}>
+          <div className="upload-slot-icon">📥</div>
+          <div className="upload-slot-body">
+            <p className="upload-slot-title">Sales-Accrual &amp; Attendance</p>
+            <p className="upload-slot-hint">Upload in Setup → Historical Import as usual. Files with the newer columns (Payment Type, Guest Name, Closed By, Serviced Hours…) feed this tab automatically.</p>
+          </div>
+        </button>
+      </div>
+      {log.length > 0 && (
+        <div className="history-log">
+          {log.map((line, i) => <p key={i} className={`history-log-line ${line.startsWith('✗') ? 'history-log-line--error' : ''}`}>{line}</p>)}
+        </div>
+      )}
+
+      {!a ? (
+        <p className="empty-note">{lpStatus.loaded ? 'No loss prevention data yet. Upload a Register Closure file above, or Sales-Accrual/Attendance files with the newer columns in Historical Import.' : 'Loading…'}</p>
+      ) : (
+        <>
+          <DateRangeBar start={start} end={end} onChange={(s, e) => setRange({ start: s, end: e })} />
+          <p className="section-hint">
+            Data in this range: {a.coverage.salesDays} day{a.coverage.salesDays === 1 ? '' : 's'} of sales detail,
+            {' '}{a.coverage.attDays} of attendance, {a.coverage.regDays} of register closures.
+            {a.coverage.salesDays < 28 && ' Cash share and loyalty rates mean more over a month or longer.'}
+          </p>
+
+          <div className="lp-review">
+            <p className="section-label">🔎 Review list ({a.review.length})</p>
+            <p className="section-hint">Everyone who tripped at least one check, most checks first.</p>
+            {a.review.length ? (
+              <div className="ledger-scroll">
+                <table className="ledger-table lp-table">
+                  <thead><tr><th>Person</th><th>Store</th><th>Checks</th><th>What to look at</th></tr></thead>
+                  <tbody>
+                    {a.review.map(p => (
+                      <tr key={p.key} className={p.flags.length > 1 ? 'lp-multi' : ''}>
+                        <td>{p.name}</td><td>{lpStoreName(p.code)}</td><td>{p.flags.length}</td>
+                        <td className="lp-flags">{p.flags.map(f => <span key={f} className="lp-chip">{f}</span>)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : <p className="empty-note">Nobody tripped a check in this date range.</p>}
+          </div>
+
+          <LpSection title="$0 services" count={a.zero.reduce((s, g) => s + g.items.length, 0)}
+            hint={`Services rung at $0. Blank "Discount" means no reason was recorded. Flags at ${LP_RULES.zeroMin}+ per person.`}>
+            <LpEventTable groups={a.zero} columns={[
+              { label: 'Date', render: e => d(e.date) }, { label: 'Invoice', render: e => e.inv },
+              { label: 'Service', render: e => e.i }, { label: 'Discount', render: e => e.dn || '—' },
+            ]} />
+          </LpSection>
+
+          <LpSection title="Rung under list price" count={a.below.reduce((s, g) => s + g.items.length, 0)}
+            hint={`Lines rung for less than list price minus any discount. Flags at $${LP_RULES.priceBelowAmt}+ per person. Needs the Price column.`}>
+            <LpEventTable groups={a.below} columns={[
+              { label: 'Date', render: e => d(e.date) }, { label: 'Invoice', render: e => e.inv }, { label: 'Item', render: e => e.i },
+              { label: 'List', render: e => fmtRate(e.l) }, { label: 'Rung', render: e => fmtRate(e.a) }, { label: 'Discount', render: e => e.dn || '—' },
+            ]} />
+          </LpSection>
+
+          <LpSection title="Employee discount on non-staff" count={a.empDisc.reduce((s, g) => s + g.items.length, 0)}
+            hint={`The employee discount used on a guest whose name doesn't match anyone on staff. Some may be family. Flags at ${LP_RULES.empDiscNonStaffMin}+ per person.`}>
+            <LpEventTable groups={a.empDisc} columns={[
+              { label: 'Date', render: e => d(e.date) }, { label: 'Invoice', render: e => e.inv },
+              { label: 'Guest', render: e => e.g }, { label: 'Discount', render: e => fmtRate(e.a) },
+            ]} />
+          </LpSection>
+
+          <LpSection title="Refunds" count={a.refunds.reduce((s, g) => s + g.items.length, 0)}
+            hint={`Flags at ${LP_RULES.refundMin}+ refunds per person, or any cash refund.`}>
+            <LpEventTable groups={a.refunds} columns={[
+              { label: 'Date', render: e => d(e.date) }, { label: 'Invoice', render: e => e.inv }, { label: 'Item', render: e => e.i },
+              { label: 'Amount', render: e => fmtRate(e.a) }, { label: 'Paid by', render: e => e.pay || '—' }, { label: 'Reason', render: e => e.why || '—' },
+            ]} />
+          </LpSection>
+
+          <LpSection title="Loyalty point redemptions" count={a.loyalty.filter(x => x.flagged).length}
+            hint={`Share of each person's closed tickets that redeemed loyalty points. Company: ${lpPct(a.coLoyalRate)}. Flags at ${LP_RULES.loyaltyRateX}× that, for people who closed ${LP_RULES.loyaltyMinClosed}+ tickets.`}>
+            <table className="ledger-table lp-table">
+              <thead><tr><th>Person</th><th>Store</th><th>Tickets closed</th><th>With loyalty</th><th>Rate</th></tr></thead>
+              <tbody>{a.loyalty.slice(0, 25).map(x => (
+                <tr key={`${x.name}|${x.code}`} className={x.flagged ? 'lp-multi' : ''}><td>{x.name}</td><td>{lpStoreName(x.code)}</td><td>{x.t}</td><td>{x.l}</td><td>{lpPct(x.rate)}</td></tr>
+              ))}</tbody>
+            </table>
+          </LpSection>
+
+          <LpSection title="Cash share vs store" count={a.cash.filter(x => x.flagged).length}
+            hint={`Share of each stylist's tickets paid fully in cash, next to their own store's share. Company: ${lpPct(a.coCashRate)}. Flags at ${LP_RULES.cashShareX}× the store, for stylists with ${LP_RULES.cashMinTickets}+ tickets.`}>
+            <table className="ledger-table lp-table">
+              <thead><tr><th>Stylist</th><th>Store</th><th>Tickets</th><th>Cash</th><th>Their share</th><th>Store share</th></tr></thead>
+              <tbody>{a.cash.slice(0, 25).map(x => (
+                <tr key={`${x.name}|${x.code}`} className={x.flagged ? 'lp-multi' : ''}><td>{x.name}</td><td>{lpStoreName(x.code)}</td><td>{x.t}</td><td>{x.c}</td><td>{lpPct(x.rate)}</td><td>{lpPct(x.storeRate)}</td></tr>
+              ))}</tbody>
+            </table>
+          </LpSection>
+
+          <LpSection title="Register closures" count={a.register.filter(x => x.short >= LP_RULES.regShortMin || x.vague >= LP_RULES.regVagueMin).length}
+            hint={`By who submitted the closure. "Short" counts closures off by $${LP_RULES.regShortAmt}+. "No real reason" is an adjustment explained as ".", "?", "idk", "na" or blank. Flags at ${LP_RULES.regShortMin}+ short or ${LP_RULES.regVagueMin}+ no-reason.`}>
+            <table className="ledger-table lp-table">
+              <thead><tr><th>Submitted by</th><th>Store</th><th>Closures</th><th>Short</th><th>Short $</th><th>No real reason</th><th>Cash paid out</th></tr></thead>
+              <tbody>{a.register.filter(x => x.short || x.vague).slice(0, 40).map(x => (
+                <tr key={x.key} className={x.short >= LP_RULES.regShortMin || x.vague >= LP_RULES.regVagueMin ? 'lp-multi' : ''}>
+                  <td>{x.name}</td><td>{lpStoreName(x.code)}</td><td>{x.closures}</td><td>{x.short}</td><td>{fmtRate(Math.abs(x.shortAmt))}</td><td>{x.vague}</td><td>{fmtRate(x.paid)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+            {a.bigAdj.length > 0 && (
+              <>
+                <p className="section-hint">Single adjustments of ${LP_RULES.regBigAdj}+ (either way):</p>
+                <table className="ledger-table lp-table">
+                  <thead><tr><th>Date</th><th>Store</th><th>Submitted by</th><th>Adjustment</th><th>Reason given</th></tr></thead>
+                  <tbody>{a.bigAdj.slice(0, 40).map((x, i) => (
+                    <tr key={i}><td>{d(x.date)}</td><td>{lpStoreName(x.code)}</td><td>{x.by}</td><td>{fmtRate(x.adj)}</td><td className="lp-reason">{x.reason || '—'}</td></tr>
+                  ))}</tbody>
+                </table>
+              </>
+            )}
+          </LpSection>
+
+          <LpSection title="Clocked in with no tickets" count={a.idle.filter(x => x.days.length >= LP_RULES.idleDaysMin).length}
+            hint={`Stylist-days clocked ${LP_RULES.idleHours}+ hours with zero tickets and zero serviced hours (today is skipped). Training or front-desk days are legitimate reasons. Flags at ${LP_RULES.idleDaysMin}+ days.`}>
+            <LpEventTable groups={a.idle.map(x => ({ ...x, items: x.days }))} columns={[
+              { label: 'Date', render: e => d(e.date) }, { label: 'Hours clocked', render: e => fmtNum(e.hrs, 2) },
+            ]} />
+          </LpSection>
+
+          <LpSection title="Missed punches" count={a.missed.filter(x => x.count >= LP_RULES.missedPunchMin).length}
+            hint={`Missed check-ins plus missed checkouts. Each one gets hand-entered later. Flags at ${LP_RULES.missedPunchMin}+.`}>
+            <table className="ledger-table lp-table">
+              <thead><tr><th>Person</th><th>Store</th><th>Missed punches</th></tr></thead>
+              <tbody>{a.missed.slice(0, 40).map(x => (
+                <tr key={x.key} className={x.count >= LP_RULES.missedPunchMin ? 'lp-multi' : ''}><td>{x.name}</td><td>{lpStoreName(x.code)}</td><td>{x.count}</td></tr>
+              ))}</tbody>
+            </table>
+          </LpSection>
+        </>
+      )}
+    </div>
+  );
+}
+const fmtDateShortLp = iso => { const [, m, dd] = iso.split('-').map(Number); return `${MONTH_NAMES[m - 1].slice(0, 3)} ${dd}`; };
+
 function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBatch, onClearHistory, reviews, onImportReviewsBatch, giftCardHistory, onImportGiftCardBatch }) {
   const [processingSales, setProcessingSales] = useState(false);
   const [processingGiftCards, setProcessingGiftCards] = useState(false);
@@ -6435,7 +6647,7 @@ function topEmployeeLine(employees, n = 5) {
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
-function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory) {
+function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData) {
   const employeesForCodeCtx = code => {
     if (report && !isReportStale(report)) return report.stores.find(st => st.code === code)?.employees || null;
     return fallbackEmployeesByStore?.[code] || null;
@@ -6920,6 +7132,18 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     if (withGoals.length) lines.push(`Gift Card Goals set: ${withGoals.map(([code, g]) => `${STORE_CODE_TO_NAME[code] || code} ${fmt$(g.giftCardGoal)}`).join(', ')}`);
   }
 
+  // Loss Prevention (owner only — App passes lpData only on the owner's
+  // login, never in presenter mode). Same default range as the tab.
+  const lpToday = new Date().toISOString().slice(0, 10);
+  const lpRange = lpData ? lpDefaultRange(lpData, lpToday) : null;
+  if (lpRange) {
+    const a = analyzeLp(lpData, lpRange.start, lpRange.end, lpToday);
+    lines.push('');
+    lines.push(`LOSS PREVENTION (owner-only "Loss Prevention" tab), ${lpRange.start} through ${lpRange.end}. These are ITEMS TO REVIEW from comparing people to peers, never proof of theft — always say so if asked about a person. ${a.review.length} people tripped at least one check:`);
+    a.review.slice(0, 25).forEach(p => lines.push(`  ${p.name} @ ${STORE_CODE_TO_NAME[p.code] || p.code}: ${p.flags.join('; ')}`));
+    lines.push(`Totals in range: ${a.zero.reduce((s, g) => s + g.items.length, 0)} $0 services, ${a.refunds.reduce((s, g) => s + g.items.length, 0)} refunds, company loyalty-redemption rate ${Math.round(a.coLoyalRate * 100)}%, company cash-only ticket share ${Math.round(a.coCashRate * 100)}%, ${a.regCount} register closures.`);
+  }
+
   return lines.join('\n');
 }
 
@@ -6952,7 +7176,7 @@ async function buildRankContext(rankToken) {
   return lines.join('\n');
 }
 
-function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, rankToken }) {
+function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, rankToken }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -6965,7 +7189,7 @@ function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory)
+      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData)
         + await buildRankContext(rankToken);
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -8192,7 +8416,7 @@ function RewardsSetupTab({ token, showToast }) {
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Gift Cards', 'Budgets', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Setup'];
+const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Gift Cards', 'Budgets', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Loss Prevention', 'Setup'];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
@@ -8234,6 +8458,15 @@ export default function App() {
   const [giftCardHistory, setGiftCardHistory] = useState({});
   const giftCardHistoryRef = useRef(giftCardHistory);
   useEffect(() => { giftCardHistoryRef.current = giftCardHistory; }, [giftCardHistory]);
+  // Loss Prevention (owner-only, src/lossPrevention.js): { sales, att, reg },
+  // each a days map. Stored via api/loss-prevention.js, never weekly_report.
+  // lpTokenRef is the owner's token (null for anyone else) so the import
+  // handlers below, which are memoized once, know whether to capture it.
+  const [lpData, setLpData] = useState({ sales: {}, att: {}, reg: {} });
+  const [lpStatus, setLpStatus] = useState({ loaded: false, error: null });
+  const lpRef = useRef(lpData);
+  useEffect(() => { lpRef.current = lpData; }, [lpData]);
+  const lpTokenRef = useRef(null);
   // Same reasoning as historyRef above — the Goals tab shows four import
   // buttons (Sales/Color/Bottle/Signature Service) side by side, and firing
   // more than one in quick succession used to let them all read the same
@@ -8457,6 +8690,22 @@ export default function App() {
       (res.data || []).forEach(chunk => Object.assign(merged, chunk.payload));
       setGiftCardHistory(merged);
       if (res.error) showToast(`Couldn't load gift card sales (${res.error}) — try refreshing the page.`, 'error');
+    });
+  }, [currentUser]);
+
+  useEffect(() => {
+    lpTokenRef.current = currentUser?.role === 'owner' ? currentUser.token : null;
+    if (!lpTokenRef.current) { setLpData({ sales: {}, att: {}, reg: {} }); setLpStatus({ loaded: false, error: null }); return; }
+    lpLoad(currentUser.token).then(res => {
+      if (!res.ok) { setLpStatus({ loaded: true, error: res.error }); return; }
+      const next = { sales: {}, att: {}, reg: {} };
+      (res.rows || []).forEach(({ key, payload }) => {
+        const kind = key.split('_')[1];
+        if (next[kind]) Object.assign(next[kind], payload?.days || {});
+      });
+      lpRef.current = next;
+      setLpData(next);
+      setLpStatus({ loaded: true, error: null });
     });
   }, [currentUser]);
 
@@ -9403,10 +9652,39 @@ export default function App() {
   // forces them to run one at a time, each starting from historyRef.current
   // (updated synchronously, not just via the setHistory/useEffect roundtrip)
   // so the second one always sees the first one's result.
+  // Loss Prevention capture, owner only. Parses one file's LP detail into
+  // lpRef (replacing that file's date range) and records which months need
+  // saving. A file without the needed columns is skipped with a note, never
+  // an error — the regular import above it still counts.
+  const captureLpFile = async (kind, parse, file, months, lines) => {
+    if (!lpTokenRef.current) return;
+    try {
+      const parsed = await parse(file);
+      const merged = mergeLpDays(lpRef.current[kind], parsed);
+      lpRef.current = { ...lpRef.current, [kind]: merged.days };
+      merged.months.forEach(m => months.add(m));
+      lines.push(`  ↳ Loss Prevention: captured ${Object.keys(parsed.days).length} day${Object.keys(parsed.days).length === 1 ? '' : 's'}`);
+    } catch (err) {
+      lines.push(`  ↳ Loss Prevention: skipped (${err.message})`);
+    }
+  };
+  const saveLpMonths = async (kind, months, lines) => {
+    if (!months.size || !lpTokenRef.current) return;
+    setLpData(lpRef.current);
+    const failed = [];
+    let lastError = null;
+    for (const month of months) {
+      const res = await lpSave(lpTokenRef.current, `lp_${kind}_${month}`, lpMonthPayload(lpRef.current[kind], month));
+      if (!res.ok) { failed.push(month); lastError = res.error; }
+    }
+    if (failed.length) lines.push(`✗ Loss Prevention: couldn't save ${failed.join(', ')} (${lastError})`);
+  };
+
   const handleImportSalesBatch = useCallback(fileList => {
     const task = async () => {
       let working = historyRef.current;
       const touchedMonths = new Set();
+      const lpMonths = new Set();
       const lines = [];
       for (const file of fileList) {
         try {
@@ -9414,10 +9692,12 @@ export default function App() {
           working = mergeSalesIntoHistory(working, parsed.records);
           parsed.records.forEach(r => touchedMonths.add(r.date.slice(0, 7)));
           lines.push(`✓ ${file.name} — ${parsed.records.length} store-days`);
+          await captureLpFile('sales', parseLpSalesFile, file, lpMonths, lines);
         } catch (err) {
           lines.push(`✗ ${file.name} — ${err.message}`);
         }
       }
+      await saveLpMonths('sales', lpMonths, lines);
       historyRef.current = working;
       setHistory(working);
       const result = await saveHistoryMonthChunks(working, touchedMonths);
@@ -9438,6 +9718,7 @@ export default function App() {
     const task = async () => {
       let working = historyRef.current;
       const touchedMonths = new Set();
+      const lpMonths = new Set();
       const lines = [];
       for (const file of fileList) {
         try {
@@ -9445,10 +9726,12 @@ export default function App() {
           working = mergeAttendanceIntoHistory(working, parsed.records);
           parsed.records.forEach(r => touchedMonths.add(r.date.slice(0, 7)));
           lines.push(`✓ ${file.name} — ${parsed.records.length} store-days`);
+          await captureLpFile('att', parseLpAttendanceFile, file, lpMonths, lines);
         } catch (err) {
           lines.push(`✗ ${file.name} — ${err.message}`);
         }
       }
+      await saveLpMonths('att', lpMonths, lines);
       historyRef.current = working;
       setHistory(working);
       const result = await saveHistoryMonthChunks(working, touchedMonths);
@@ -9458,6 +9741,32 @@ export default function App() {
       } else {
         showToast(`Processed ${fileList.length} attendance file${fileList.length !== 1 ? 's' : ''}`);
       }
+      return lines;
+    };
+    const queued = importChainRef.current.then(task, task);
+    importChainRef.current = queued.then(() => {}, () => {});
+    return queued;
+  }, []);
+
+  // Register Closure report, uploaded from the Loss Prevention tab.
+  const handleImportLpRegister = useCallback(fileList => {
+    const task = async () => {
+      const months = new Set();
+      const lines = [];
+      for (const file of fileList) {
+        try {
+          const parsed = await parseLpRegisterFile(file);
+          const merged = mergeLpDays(lpRef.current.reg, parsed);
+          lpRef.current = { ...lpRef.current, reg: merged.days };
+          merged.months.forEach(m => months.add(m));
+          const count = Object.values(parsed.days).reduce((s, d) => s + d.length, 0);
+          lines.push(`✓ ${file.name} — ${count} register closures${parsed.rangeStart ? ` (${fmtDateLong(parsed.rangeStart)} – ${fmtDateLong(parsed.rangeEnd)})` : ''}`);
+        } catch (err) {
+          lines.push(`✗ ${file.name} — ${err.message}`);
+        }
+      }
+      await saveLpMonths('reg', months, lines);
+      showToast(lines.some(l => l.startsWith('✗')) ? 'Register Closure import had problems — see the notes below the upload' : 'Register closures imported', lines.some(l => l.startsWith('✗')) ? 'error' : undefined);
       return lines;
     };
     const queued = importChainRef.current.then(task, task);
@@ -9599,13 +9908,13 @@ export default function App() {
   if (!currentUser) return <LoginScreen onLoggedIn={handleLoggedIn} />;
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
-  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner') && (t !== 'Gift Cards' || currentUser.role === 'owner'));
+  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner') && (t !== 'Gift Cards' || currentUser.role === 'owner') && (t !== 'Loss Prevention' || (currentUser.role === 'owner' && !presenting)));
   // A live weekly Stylist Report upload is no longer the only way to power
   // these tabs — Sales-Accrual + Attendance historical imports feed the
   // exact same tables via each tab's own current-month fallback (see
   // getCurrentMonthRange). Only actually block on "nothing at all yet".
   const hasHistoricalData = Object.keys(history || {}).length > 0 || Object.keys(weeklyHistory || {}).length > 0;
-  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases' && tab !== 'Gift Cards';
+  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases' && tab !== 'Gift Cards' && tab !== 'Loss Prevention';
 
   const d = presenterData
     ? { ...presenterData, fallbackEmployeesByStore: presenterFallbackEmployees }
@@ -9695,6 +10004,12 @@ export default function App() {
             onGoToUpload={() => { setTab('Setup'); setSetupSection('history'); }}
           />
         )}
+        {tab === 'Loss Prevention' && currentUser.role === 'owner' && !presenting && (
+          <LossPreventionTab
+            lpData={lpData} lpStatus={lpStatus} onImportRegister={handleImportLpRegister}
+            onGoToHistoryImport={() => { setTab('Setup'); setSetupSection('history'); }}
+          />
+        )}
         {!needsReport && tab === 'Budgets' && (report || hasHistoricalData) && (
           <BudgetsTab
             query={queries.Budgets} onQuery={v => setQuery('Budgets', v)}
@@ -9759,7 +10074,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
+      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' && !presenting ? lpData : null} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
     </div>
   );
 }

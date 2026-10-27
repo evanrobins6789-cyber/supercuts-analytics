@@ -102,6 +102,14 @@ export function saveScoped(token, key, patch) {
   return postWrite('/api/scoped-data', { token, key, patch });
 }
 
+// Owner-only Loss Prevention storage (api/loss-prevention.js).
+export function lpLoad(token) {
+  return postJson('/api/loss-prevention', { token, action: 'load' });
+}
+export function lpSave(token, key, payload) {
+  return postWrite('/api/loss-prevention', { token, action: 'save', key, payload });
+}
+
 // Manager-only: the manager's store(s) plus the 5 stores ranked directly
 // above and below, company-wide, for every Overview metric (api/store-rank.js).
 export function storeRank(token, start, end) {
