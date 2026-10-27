@@ -1580,6 +1580,7 @@ const NEWS_CAROUSEL_WINDOW = 3;
 // gives that group), or these for an ungrouped post.
 const NEWS_CARD_COLOR = '#C23B3B';
 const NEWS_CARD_ICON = '📣';
+const NEWS_UNGROUPED_LABEL = 'General Updates';
 function newsCardLook(n, newsGroups) {
   const i = (newsGroups || []).findIndex(g => g.name === n.group);
   if (i < 0) return { accent: NEWS_CARD_COLOR, icon: NEWS_CARD_ICON };
@@ -2934,11 +2935,15 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews, currentUser, n
     });
     const byRecency = arr => [...arr].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || ''));
     const result = [];
-    if (ungrouped.length) result.push({ name: null, color: null, emoji: null, posts: byRecency(ungrouped) });
     newsGroups.forEach((g, i) => {
       const posts = byGroup.get(g.name);
       if (posts?.length) result.push({ name: g.name, color: g.color, emoji: NEWS_GROUP_EMOJI[i % NEWS_GROUP_EMOJI.length], posts: byRecency(posts) });
     });
+    // Posts with no (or an unregistered) group go last under their own
+    // heading. They used to sit first with no label, which read as an
+    // unsorted pile above the real groups. `ungrouped: true` keeps their
+    // cards on the default news color/icon, not the label's.
+    if (ungrouped.length) result.push({ name: NEWS_UNGROUPED_LABEL, ungrouped: true, color: null, emoji: '📰', posts: byRecency(ungrouped) });
     return result;
   }, [news, newsGroups]);
 
@@ -2946,7 +2951,7 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews, currentUser, n
     <div className="tab-content">
       <p className="section-hint">Company updates and longer-format posts — post new ones, and manage groups, from Setup → Homepage.</p>
       {buckets.length ? buckets.map(b => (
-        <div key={b.name || '__ungrouped__'} className="news-group">
+        <div key={b.ungrouped ? '__ungrouped__' : b.name} className="news-group">
           {b.name && (
             <p className="news-group-label" style={b.color ? { '--group-color': b.color } : undefined}>
               <span className="news-group-emoji">{b.emoji}</span>{b.name}
@@ -2958,7 +2963,7 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews, currentUser, n
                 key={n.id} compact image={n.headerImage} badge={newsPdfBadge(n)}
                 isNew={isWithinDays(n.createdAt || n.date, 10)}
                 title={n.title} date={fmtDateLong(n.date)} onClick={() => setSelectedPost(n)}
-                accent={b.color || NEWS_CARD_COLOR} icon={b.emoji || NEWS_CARD_ICON}
+                accent={b.color || NEWS_CARD_COLOR} icon={b.ungrouped ? NEWS_CARD_ICON : b.emoji}
               />
             ))}
           </div>
