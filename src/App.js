@@ -1243,19 +1243,24 @@ function EventComposer({ initial, onSubmit, onCancel, onImageError }) {
 // `onClick` (e.g. "open this post on the News tab") takes priority over
 // `onImageClick` (the image lightbox, used by Events) — a card is one or the
 // other, never both, so there's no ambiguity about what a tap does.
-function HomepageMediaCard({ image, badge, title, date, desc, onImageClick, onClick, compact, link, isNew }) {
+// No header image: the card becomes a "plain" card in `accent` (class or
+// group color) with `icon` as a big faded watermark, and drops to a slim
+// height. In a grid row next to a photo card it still stretches to match.
+function HomepageMediaCard({ image, badge, title, date, desc, onImageClick, onClick, compact, link, isNew, accent, icon }) {
   const clickable = !!(onClick || (image && onImageClick));
   const handleClick = onClick ? onClick : (image ? () => onImageClick(image) : undefined);
+  const plain = !image;
   return (
     <div
-      className={`homepage-featured-card ${compact ? 'homepage-featured-card--compact' : ''} ${clickable ? 'homepage-featured-card--clickable' : ''}`}
-      style={image ? { backgroundImage: `url(${image})` } : undefined}
+      className={`homepage-featured-card ${compact ? 'homepage-featured-card--compact' : ''} ${clickable ? 'homepage-featured-card--clickable' : ''} ${plain ? 'homepage-featured-card--plain' : ''}`}
+      style={image ? { backgroundImage: `url(${image})` } : { '--card-accent': accent || DEFAULT_EVENT_COLOR }}
       onClick={clickable ? handleClick : undefined}
       role={clickable ? 'button' : undefined}
       tabIndex={clickable ? 0 : undefined}
       onKeyDown={clickable ? e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(); } } : undefined}
     >
       {isNew && <span className="homepage-featured-new">🆕 New</span>}
+      {plain && icon && <span className="homepage-featured-icon" aria-hidden="true">{icon}</span>}
       <div className="homepage-featured-overlay">
         {badge && <span className="homepage-featured-badge">{badge}</span>}
         <p className="homepage-featured-title">{title}</p>
@@ -1313,6 +1318,7 @@ function FeaturedEvents({ events, todayISO, onImageClick }) {
         <HomepageMediaCard
           key={ev.id} image={ev.headerImage} badge={daysUntil(ev)}
           title={ev.title} date={dateLabel(ev)} desc={ev.description} onImageClick={onImageClick}
+          accent={eventPillColor(ev) || DEFAULT_EVENT_COLOR} icon={classCategory(ev)?.icon || '📅'}
         />
       ))}
     </div>
@@ -1339,16 +1345,17 @@ function pillTooltip(ev) {
 // exists in the data), and "HSA Cert" counts as HSA. A type not listed
 // here gets a stable color from CLASS_COLOR_FALLBACK. Hand-authored
 // (non-class) events keep the color picked in their composer.
+// `icon` is the watermark on a class's Upcoming Events card when it has no photo.
 const CLASS_COLORS = {
-  hsa: { label: 'HSA', color: '#2E7D4F' },
-  supercolor: { label: 'SuperColor', color: '#8E3BB5' },
-  'new gold comb contest': { label: 'Gold Comb Contest', color: '#A87A12' },
-  'manager training': { label: 'Manager Training', color: '#1F5FA8' },
-  'fade class': { label: 'Fade Class', color: '#3A3A3A' },
-  'dl recert': { label: 'DL Recert', color: '#C23B3B' },
-  'manager recert': { label: 'Manager Recert', color: '#D2691E' },
-  'stylist recert': { label: 'Stylist Recert', color: '#C2185B' },
-  'tt mastery class': { label: 'TT Mastery Class', color: '#00838F' },
+  hsa: { label: 'HSA', color: '#2E7D4F', icon: '🎓' },
+  supercolor: { label: 'SuperColor', color: '#8E3BB5', icon: '🎨' },
+  'new gold comb contest': { label: 'Gold Comb Contest', color: '#A87A12', icon: '🏆' },
+  'manager training': { label: 'Manager Training', color: '#1F5FA8', icon: '📋' },
+  'fade class': { label: 'Fade Class', color: '#3A3A3A', icon: '💈' },
+  'dl recert': { label: 'DL Recert', color: '#C23B3B', icon: '📜' },
+  'manager recert': { label: 'Manager Recert', color: '#D2691E', icon: '📜' },
+  'stylist recert': { label: 'Stylist Recert', color: '#C2185B', icon: '📜' },
+  'tt mastery class': { label: 'TT Mastery Class', color: '#00838F', icon: '🌟' },
 };
 const CLASS_COLOR_FALLBACK = ['#5D4037', '#455A64', '#6A1B9A', '#2E5E4E', '#AD1457', '#4E5BA6'];
 function classCategory(ev) {
@@ -1359,7 +1366,7 @@ function classCategory(ev) {
   if (CLASS_COLORS[key]) return { key, ...CLASS_COLORS[key] };
   let h = 0;
   for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return { key, label: raw, color: CLASS_COLOR_FALLBACK[h % CLASS_COLOR_FALLBACK.length] };
+  return { key, label: raw, color: CLASS_COLOR_FALLBACK[h % CLASS_COLOR_FALLBACK.length], icon: '✂️' };
 }
 const eventPillColor = ev => classCategory(ev)?.color || ev.color || null;
 
@@ -1569,8 +1576,17 @@ const HOMEPAGE_BITMOJI_SLOTS = [
 // forever rather than stopping at the end. Auto-advances on a timer, with
 // manual prev/next for anyone who doesn't want to wait for the next slide.
 const NEWS_CAROUSEL_WINDOW = 3;
+// No-photo news cards: their group's color + emoji (same emoji the News tab
+// gives that group), or these for an ungrouped post.
+const NEWS_CARD_COLOR = '#C23B3B';
+const NEWS_CARD_ICON = '📣';
+function newsCardLook(n, newsGroups) {
+  const i = (newsGroups || []).findIndex(g => g.name === n.group);
+  if (i < 0) return { accent: NEWS_CARD_COLOR, icon: NEWS_CARD_ICON };
+  return { accent: newsGroups[i].color || NEWS_CARD_COLOR, icon: NEWS_GROUP_EMOJI[i % NEWS_GROUP_EMOJI.length] };
+}
 const NEWS_CAROUSEL_INTERVAL_MS = 7000;
-function NewsCarousel({ news, onOpenPost }) {
+function NewsCarousel({ news, onOpenPost, newsGroups }) {
   const [index, setIndex] = useState(0);
   const total = news.length;
   const canCycle = total > NEWS_CAROUSEL_WINDOW;
@@ -1601,7 +1617,7 @@ function NewsCarousel({ news, onOpenPost }) {
             badge={newsPdfBadge(n)}
             isNew={isWithinDays(n.createdAt || n.date, 10)}
             title={n.title} date={fmtDateLong(n.date)} desc={n.body} link={n.link}
-            onClick={() => onOpenPost(n.id)}
+            onClick={() => onOpenPost(n.id)} {...newsCardLook(n, newsGroups)}
           />
         ))}
       </div>
@@ -1739,7 +1755,7 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
           <div className="homepage-section">
             <p className="section-label">📣 News &amp; Updates</p>
             {sortedNews.length ? (
-              <NewsCarousel news={sortedNews} onOpenPost={onOpenNews} />
+              <NewsCarousel news={sortedNews} onOpenPost={onOpenNews} newsGroups={newsGroups} />
             ) : <p className="empty-note">No news posted yet — post one from Setup → Homepage.</p>}
             <BitmojiPeek img={bitmojiImg} active={bitmojiKey === 'news'} corner="top-right" />
           </div>
@@ -2942,6 +2958,7 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews, currentUser, n
                 key={n.id} compact image={n.headerImage} badge={newsPdfBadge(n)}
                 isNew={isWithinDays(n.createdAt || n.date, 10)}
                 title={n.title} date={fmtDateLong(n.date)} onClick={() => setSelectedPost(n)}
+                accent={b.color || NEWS_CARD_COLOR} icon={b.emoji || NEWS_CARD_ICON}
               />
             ))}
           </div>

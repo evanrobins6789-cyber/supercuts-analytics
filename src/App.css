@@ -631,6 +631,24 @@
   padding: 14px; background: linear-gradient(to top, rgba(20,42,74,0.92), rgba(20,42,74,0.35) 65%, rgba(20,42,74,0.05));
   color: #fff;
 }
+/* No-photo card (see HomepageMediaCard): colored, slim, big faded icon.
+   Content sets the height instead of the 190px photo frame; a grid row
+   holding a photo card still stretches it to match. */
+.homepage-featured-card--plain {
+  min-height: 104px; display: flex;
+  background: linear-gradient(135deg, var(--card-accent), color-mix(in srgb, var(--card-accent) 72%, #000));
+}
+.homepage-featured-card--plain .homepage-featured-overlay {
+  position: relative; inset: auto; flex: 1; justify-content: center; background: none; padding-right: 64px;
+}
+.homepage-featured-icon {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%) rotate(-10deg);
+  font-size: 58px; line-height: 1; opacity: 0.28; pointer-events: none;
+}
+.homepage-featured-card--plain .homepage-featured-badge { background: rgba(255,255,255,0.22); }
+.homepage-featured-card--plain.homepage-featured-card--compact { min-height: 76px; }
+.homepage-featured-card--compact .homepage-featured-icon { font-size: 40px; right: 6px; }
+.homepage-featured-card--plain.homepage-featured-card--compact .homepage-featured-overlay { padding-right: 44px; }
 .homepage-featured-badge {
   align-self: flex-start; font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.03em; background: var(--red); color: #fff;
