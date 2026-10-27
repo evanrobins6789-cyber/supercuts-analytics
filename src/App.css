@@ -497,20 +497,6 @@
 .homepage-hero {
   background: linear-gradient(120deg, var(--navy), var(--navy-2));
   border-radius: 16px; padding: 24px 26px; color: #fff; position: relative;
-  display: flex; align-items: flex-start; gap: 24px;
-}
-.homepage-hero-main { flex: 1; min-width: 0; }
-.homepage-hero-updates {
-  flex: 0 0 340px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16);
-  border-radius: 12px; padding: 14px 16px; position: relative; z-index: 1;
-}
-.homepage-hero-updates-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: #fff; margin-bottom: 8px; }
-.homepage-hero-updates ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
-.homepage-hero-updates li { font-size: 12.5px; line-height: 1.4; color: #DCE4EE; display: flex; gap: 10px; }
-.homepage-hero-updates-date { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #B9C6D6; flex: 0 0 44px; padding-top: 1px; }
-@media (max-width: 760px) {
-  .homepage-hero { flex-direction: column; }
-  .homepage-hero-updates { flex-basis: auto; width: 100%; }
 }
 .homepage-hero-eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #B9C6D6; text-transform: uppercase; letter-spacing: 0.05em; }
 .homepage-hero-title { font-family: 'Barlow Condensed', sans-serif; font-size: 32px; font-weight: 700; margin-top: 6px; }

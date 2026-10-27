@@ -1589,24 +1589,6 @@ function HomepageQuickPostModal({ kind, onClose, onAddNews, onAddEvent, existing
   );
 }
 
-// "Latest Site Updates" panel in the Homepage hero. Hand-maintained, newest
-// first: add a line here when a change people will notice ships. `roles`
-// limits who sees an entry (owner always sees everything); leave it off for
-// changes everyone sees. Only the newest SITE_UPDATES_SHOWN visible ones show.
-const SITE_UPDATES = [
-  { date: '2026-10-27', text: 'Cleaner header with the logo centered.' },
-  { date: '2026-10-22', text: 'Homepage Top 10s now show where your store ranks company-wide.', roles: ['manager'] },
-  { date: '2026-10-22', text: 'Homepage Top 10 stores now show the whole company.', roles: ['district_leader'] },
-  { date: '2026-10-22', text: 'Overview now shows your store\'s company rank, with the 5 stores above and below you.', roles: ['manager'] },
-  { date: '2026-10-22', text: 'Printable Pin List PDF on the Reviews tab, grouped by DL.', roles: ['district_leader', 'manager'] },
-  { date: '2026-10-02', text: 'News posts can now include more than one PDF.' },
-];
-const SITE_UPDATES_SHOWN = 4;
-const fmtDateShort = iso => {
-  const [, m, d] = iso.split('-').map(Number);
-  return `${MONTH_NAMES[m - 1].slice(0, 3)} ${d}`;
-};
-
 function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore, news, events, reviews, onOpenNews, canPost, onAddNews, onAddEvent, newsGroups, onImageError, rankToken, rankRole }) {
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
@@ -1681,10 +1663,6 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
   const [quickPost, setQuickPost] = useState(null); // null | 'news' | 'event'
   const closeQuickPost = useCallback(() => setQuickPost(null), []);
   const existingGroups = useMemo(() => (newsGroups || []).map(g => g.name), [newsGroups]);
-  const siteUpdates = useMemo(
-    () => SITE_UPDATES.filter(u => !u.roles || rankRole === 'owner' || u.roles.includes(rankRole)).slice(0, SITE_UPDATES_SHOWN),
-    [rankRole]
-  );
 
   return (
     <div className="tab-content">
@@ -1695,25 +1673,13 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
         />
       )}
       <div className="homepage-hero">
-        <div className="homepage-hero-main">
-          <p className="homepage-hero-eyebrow">{fmtDateLong(todayISO)}</p>
-          <p className="homepage-hero-title">Welcome back 👋</p>
-          <p className="homepage-hero-sub">Here's what's new, what's coming up, and who's leading the pack this period.</p>
-          {canPost && (
-            <div className="homepage-hero-actions">
-              <button type="button" className="homepage-hero-action" onClick={() => setQuickPost('news')}>📣 Post Update</button>
-              <button type="button" className="homepage-hero-action" onClick={() => setQuickPost('event')}>📅 Post Event</button>
-            </div>
-          )}
-        </div>
-        {siteUpdates.length > 0 && (
-          <div className="homepage-hero-updates">
-            <p className="homepage-hero-updates-title">✨ Latest Site Updates</p>
-            <ul>
-              {siteUpdates.map(u => (
-                <li key={u.date + u.text}><span className="homepage-hero-updates-date">{fmtDateShort(u.date)}</span>{u.text}</li>
-              ))}
-            </ul>
+        <p className="homepage-hero-eyebrow">{fmtDateLong(todayISO)}</p>
+        <p className="homepage-hero-title">Welcome back 👋</p>
+        <p className="homepage-hero-sub">Here's what's new, what's coming up, and who's leading the pack this period.</p>
+        {canPost && (
+          <div className="homepage-hero-actions">
+            <button type="button" className="homepage-hero-action" onClick={() => setQuickPost('news')}>📣 Post Update</button>
+            <button type="button" className="homepage-hero-action" onClick={() => setQuickPost('event')}>📅 Post Event</button>
           </div>
         )}
         <BitmojiPeek img={bitmojiImg} active={bitmojiKey === 'hero'} corner="bottom-right" />
@@ -6483,11 +6449,6 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     }
     lines.push('');
   }
-
-  // Recent site changes — the Homepage hero's "Latest Site Updates" panel.
-  lines.push('LATEST SITE UPDATES (newest first; shown in the Homepage welcome banner):');
-  SITE_UPDATES.forEach(u => lines.push(`${u.date}: ${u.text}${u.roles ? ` (only for ${u.roles.map(r => ROLE_LABELS[r] || r).join(', ')})` : ''}`));
-  lines.push('');
 
   // CPD (Cuts Per Day) — same figures the Overview tab's CPD tile shows by
   // default: month-to-date vs the same dates last year.
