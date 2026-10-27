@@ -1333,6 +1333,36 @@ function pillTooltip(ev) {
   return ev.description ? `${head}\n${ev.description}` : head;
 }
 
+// Class colors on the calendar, one per class type, picked at render time
+// so classes already saved (all stored with the old single HSA green) change
+// too. Type names are matched case/space-insensitively ("Stylist  RECERT"
+// exists in the data), and "HSA Cert" counts as HSA. A type not listed
+// here gets a stable color from CLASS_COLOR_FALLBACK. Hand-authored
+// (non-class) events keep the color picked in their composer.
+const CLASS_COLORS = {
+  hsa: { label: 'HSA', color: '#2E7D4F' },
+  supercolor: { label: 'SuperColor', color: '#8E3BB5' },
+  'new gold comb contest': { label: 'Gold Comb Contest', color: '#A87A12' },
+  'manager training': { label: 'Manager Training', color: '#1F5FA8' },
+  'fade class': { label: 'Fade Class', color: '#3A3A3A' },
+  'dl recert': { label: 'DL Recert', color: '#C23B3B' },
+  'manager recert': { label: 'Manager Recert', color: '#D2691E' },
+  'stylist recert': { label: 'Stylist Recert', color: '#C2185B' },
+  'tt mastery class': { label: 'TT Mastery Class', color: '#00838F' },
+};
+const CLASS_COLOR_FALLBACK = ['#5D4037', '#455A64', '#6A1B9A', '#2E5E4E', '#AD1457', '#4E5BA6'];
+function classCategory(ev) {
+  if (ev.source !== 'hsa' || !ev.eventType) return null;
+  const raw = String(ev.eventType).replace(/\s+/g, ' ').trim();
+  let key = raw.toLowerCase();
+  if (key.startsWith('hsa')) key = 'hsa';
+  if (CLASS_COLORS[key]) return { key, ...CLASS_COLORS[key] };
+  let h = 0;
+  for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return { key, label: raw, color: CLASS_COLOR_FALLBACK[h % CLASS_COLOR_FALLBACK.length] };
+}
+const eventPillColor = ev => classCategory(ev)?.color || ev.color || null;
+
 function EventsCalendar({ events, todayISO }) {
   const [cal, setCal] = useState(() => { const t = new Date(); return { y: t.getFullYear(), m: t.getMonth() }; });
   const monthLabel = fmtMonthLong(`${cal.y}-${String(cal.m + 1).padStart(2, '0')}`);
@@ -1355,6 +1385,15 @@ function EventsCalendar({ events, todayISO }) {
     });
     return map;
   }, [events, cal]);
+  // Key for the class colors showing in the displayed month only.
+  const legend = useMemo(() => {
+    const seen = new Map();
+    Object.values(eventsByDay).flat().forEach(ev => {
+      const c = classCategory(ev);
+      if (c && !seen.has(c.key)) seen.set(c.key, c);
+    });
+    return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }, [eventsByDay]);
 
   const cells = useMemo(() => {
     const firstWeekday = new Date(cal.y, cal.m, 1).getDay();
@@ -1387,12 +1426,20 @@ function EventsCalendar({ events, todayISO }) {
           return (
             <div key={i} className={`homepage-cal-cell ${iso === todayISO ? 'homepage-cal-cell--today' : ''}`}>
               <span className="homepage-cal-daynum">{day}</span>
-              {dayEvents.slice(0, 3).map(ev => <span key={ev.id} className="homepage-cal-pill" style={ev.color ? { background: ev.color } : undefined} title={pillTooltip(ev)}>{ev.title}</span>)}
+              {dayEvents.slice(0, 3).map(ev => {
+                const color = eventPillColor(ev);
+                return <span key={ev.id} className="homepage-cal-pill" style={color ? { background: color } : undefined} title={pillTooltip(ev)}>{ev.title}</span>;
+              })}
               {dayEvents.length > 3 && <span className="homepage-cal-more">+{dayEvents.length - 3} more</span>}
             </div>
           );
         })}
       </div>
+      {legend.length > 0 && (
+        <div className="homepage-cal-legend">
+          {legend.map(c => <span key={c.key} className="homepage-cal-legend-item"><span className="homepage-cal-legend-dot" style={{ background: c.color }} />{c.label}</span>)}
+        </div>
+      )}
     </div>
   );
 }
