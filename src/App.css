@@ -23,7 +23,7 @@
    with an equal-width empty left column keeping the logo truly centered. */
 .app-header {
   display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px;
-  padding: 22px 20px 16px; background: var(--navy); color: #fff;
+  padding: 12px 20px; background: var(--navy); color: #fff;
 }
 .header-center { grid-column: 2; display: flex; justify-content: center; }
 .app-header .header-right { grid-column: 3; justify-self: end; }
@@ -31,7 +31,7 @@
   .app-header { grid-template-columns: 1fr; justify-items: center; }
   .header-center, .app-header .header-right { grid-column: 1; justify-self: center; }
 }
-.header-logo-img { height: 34px; width: auto; display: block; }
+.header-logo-img { height: 28px; width: auto; display: block; }
 .app-title {
   font-family: 'Barlow Condensed', sans-serif;
   font-weight: 700; font-size: 30px; letter-spacing: 0.01em; text-transform: uppercase;
@@ -496,14 +496,15 @@
 
 .homepage-hero {
   background: linear-gradient(120deg, var(--navy), var(--navy-2));
-  border-radius: 16px; padding: 24px 26px; color: #fff; position: relative;
+  /* Extra right padding: the bottom-right BitmojiPeek (72px) pops up there. */
+  border-radius: 14px; padding: 14px 84px 14px 22px; color: #fff; position: relative;
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px 20px;
 }
-.homepage-hero-eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #B9C6D6; text-transform: uppercase; letter-spacing: 0.05em; }
-.homepage-hero-title { font-family: 'Barlow Condensed', sans-serif; font-size: 32px; font-weight: 700; margin-top: 6px; }
+.homepage-hero-eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #B9C6D6; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+.homepage-hero-title { font-family: 'Barlow Condensed', sans-serif; font-size: 26px; font-weight: 700; line-height: 1.1; }
 .homepage-hero-icon { margin-right: 10px; }
 .homepage-hero-subtitle { font-weight: 400; opacity: 0.85; }
-.homepage-hero-sub { font-size: 13px; color: #B9C6D6; margin-top: 6px; max-width: 640px; }
-.homepage-hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; position: relative; z-index: 1; }
+.homepage-hero-actions { display: flex; flex-wrap: wrap; gap: 10px; position: relative; z-index: 1; }
 .homepage-hero-action {
   background: #fff; color: var(--navy); border: none; border-radius: 999px; padding: 9px 18px;
   font-size: 13px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,0.18);
