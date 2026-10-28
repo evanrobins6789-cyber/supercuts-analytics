@@ -7133,7 +7133,8 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   }
 
   // Loss Prevention (owner only — App passes lpData only on the owner's
-  // login, never in presenter mode). Same default range as the tab.
+  // login; in presenter mode, the faked copy from presenter.js). Same
+  // default range as the tab.
   const lpToday = new Date().toISOString().slice(0, 10);
   const lpRange = lpData ? lpDefaultRange(lpData, lpToday) : null;
   if (lpRange) {
@@ -9881,8 +9882,8 @@ export default function App() {
   // real state. The real state itself is never touched, and all writes are
   // blocked (presenter.js), so nothing here can reach stored data.
   const presenterData = useMemo(() => (presenting ? presenterView({
-    report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary,
-  }, fallbackEmployeesByStore) : null), [presenting, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, fallbackEmployeesByStore]);
+    report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData,
+  }, fallbackEmployeesByStore) : null), [presenting, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, fallbackEmployeesByStore]);
   const presenterFallbackEmployees = useMemo(
     () => (presenterData ? getEmployeesByStoreFromHistory(presenterData.history, presenterData.weeklyHistory) : null),
     [presenterData]
@@ -9908,7 +9909,7 @@ export default function App() {
   if (!currentUser) return <LoginScreen onLoggedIn={handleLoggedIn} />;
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
-  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner') && (t !== 'Gift Cards' || currentUser.role === 'owner') && (t !== 'Loss Prevention' || (currentUser.role === 'owner' && !presenting)));
+  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner') && (t !== 'Gift Cards' || currentUser.role === 'owner') && (t !== 'Loss Prevention' || currentUser.role === 'owner'));
   // A live weekly Stylist Report upload is no longer the only way to power
   // these tabs — Sales-Accrual + Attendance historical imports feed the
   // exact same tables via each tab's own current-month fallback (see
@@ -10004,9 +10005,9 @@ export default function App() {
             onGoToUpload={() => { setTab('Setup'); setSetupSection('history'); }}
           />
         )}
-        {tab === 'Loss Prevention' && currentUser.role === 'owner' && !presenting && (
+        {tab === 'Loss Prevention' && currentUser.role === 'owner' && (
           <LossPreventionTab
-            lpData={lpData} lpStatus={lpStatus} onImportRegister={handleImportLpRegister}
+            lpData={d.lpData || lpData} lpStatus={lpStatus} onImportRegister={handleImportLpRegister}
             onGoToHistoryImport={() => { setTab('Setup'); setSetupSection('history'); }}
           />
         )}
@@ -10074,7 +10075,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' && !presenting ? lpData : null} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
+      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' ? (d.lpData || lpData) : null} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
     </div>
   );
 }

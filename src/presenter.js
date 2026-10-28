@@ -306,6 +306,37 @@ function fakePoints(summary) {
   return out;
 }
 
+// Loss Prevention ({ sales, att, reg } day maps, shapes in lossPrevention.js).
+// Names go through the shared name map so staff/guest matching still lines
+// up; dollar amounts are scaled per store; free-text reasons are replaced,
+// except the "vague" ones (".", "idk"...) the checks look for. Counts and
+// hours stay real so the same checks trip.
+const LP_VAGUE = /^(|\.+|\?+|idk|i dont know|na|n\/a|none|no|-+|x+|ok|even)$/i;
+const fakeLpReason = r => (!r || LP_VAGUE.test(r.trim()) ? r : 'Sample reason.');
+const fakeNameKeys = obj => Object.fromEntries(Object.entries(obj || {}).map(([n, v]) => [fakePersonName(n), v]));
+function fakeLpData(lp) {
+  if (!lp) return lp;
+  const money = (code, v) => Math.round(v * between(`lp|${code}`, 0.7, 1.3) * 100) / 100;
+  const mapDays = (days, fn) => Object.fromEntries(Object.entries(days || {}).map(([d, v]) => [d, fn(v)]));
+  const mapStores = (stores, fn) => Object.fromEntries(Object.entries(stores || {}).map(([code, v]) => [code, fn(v, code)]));
+  return {
+    sales: mapDays(lp.sales, stores => mapStores(stores, (ds, code) => ({
+      s: fakeNameKeys(ds.s),
+      c: fakeNameKeys(ds.c),
+      ev: (ds.ev || []).map(e => ({
+        ...e,
+        n: e.n ? fakePersonName(e.n) : e.n,
+        ...(e.g ? { g: fakePersonName(e.g) } : {}),
+        ...(e.a != null ? { a: money(code, e.a) } : {}),
+        ...(e.l != null ? { l: money(code, e.l) } : {}),
+        ...(e.why ? { why: fakeLpReason(e.why) } : {}),
+      })),
+    }))),
+    att: mapDays(lp.att, stores => mapStores(stores, people => fakeNameKeys(people))),
+    reg: mapDays(lp.reg, rows => rows.map(([code, adj, reason, by, paid]) => [code, money(code, adj), fakeLpReason(reason), by ? fakePersonName(by) : by, money(code, paid)])),
+  };
+}
+
 // One call from App.js — returns the fake counterpart of every dataset the
 // tabs render. `realEmployeesByStore` is the REAL fallback roster (used only
 // to spot which review mentioned which real stylist).
@@ -327,6 +358,7 @@ export function presenterView(real, realEmployeesByStore) {
     hsaSignups: fakeHsaSignups(real.hsaSignups),
     newsReads: (real.newsReads || []).map(r => ({ ...r, userName: fakePersonName(r.userName) })),
     pointsSummary: fakePoints(real.pointsSummary),
+    lpData: fakeLpData(real.lpData),
   };
 }
 
