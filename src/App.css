@@ -472,6 +472,28 @@
 
 .manager-tag { font-size: 10px; font-weight: 700; color: var(--red); letter-spacing: 0.03em; }
 
+/* ─── Focus Stylist ──────────────────────────────────────────────────── */
+.focus-btn {
+  margin-left: 8px; padding: 2px 7px; border: 1px solid var(--navy-2); border-radius: 10px;
+  background: var(--card); color: var(--navy-2); font-family: 'Inter', sans-serif;
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.05em; cursor: pointer; vertical-align: middle;
+}
+.focus-btn:hover { background: var(--navy-2); color: #fff; }
+.focus-btn--on { background: var(--gold); border-color: var(--gold); color: #fff; }
+.focus-btn--on:hover { background: #A8861F; border-color: #A8861F; }
+.focus-modal-panel { max-width: 380px; }
+.focus-modal-who { margin: 6px 0 2px; color: var(--navy); font-size: 14px; }
+.focus-modal-field { display: block; margin-top: 10px; }
+.focus-modal-field span { display: block; font-size: 12px; font-weight: 600; color: var(--ink-soft); margin-bottom: 4px; }
+.focus-modal-panel .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.focus-group-head { cursor: default; }
+.focus-group-head:hover { background: none; }
+.focus-group-role { font-size: 11px; color: var(--ink-soft); }
+.focus-hit { color: var(--green); font-weight: 700; }
+.focus-miss { color: var(--red); font-weight: 700; }
+.focus-none { color: var(--ink-soft); font-size: 11px; }
+.focus-added { font-size: 11px; color: var(--ink-soft); white-space: nowrap; }
+
 .gold-comb-btn {
   font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 600;
   border: 1px solid var(--line); background: var(--card); color: var(--ink-soft);

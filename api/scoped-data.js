@@ -12,7 +12,7 @@ import { createServiceClient, requireSession } from '../src/serverAuth.js';
 import { rollup } from '../src/parser.js';
 import { getCodeForStoreName } from '../src/storeDirectory.js';
 
-const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases']);
+const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases', 'focus_stylists']);
 const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_', 'gift_card_history_'];
 
 // Gift card sales and the gift card goal are owner-only: no other role gets
@@ -24,7 +24,13 @@ const OWNER_ONLY_GOAL_FIELDS = ['giftCardGoal'];
 // object and support scoped PATCH writes below — a merge-in for just the
 // codes in the patch, never a full-object overwrite. store_goals/
 // store_managers/milestone_goals/store_leases all share this shape.
-const PATCHABLE_KEYS = new Set(['store_goals', 'store_managers', 'milestone_goals', 'store_leases']);
+const PATCHABLE_KEYS = new Set(['store_goals', 'store_managers', 'milestone_goals', 'store_leases', 'focus_stylists']);
+
+// Focus Stylist list: { [storeCode]: { [nameKey]: { name, tsthGoal, cphGoal, addedBy, addedAt } } }.
+// Only the owner and District Leaders use it — a DL sees and edits their
+// own stores' entries, the owner sees everyone. Managers/employees get
+// nothing back and can't write it.
+const FOCUS_ROLES = new Set(['owner', 'district_leader']);
 
 function isAllowedKey(key) {
   return SENSITIVE_KEYS.has(key) || SENSITIVE_PREFIXES.some(p => key.startsWith(p));
@@ -95,6 +101,7 @@ function filterPayload(key, payload, employee) {
     return out;
   }
   if (key === 'store_managers' || key === 'milestone_goals') return filterCodeKeyedObject(payload, allowed);
+  if (key === 'focus_stylists') return employee.role === 'district_leader' ? filterCodeKeyedObject(payload, allowed) : {};
   if (key.startsWith('gift_card_history_')) return {};
   // Leases (rent/landlord/critical-date data) are owner-only, full stop —
   // unlike store_goals/store_managers/milestone_goals, no other role has a
@@ -147,6 +154,10 @@ export default async function handler(req, res) {
         res.status(400).json({ error: `"${key}" does not support scoped patch writes.` });
         return;
       }
+      if (key === 'focus_stylists' && !FOCUS_ROLES.has(employee.role)) {
+        res.status(403).json({ error: 'Only District Leaders and leadership can set focus stylists.' });
+        return;
+      }
       if (employee.role !== 'owner') {
         // Leases have no per-store carve-out like store_goals does — a
         // non-owner can't patch even their own store's lease entry.
@@ -179,6 +190,12 @@ export default async function handler(req, res) {
           merged[code] = { ...merged[code], ...value };
         } else {
           merged[code] = value;
+        }
+        // A focus stylist is removed by patching their entry to null —
+        // drop it (and the store, once empty) rather than storing nulls.
+        if (key === 'focus_stylists' && merged[code]) {
+          Object.keys(merged[code]).forEach(k => { if (merged[code][k] == null) delete merged[code][k]; });
+          if (!Object.keys(merged[code]).length) delete merged[code];
         }
       });
       const { error: upsertError } = await supabase.from('weekly_report').upsert({ report_id: key, payload: merged }, { onConflict: 'report_id' });

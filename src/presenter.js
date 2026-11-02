@@ -203,6 +203,23 @@ function fakeManagers(managers) {
   return out;
 }
 
+// Focus Stylist list: same shared name map as the faked employee rows, so
+// each focus entry still lines up with its (faked) stylist's numbers. The
+// per-store key is the lowercased name (focusKey in App.js), so it's
+// rebuilt from the faked name. Goals stay real, like counts elsewhere.
+function fakeFocusStylists(focus) {
+  const out = {};
+  Object.entries(focus || {}).forEach(([code, entries]) => {
+    out[code] = {};
+    Object.values(entries || {}).forEach(e => {
+      if (!e) return;
+      const name = fakePersonName(e.name);
+      out[code][name.trim().toLowerCase().replace(/\s+/g, ' ')] = { ...e, name, addedBy: e.addedBy ? fakePersonName(e.addedBy) : e.addedBy };
+    });
+  });
+  return out;
+}
+
 function fakeRoster(roster) {
   if (!roster || !Array.isArray(roster.employees)) return roster;
   return { ...roster, employees: roster.employees.map(e => ({ ...e, name: fakePersonName(e.name) })) };
@@ -359,6 +376,7 @@ export function presenterView(real, realEmployeesByStore) {
     newsReads: (real.newsReads || []).map(r => ({ ...r, userName: fakePersonName(r.userName) })),
     pointsSummary: fakePoints(real.pointsSummary),
     lpData: fakeLpData(real.lpData),
+    focusStylists: fakeFocusStylists(real.focusStylists),
   };
 }
 

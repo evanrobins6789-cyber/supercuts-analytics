@@ -2977,8 +2977,9 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews, currentUser, n
 
 // ─── Overview tab ───────────────────────────────────────────────────────────
 // ─── Overview tab (top-10/bottom-10 leaderboards, plus the full store list) ─
-function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery, managers, isOwner, goals, giftCardHistory, rankToken }) {
+function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery, managers, isOwner, goals, giftCardHistory, rankToken, focusStylists = {}, onSaveFocus = null }) {
   const [sortBy, setSortBy] = useState('tsth');
+  const [focusTarget, setFocusTarget] = useState(null);
   const getSalesGoal = code => goals?.[code]?.salesGoal ?? null;
   const [expanded, setExpanded] = useState({});
   const [focused, setFocused] = useState(null);
@@ -3192,6 +3193,8 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
                     footer={{ sales: s.sales, avgTicket: s.avgTicket, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, otherServices: s.otherServices, opc: s.opc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                     footerLabel="Store total / weighted avg"
                     focused={focused} onFocus={setFocused}
+                    focusKeys={new Set(Object.keys(focusStylists?.[s.code] || {}))}
+                    onFocusStylist={onSaveFocus ? e => setFocusTarget({ code: s.code, storeName: s.name, name: e.name, tsth: e.tsth, cph: e.cph }) : null}
                   />
                 </div>
               )}
@@ -3201,6 +3204,16 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
       </div>
 
       {!sorted.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
+
+      {focusTarget && (
+        <FocusGoalModal
+          target={focusTarget}
+          existing={focusStylists?.[focusTarget.code]?.[focusKey(focusTarget.name)] || null}
+          onSubmit={goalsIn => { onSaveFocus(focusTarget.code, focusTarget.name, goalsIn); setFocusTarget(null); }}
+          onRemove={() => { onSaveFocus(focusTarget.code, focusTarget.name, null); setFocusTarget(null); }}
+          onClose={() => setFocusTarget(null)}
+        />
+      )}
 
       {isOwner && (
         <>
@@ -3227,8 +3240,169 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
   );
 }
 
+// ─── Focus Stylist ──────────────────────────────────────────────────────────
+// DLs and leadership pick stylists to focus on from the Overview tab (FOCUS
+// button next to the name), each with a TSTH and CPH goal. Saved through
+// saveScoped as `focus_stylists` → { [storeCode]: { [focusKey(name)]: entry } },
+// so a DL only ever reads/writes their own stores (api/scoped-data.js) and
+// the owner sees everyone. Stylists are matched to their numbers by store +
+// name, the same way the Employees tables list them.
+const focusKey = name => String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+function FocusGoalModal({ target, existing, onSubmit, onRemove, onClose }) {
+  const [tsthGoal, setTsthGoal] = useState(existing?.tsthGoal ?? '');
+  const [cphGoal, setCphGoal] = useState(existing?.cphGoal ?? '');
+  const tsth = parseFloat(tsthGoal);
+  const cph = parseFloat(cphGoal);
+  const valid = tsth > 0 && cph > 0;
+  const submit = ev => {
+    ev.preventDefault();
+    if (valid) onSubmit({ tsthGoal: tsth, cphGoal: cph });
+  };
+  return (
+    <div className="news-modal-overlay" onClick={onClose}>
+      <div className="news-modal-panel focus-modal-panel" onClick={e => e.stopPropagation()}>
+        <button type="button" className="news-modal-close" onClick={onClose} aria-label="Close">✕</button>
+        <p className="lease-card-title">{existing ? 'Edit Focus Goals' : 'Focus Stylist'}</p>
+        <p className="focus-modal-who"><strong>{target.name}</strong> · {target.storeName}</p>
+        <p className="section-hint">Right now: TSTH {fmtRate(target.tsth)} · CPH {fmtNum(target.cph, 2)}</p>
+        <form onSubmit={submit}>
+          <label className="focus-modal-field">
+            <span>TSTH goal ($ per hour)</span>
+            <input className="text-input" type="number" inputMode="decimal" min="0" step="0.01" autoFocus value={tsthGoal} onChange={e => setTsthGoal(e.target.value)} placeholder="e.g. 32.00" />
+          </label>
+          <label className="focus-modal-field">
+            <span>CPH goal (cuts per hour)</span>
+            <input className="text-input" type="number" inputMode="decimal" min="0" step="0.01" value={cphGoal} onChange={e => setCphGoal(e.target.value)} placeholder="e.g. 1.50" />
+          </label>
+          <button type="submit" className="btn-primary" disabled={!valid}>{existing ? 'Save goals' : 'Add to Focus Stylist'}</button>
+          {existing && (
+            <button type="button" className="btn-primary btn-secondary" onClick={() => { if (window.confirm(`Take ${target.name} off the focus list?`)) onRemove(); }}>
+              Remove from focus list
+            </button>
+          )}
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function FocusStylistTab({ focusStylists, report, history, weeklyHistory, dateRange, onDateRangeChange, onSaveFocus, isOwner }) {
+  const [editTarget, setEditTarget] = useState(null);
+  // Same range rule as Overview: the live report's period when it's
+  // current, otherwise the picked range, otherwise month-to-date.
+  const usingDefaultRange = isReportStale(report) && !(dateRange.start && dateRange.end);
+  const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
+  const isHistorical = !!(effectiveRange.start && effectiveRange.end);
+
+  // { [storeCode]: Map(focusKey → employee row) } for the actual TSTH/CPH.
+  const employeesByStore = useMemo(() => {
+    const out = {};
+    const add = (code, employees) => {
+      out[code] = new Map((employees || []).map(e => [focusKey(e.name), e]));
+    };
+    if (isHistorical) {
+      const totals = getRangeTotals(history, weeklyHistory, effectiveRange.start, effectiveRange.end);
+      Object.entries(totals).forEach(([code, t]) => add(code, historyTotalsToReportShape(t).employees));
+    } else if (report) {
+      report.stores.forEach(s => add(s.code, s.employees));
+    }
+    return out;
+  }, [isHistorical, history, weeklyHistory, effectiveRange.start, effectiveRange.end, report]);
+
+  const groups = useMemo(() => {
+    const leaderOrder = leaderSections().flatMap(sec => sec.leaders.map(l => l.name));
+    const byLeader = {};
+    Object.entries(focusStylists || {}).forEach(([code, entries]) => {
+      const leader = getLeaderForStoreCode(code);
+      const groupName = leader?.leaderName || 'No DL assigned';
+      Object.values(entries || {}).forEach(entry => {
+        if (!entry) return;
+        if (!byLeader[groupName]) byLeader[groupName] = { name: groupName, role: leader?.role || '', rows: [] };
+        const actual = employeesByStore[code]?.get(focusKey(entry.name)) || null;
+        byLeader[groupName].rows.push({ ...entry, code, storeName: STORE_CODE_TO_NAME[code] || `Store ${code}`, actual });
+      });
+    });
+    const rank = name => { const i = leaderOrder.indexOf(name); return i === -1 ? leaderOrder.length : i; };
+    return Object.values(byLeader)
+      .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name))
+      .map(g => ({ ...g, rows: g.rows.sort((a, b) => a.storeName.localeCompare(b.storeName) || a.name.localeCompare(b.name)) }));
+  }, [focusStylists, employeesByStore]);
+
+  const total = groups.reduce((n, g) => n + g.rows.length, 0);
+  const vsGoal = (actual, goal, fmt) => {
+    if (actual == null) return <span className="focus-none">no data</span>;
+    return <span className={actual >= goal ? 'focus-hit' : 'focus-miss'}>{fmt(actual)}</span>;
+  };
+
+  return (
+    <div className="tab-content">
+      <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
+      <p className="section-hint">
+        {isOwner ? 'Every focus stylist, grouped by DL.' : 'Your focus stylists.'} Actual TSTH and CPH are for {isHistorical ? `${fmtDateLong(effectiveRange.start)} – ${fmtDateLong(effectiveRange.end)}` : 'the current report'}: green means at or above goal, red means below. Add stylists with the FOCUS button next to their name on the Overview tab.
+      </p>
+      {!total && <div className="empty-state"><p className="empty-title">No focus stylists yet</p><p>Open a store on the Overview tab and click FOCUS next to a stylist's name.</p></div>}
+      <div className="dl-list">
+        {groups.map(g => (
+          <div key={g.name} className="dl-card">
+            <div className="dl-card-head focus-group-head">
+              <div className="dl-card-name-wrap">
+                <span className="dl-card-name">{g.name}</span>
+                {g.role && <span className="focus-group-role">{g.role.replace(/s$/, '')}</span>}
+                <span className="dl-card-count">{g.rows.length} stylist{g.rows.length === 1 ? '' : 's'}</span>
+              </div>
+            </div>
+            <div className="dl-store-table ledger-scroll">
+              <table className="ledger-table">
+                <thead>
+                  <tr>
+                    <th className="ledger-name-col">Stylist</th>
+                    <th className="ledger-text-col">Store</th>
+                    <th>TSTH Goal</th>
+                    <th>TSTH Actual</th>
+                    <th>CPH Goal</th>
+                    <th>CPH Actual</th>
+                    <th className="ledger-text-col">Added</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {g.rows.map(r => (
+                    <tr key={`${r.code}-${r.name}`}>
+                      <td className="ledger-name-col">{r.name}</td>
+                      <td className="ledger-text-col">{r.storeName}</td>
+                      <td>{fmtRate(r.tsthGoal)}</td>
+                      <td>{vsGoal(r.actual?.tsth, r.tsthGoal, fmtRate)}</td>
+                      <td>{fmtNum(r.cphGoal, 2)}</td>
+                      <td>{vsGoal(r.actual?.cph, r.cphGoal, n => fmtNum(n, 2))}</td>
+                      <td className="ledger-text-col focus-added">{r.addedAt ? fmtDateShort(r.addedAt) : ''}{r.addedBy ? ` · ${r.addedBy}` : ''}</td>
+                      <td><button type="button" className="focus-btn focus-btn--on" onClick={() => setEditTarget({ code: r.code, storeName: r.storeName, name: r.name, tsth: r.actual?.tsth, cph: r.actual?.cph })}>Edit</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
+      </div>
+      {editTarget && (
+        <FocusGoalModal
+          target={editTarget}
+          existing={focusStylists?.[editTarget.code]?.[focusKey(editTarget.name)] || null}
+          onSubmit={goalsIn => { onSaveFocus(editTarget.code, editTarget.name, goalsIn); setEditTarget(null); }}
+          onRemove={() => { onSaveFocus(editTarget.code, editTarget.name, null); setEditTarget(null); }}
+          onClose={() => setEditTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 // ─── Employees tab ──────────────────────────────────────────────────────────
-function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel = 'Total / Avg (weighted)', focused = null, onFocus = null }) {
+// focusKeys/onFocusStylist: the Focus Stylist button (Overview, DLs and
+// leadership only). focusKeys is the set of focusKey()s already on this
+// store's focus list, so those stylists show as ★ FOCUS.
+function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel = 'Total / Avg (weighted)', focused = null, onFocus = null, focusKeys = null, onFocusStylist = null }) {
   return (
     <div className="ledger-scroll">
       <table className={`ledger-table ${focused ? 'ledger-table--focus-mode' : ''}`}>
@@ -3249,6 +3423,15 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
               <td className="ledger-name-col">
                 {e.name}
                 {e.isManager && <span className="manager-tag"> MANAGER</span>}
+                {onFocusStylist && (
+                  <button
+                    type="button"
+                    className={`focus-btn ${focusKeys?.has(focusKey(e.name)) ? 'focus-btn--on' : ''}`}
+                    onClick={ev => { ev.stopPropagation(); onFocusStylist(e); }}
+                  >
+                    {focusKeys?.has(focusKey(e.name)) ? '★ FOCUS' : 'FOCUS'}
+                  </button>
+                )}
               </td>
               {showStoreCol && <td className="ledger-store-col">{e.store}</td>}
               {EMPLOYEE_METRICS.map(m => (
@@ -6647,7 +6830,7 @@ function topEmployeeLine(employees, n = 5) {
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
-function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData) {
+function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists) {
   const employeesForCodeCtx = code => {
     if (report && !isReportStale(report)) return report.stores.find(st => st.code === code)?.employees || null;
     return fallbackEmployeesByStore?.[code] || null;
@@ -6782,6 +6965,22 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       const actual = historyTotalsToReportShape(mtdTotals[code] || {}).sales || 0;
       const pctStr = g.milestone ? ` (${Math.round((actual / g.milestone) * 100)}% of milestone)` : '';
       lines.push(`${STORE_CODE_TO_NAME[code] || `Store ${code}`}: MTD Sales $${Math.round(actual)}, Goal ${g.goal != null ? `$${Math.round(g.goal)}` : 'n/a'}, Milestone ${g.milestone != null ? `$${Math.round(g.milestone)}` : 'n/a'}${pctStr}`);
+    });
+    lines.push('');
+  }
+
+  // Focus stylists (DL/leadership picks with TSTH/CPH goals) vs their
+  // month-to-date actuals. Already scoped server-side: a DL's list only has
+  // their own stores, managers/employees get none.
+  const focusEntries = Object.entries(focusStylists || {}).flatMap(([code, entries]) => Object.values(entries || {}).filter(Boolean).map(e => ({ ...e, code })));
+  if (focusEntries.length) {
+    const { start, end } = getCurrentMonthRange();
+    const mtdTotals = getRangeTotals(history, weeklyHistory, start, end);
+    lines.push(`FOCUS STYLISTS (picked by DLs/leadership on the Focus Stylist tab, with goals), month-to-date ${start} through ${end}:`);
+    focusEntries.forEach(e => {
+      const emp = (historyTotalsToReportShape(mtdTotals[e.code] || {}).employees || []).find(x => focusKey(x.name) === focusKey(e.name));
+      const dl = getLeaderForStoreCode(e.code)?.leaderName || 'no DL';
+      lines.push(`${e.name} (${STORE_CODE_TO_NAME[e.code] || `Store ${e.code}`}, DL ${dl}): TSTH goal $${Number(e.tsthGoal).toFixed(2)}, MTD TSTH ${emp?.tsth != null ? `$${emp.tsth.toFixed(2)}` : 'no data'}; CPH goal ${Number(e.cphGoal).toFixed(2)}, MTD CPH ${emp?.cph != null ? emp.cph.toFixed(2) : 'no data'}. Added ${e.addedAt || '?'} by ${e.addedBy || '?'}.`);
     });
     lines.push('');
   }
@@ -7177,7 +7376,7 @@ async function buildRankContext(rankToken) {
   return lines.join('\n');
 }
 
-function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, rankToken }) {
+function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, rankToken }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -7190,7 +7389,7 @@ function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData)
+      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists)
         + await buildRankContext(rankToken);
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -8436,7 +8635,7 @@ function RewardsSetupTab({ token, showToast }) {
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Gift Cards', 'Budgets', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Loss Prevention', 'Setup'];
+const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'Focus Stylist', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Gift Cards', 'Budgets', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Loss Prevention', 'Setup'];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
@@ -8448,6 +8647,7 @@ export default function App() {
   const [goals, setGoals] = useState({});
   const [managers, setManagers] = useState({});
   const [milestoneGoals, setMilestoneGoals] = useState({});
+  const [focusStylists, setFocusStylists] = useState({});
   const [leases, setLeases] = useState({}); // owner-only: { [storeCode]: LeaseRecord }, see LeasesTab
   const [reviews, setReviews] = useState(null);
   const [reviewNotes, setReviewNotes] = useState({});
@@ -8534,7 +8734,9 @@ export default function App() {
       loadData('homepage_news'), loadData('homepage_events'), loadData('homepage_news_groups'), loadData('homepage_news_reads'), loadData('hsa_signups'), loadScoped('store_leases', token),
       loadScopedByPrefix('daily_history_', token), loadScopedByPrefix('weekly_history_', token),
       loadScoped('daily_history', token), loadScoped('weekly_history', token), // legacy single-row format, if anything was saved before chunking
-    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, newsReadsRes, hsaSignupsRes, leasesRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes]) => {
+      loadScoped('focus_stylists', token),
+    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, newsReadsRes, hsaSignupsRes, leasesRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes, focusStylistsRes]) => {
+      if (focusStylistsRes.data) setFocusStylists(focusStylistsRes.data);
       if (reportRes.data) setReport(ensureReportDerivedFields(reportRes.data)); else if (currentUser.role === 'owner') { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
@@ -8944,6 +9146,41 @@ export default function App() {
         goalsRef.current = result.data || {};
       } else {
         showToast(`Goal saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+      }
+    });
+  }, [currentUser]);
+
+  // Focus Stylist add/edit (goals object) or remove (null). Patches only
+  // this one stylist's entry through saveScoped, so it never touches other
+  // stylists or other DLs' stores; on failure the local change is undone.
+  const handleSaveFocus = useCallback((storeCode, name, goalsIn) => {
+    const key = focusKey(name);
+    let before = null;
+    let entry = null;
+    setFocusStylists(prev => {
+      before = prev;
+      const prior = prev?.[storeCode]?.[key];
+      entry = goalsIn ? {
+        name,
+        tsthGoal: goalsIn.tsthGoal,
+        cphGoal: goalsIn.cphGoal,
+        addedBy: prior?.addedBy || currentUser.name,
+        addedAt: prior?.addedAt || new Date().toISOString().slice(0, 10),
+        ...(prior ? { updatedAt: new Date().toISOString().slice(0, 10) } : {}),
+      } : null;
+      const store = { ...(prev?.[storeCode] || {}) };
+      if (entry) store[key] = entry; else delete store[key];
+      const next = { ...prev, [storeCode]: store };
+      if (!Object.keys(store).length) delete next[storeCode];
+      return next;
+    });
+    saveScoped(currentUser.token, 'focus_stylists', { [storeCode]: { [key]: entry } }).then(result => {
+      if (result.ok) {
+        setFocusStylists(result.data || {});
+        showToast(goalsIn ? `${name} is on the Focus Stylist list.` : `${name} was taken off the Focus Stylist list.`);
+      } else {
+        if (before) setFocusStylists(before);
+        showToast(`Couldn't save focus stylist (${result.error})`, 'error');
       }
     });
   }, [currentUser]);
@@ -9901,8 +10138,8 @@ export default function App() {
   // real state. The real state itself is never touched, and all writes are
   // blocked (presenter.js), so nothing here can reach stored data.
   const presenterData = useMemo(() => (presenting ? presenterView({
-    report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData,
-  }, fallbackEmployeesByStore) : null), [presenting, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, fallbackEmployeesByStore]);
+    report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, focusStylists,
+  }, fallbackEmployeesByStore) : null), [presenting, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, focusStylists, fallbackEmployeesByStore]);
   const presenterFallbackEmployees = useMemo(
     () => (presenterData ? getEmployeesByStoreFromHistory(presenterData.history, presenterData.weeklyHistory) : null),
     [presenterData]
@@ -9928,17 +10165,19 @@ export default function App() {
   if (!currentUser) return <LoginScreen onLoggedIn={handleLoggedIn} />;
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
-  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner') && (t !== 'Gift Cards' || currentUser.role === 'owner') && (t !== 'Loss Prevention' || currentUser.role === 'owner'));
+  // Focus Stylist: DLs pick and see their own; leadership (owner) sees everyone.
+  const canFocus = currentUser.role === 'owner' || currentUser.role === 'district_leader';
+  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner') && (t !== 'Gift Cards' || currentUser.role === 'owner') && (t !== 'Loss Prevention' || currentUser.role === 'owner') && (t !== 'Focus Stylist' || canFocus));
   // A live weekly Stylist Report upload is no longer the only way to power
   // these tabs — Sales-Accrual + Attendance historical imports feed the
   // exact same tables via each tab's own current-month fallback (see
   // getCurrentMonthRange). Only actually block on "nothing at all yet".
   const hasHistoricalData = Object.keys(history || {}).length > 0 || Object.keys(weeklyHistory || {}).length > 0;
-  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases' && tab !== 'Gift Cards' && tab !== 'Loss Prevention';
+  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases' && tab !== 'Gift Cards' && tab !== 'Loss Prevention' && tab !== 'Focus Stylist';
 
   const d = presenterData
     ? { ...presenterData, fallbackEmployeesByStore: presenterFallbackEmployees }
-    : { report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, fallbackEmployeesByStore };
+    : { report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, focusStylists, fallbackEmployeesByStore };
 
   return (
     <div className="app">
@@ -9978,7 +10217,11 @@ export default function App() {
           <HsaTab events={events} hsaSignups={d.hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} onEditSignup={handleEditHsaSignup} onAddClass={handleAddHsaClass} onEditClass={handleEditHsaClass} onDeleteClass={handleDeleteEvent} />
         )}
         {!needsReport && tab === 'Overview' && (report || hasHistoricalData) && (
-          <OverviewTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={d.managers} isOwner={currentUser.role === 'owner'} goals={d.goals} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} rankToken={currentUser.role === 'manager' ? currentUser.token : null} />
+          <OverviewTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={d.managers} isOwner={currentUser.role === 'owner'} goals={d.goals} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} rankToken={currentUser.role === 'manager' ? currentUser.token : null}
+            focusStylists={d.focusStylists} onSaveFocus={canFocus ? handleSaveFocus : null} />
+        )}
+        {tab === 'Focus Stylist' && canFocus && (
+          <FocusStylistTab focusStylists={d.focusStylists} report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} onSaveFocus={handleSaveFocus} isOwner={currentUser.role === 'owner'} />
         )}
         {!needsReport && tab === 'Employees' && (report || hasHistoricalData) && (
           <EmployeesTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={d.managers} employeeRoster={d.employeeRoster} fallbackEmployeesByStore={d.fallbackEmployeesByStore} />
@@ -10094,7 +10337,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' ? (d.lpData || lpData) : null} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
+      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
     </div>
   );
 }
