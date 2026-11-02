@@ -213,3 +213,8 @@ export function pointsDeleteReward(token, id) {
 export function pointsMarkFulfilled(token, id, fulfilled) {
   return postWrite('/api/points', { action: 'markFulfilled', token, id, fulfilled });
 }
+
+// Shear Check: email one saved salon visit to that store's DL (api/_salon-check.js).
+export function emailSalonCheck(token, code, id) {
+  return postWrite('/api/scoped-data', { action: 'salon-check-email', token, code, id });
+}

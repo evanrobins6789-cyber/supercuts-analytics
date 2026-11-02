@@ -12,8 +12,9 @@ import {
   loadScoped, loadScopedByPrefix, saveScoped, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
   pointsBalance, pointsAllBalances, pointsTransactions, pointsDeleteTransaction, finalizeGoals,
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled,
-  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank, lpLoad, lpSave,
+  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank, lpLoad, lpSave, emailSalonCheck,
 } from './auth';
+import { SALON_CHECK_SECTIONS, SALON_CHECK_ITEMS, scoreSalonCheck, salonCheckList } from './salonCheck';
 import { LP_RULES, parseLpSalesFile, parseLpAttendanceFile, parseLpRegisterFile, mergeLpDays, lpMonthPayload, analyzeLp, lpDefaultRange } from './lossPrevention';
 import { LEADER_ROSTER_SECTIONS as REAL_LEADER_ROSTER_SECTIONS, getLeaderForStoreCode as realGetLeaderForStoreCode } from './leaderRoster';
 import { isPresenting, initPresenterMode, setPresenterMode, presenterView, fakeLeaderSections, fakePersonName } from './presenter';
@@ -5243,6 +5244,289 @@ function GoalsTab({ report, goals, onSaveGoal, onApplySalesGoals, milestoneGoals
   );
 }
 
+// ─── Shear Check (salon visit checklist) ───────────────────────────────────
+// The printed Salon Checklist as a tab: pick a store, mark each item Yes /
+// No / N/A with notes, save, and email it to that store's DL. Visits live in
+// `salon_checks` ({ [code]: { [visitId]: visit } }) through saveScoped; the
+// server re-checks and re-scores every save (api/_salon-check.js). Items and
+// score math: src/salonCheck.js. Owner + District Leaders only.
+const SC_DRAFT_KEY = 'shearCheckDraft';
+const scLocalToday = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+const scNewId = () => `v${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+const scPct = s => (s == null ? '—' : `${Math.round(s * 100)}%`);
+// Color only: 90%+ green, 75–89% gold, under 75% red.
+const scClass = s => (s == null ? '' : s >= 0.9 ? 'sc-good' : s >= 0.75 ? 'sc-ok' : 'sc-bad');
+const scAvg = visits => { const v = visits.filter(x => x.score != null); return v.length ? v.reduce((a, x) => a + x.score, 0) / v.length : null; };
+const SC_RANGES = [
+  { key: 'month', label: 'This Month' },
+  { key: '90', label: 'Last 90 Days' },
+  { key: 'year', label: 'This Year' },
+  { key: 'all', label: 'All Time' },
+];
+function scRangeStart(key) {
+  const today = scLocalToday();
+  if (key === 'month') return `${today.slice(0, 7)}-01`;
+  if (key === 'year') return `${today.slice(0, 4)}-01-01`;
+  if (key === '90') { const d = new Date(); d.setDate(d.getDate() - 89); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+  return '';
+}
+const scEmptyForm = () => ({ code: '', date: scLocalToday(), manager: '', team: '', answers: {}, notes: {}, followUp: '' });
+// The in-progress checklist is kept in this browser so a refresh or a
+// dropped phone signal mid-visit doesn't lose it. Cleared once saved.
+const scLoadDraft = () => { try { const d = JSON.parse(window.localStorage.getItem(SC_DRAFT_KEY) || 'null'); return d && typeof d === 'object' ? { ...scEmptyForm(), ...d } : null; } catch { return null; } };
+const scSaveDraft = f => { try { window.localStorage.setItem(SC_DRAFT_KEY, JSON.stringify(f)); } catch { /* storage off: the draft just isn't kept */ } };
+const scClearDraft = () => { try { window.localStorage.removeItem(SC_DRAFT_KEY); } catch { /* ignore */ } };
+
+function ShearCheckTab({ stores, salonChecks, managers, onSave, onEmail, onDelete, isOwner, userName }) {
+  const [view, setView] = useState('new'); // 'new' | 'scores' | 'visits'
+  const visits = useMemo(() => salonCheckList(salonChecks), [salonChecks]);
+  return (
+    <div className="tab-content">
+      <div className="sc-head">
+        <div>
+          <p className="lease-card-title sc-title">✂️ Shear Check</p>
+          <p className="section-hint sc-sub">Salon visit checklist. Score = Yes ÷ (Yes + No); N/A doesn't count.</p>
+        </div>
+        <div className="view-toggle">
+          <button type="button" className={`view-toggle-btn ${view === 'new' ? 'active' : ''}`} onClick={() => setView('new')}>New Visit</button>
+          <button type="button" className={`view-toggle-btn ${view === 'scores' ? 'active' : ''}`} onClick={() => setView('scores')}>Scoreboard</button>
+          <button type="button" className={`view-toggle-btn ${view === 'visits' ? 'active' : ''}`} onClick={() => setView('visits')}>Past Visits ({visits.length})</button>
+        </div>
+      </div>
+      {view === 'new' && <ShearCheckForm stores={stores} visits={visits} managers={managers} onSave={onSave} onEmail={onEmail} userName={userName} onSaved={() => setView('visits')} />}
+      {view === 'scores' && <ShearCheckScores stores={stores} visits={visits} />}
+      {view === 'visits' && <ShearCheckVisits stores={stores} visits={visits} onEmail={onEmail} onDelete={onDelete} isOwner={isOwner} />}
+    </div>
+  );
+}
+
+function ShearCheckForm({ stores, visits, managers, onSave, onEmail, userName, onSaved }) {
+  const [form, setForm] = useState(() => scLoadDraft() || scEmptyForm());
+  const [busy, setBusy] = useState(null); // 'save' | 'email' | null
+  useEffect(() => { scSaveDraft(form); }, [form]);
+  const groups = useMemo(() => groupStoresByLeader(stores), [stores]);
+  const leader = form.code ? getLeaderForStoreCode(form.code) : null;
+  const score = scoreSalonCheck(form.answers);
+  const left = score.total - score.answered;
+  const lastVisit = form.code ? visits.find(v => v.code === form.code) : null;
+
+  const set = patch => setForm(prev => ({ ...prev, ...patch }));
+  const pickStore = code => setForm(prev => ({ ...prev, code, manager: prev.manager || managers?.[code] || '' }));
+  const answer = (id, a) => setForm(prev => ({ ...prev, answers: { ...prev.answers, [id]: prev.answers[id] === a ? undefined : a } }));
+  const note = (id, text) => setForm(prev => ({ ...prev, notes: { ...prev.notes, [id]: text } }));
+  const markSection = (sec, a) => setForm(prev => {
+    const answers = { ...prev.answers };
+    sec.items.forEach(i => { if (!answers[i.id]) answers[i.id] = a; });
+    return { ...prev, answers };
+  });
+
+  const submit = async withEmail => {
+    if (!form.code || left > 0) return;
+    setBusy(withEmail ? 'email' : 'save');
+    const id = scNewId();
+    const answers = Object.fromEntries(Object.entries(form.answers).filter(([, a]) => a));
+    const visit = { id, code: form.code, date: form.date, manager: form.manager, team: form.team, answers, notes: form.notes, followUp: form.followUp, by: userName, savedAt: new Date().toISOString() };
+    const saved = await onSave(visit);
+    if (saved?.ok) {
+      if (withEmail) await onEmail(form.code, id);
+      scClearDraft();
+      setForm(scEmptyForm());
+      onSaved();
+    }
+    setBusy(null);
+  };
+  const startOver = () => { if (window.confirm('Clear this checklist and start over?')) { scClearDraft(); setForm(scEmptyForm()); } };
+
+  return (
+    <div className="sc-form">
+      <div className="sc-card sc-info">
+        <label className="sc-field sc-field-store">
+          <span>Salon</span>
+          <select className="text-input" value={form.code} onChange={e => pickStore(e.target.value)}>
+            <option value="">Pick a store…</option>
+            {groups.map(g => (
+              <optgroup key={g.leaderName} label={g.leaderName}>
+                {g.stores.map(s => <option key={s.code} value={s.code}>{s.name}</option>)}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+        <label className="sc-field"><span>Date</span><input type="date" className="text-input" value={form.date} onChange={e => set({ date: e.target.value })} /></label>
+        <label className="sc-field"><span>Manager</span><input type="text" className="text-input" value={form.manager} onChange={e => set({ manager: e.target.value })} placeholder="Manager name" /></label>
+        <label className="sc-field sc-field-wide"><span>Team Members on Shift</span><input type="text" className="text-input" value={form.team} onChange={e => set({ team: e.target.value })} placeholder="Names, comma separated" /></label>
+        {form.code && (
+          <p className="sc-dl-line">
+            {leader ? <>Report goes to <strong>{leader.leaderName}</strong> ({leader.role === 'Area Supervisors' ? 'Area Supervisor' : 'District Leader'}).</> : 'This store has no DL in the roster, so it can be saved but not emailed.'}
+            {lastVisit && <> Last visit {fmtDateLong(lastVisit.date)}: <span className={`sc-score-chip ${scClass(lastVisit.score)}`}>{scPct(lastVisit.score)}</span></>}
+          </p>
+        )}
+        {lastVisit?.followUp && <div className="sc-last-follow"><strong>Follow-up from last visit:</strong> {lastVisit.followUp}</div>}
+      </div>
+
+      {SALON_CHECK_SECTIONS.map((sec, si) => (
+        <div key={sec.id} className="sc-card sc-section">
+          <div className="sc-section-head">
+            <span className="sc-section-title">{si + 1}. {sec.title}</span>
+            <button type="button" className="link-btn" onClick={() => markSection(sec, 'yes')}>Mark rest Yes</button>
+          </div>
+          {sec.items.map(item => {
+            const a = form.answers[item.id];
+            return (
+              <div key={item.id} className={`sc-item ${a === 'no' ? 'sc-item-no' : ''}`}>
+                <div className="sc-item-row">
+                  <span className="sc-item-label">{item.label}</span>
+                  <div className="sc-answers">
+                    {[['yes', 'Yes'], ['no', 'No'], ['na', 'N/A']].map(([k, label]) => (
+                      <button key={k} type="button" className={`sc-ans sc-ans-${k} ${a === k ? 'on' : ''}`} onClick={() => answer(item.id, k)}>{label}</button>
+                    ))}
+                  </div>
+                </div>
+                <input type="text" className="sc-note" placeholder={a === 'no' ? 'What needs fixing?' : 'Notes (optional)'} value={form.notes[item.id] || ''} onChange={e => note(item.id, e.target.value)} />
+              </div>
+            );
+          })}
+        </div>
+      ))}
+
+      <div className="sc-card">
+        <p className="sc-section-title">Follow Up for Next Visit</p>
+        <textarea className="text-input sc-follow" rows={4} value={form.followUp} onChange={e => set({ followUp: e.target.value })} placeholder="What should be checked on next time?" />
+      </div>
+
+      <div className="sc-card sc-footer">
+        <div className="sc-footer-score">
+          <span className="sc-footer-label">Salon Score</span>
+          <span className={`sc-footer-pct ${scClass(score.score)}`}>{scPct(score.score)}</span>
+          <span className="sc-footer-counts">{score.yes} Yes · {score.no} No · {score.na} N/A{left > 0 ? ` · ${left} left` : ''}</span>
+        </div>
+        <div className="sc-footer-btns">
+          <button type="button" className="link-btn" onClick={startOver} disabled={!!busy}>Start over</button>
+          <button type="button" className="sc-btn-save" disabled={!form.code || left > 0 || !!busy} onClick={() => submit(false)}>{busy === 'save' ? 'Saving…' : 'Save'}</button>
+          <button type="button" className="sc-btn-email" disabled={!form.code || left > 0 || !!busy || !leader} onClick={() => submit(true)}>{busy === 'email' ? 'Sending…' : `Save & email ${leader ? leader.leaderName.split(' ')[0] : 'DL'}`}</button>
+        </div>
+        {(!form.code || left > 0) && <p className="sc-footer-hint">{!form.code ? 'Pick a salon at the top.' : `Answer every item to save (${left} left).`}</p>}
+      </div>
+    </div>
+  );
+}
+
+function ShearCheckScores({ stores, visits }) {
+  const [range, setRange] = useState('90');
+  const start = scRangeStart(range);
+  const inRange = visits.filter(v => !start || v.date >= start);
+  const byCode = {};
+  inRange.forEach(v => { (byCode[v.code] = byCode[v.code] || []).push(v); });
+  const rows = stores.map(s => {
+    const list = byCode[s.code] || [];
+    return { ...s, visits: list, avg: scAvg(list), last: list[0] || null };
+  });
+  const groups = groupStoresByLeader(rows);
+  const company = scAvg(inRange);
+  return (
+    <div className="sc-scores">
+      <div className="sc-scores-top">
+        <select className="text-input sc-range" value={range} onChange={e => setRange(e.target.value)}>
+          {SC_RANGES.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
+        </select>
+        <div className="sc-company">
+          <span className="sc-footer-label">{groups.length > 1 ? 'Company Average' : 'Average'}</span>
+          <span className={`sc-footer-pct ${scClass(company)}`}>{scPct(company)}</span>
+          <span className="sc-footer-counts">{inRange.length} visit{inRange.length === 1 ? '' : 's'} · {Object.keys(byCode).length} of {stores.length} stores visited</span>
+        </div>
+      </div>
+      <div className="ledger-scroll">
+        <table className="ledger-table sc-table">
+          <thead><tr><th className="ledger-name-col">Store</th><th>Visits</th><th>Average</th><th>Last Score</th><th>Last Visit</th></tr></thead>
+          <tbody>
+            {groups.map(g => {
+              const gVisits = g.stores.flatMap(s => s.visits);
+              const gAvg = scAvg(gVisits);
+              return (
+                <React.Fragment key={g.leaderName}>
+                  <tr className="sc-dl-row">
+                    <td className="ledger-name-col">{g.leaderName}</td>
+                    <td>{gVisits.length}</td>
+                    <td><span className={`sc-score-chip ${scClass(gAvg)}`}>{scPct(gAvg)}</span></td>
+                    <td colSpan={2}></td>
+                  </tr>
+                  {g.stores.map(s => (
+                    <tr key={s.code}>
+                      <td className="ledger-name-col">{s.name}</td>
+                      <td>{s.visits.length || '—'}</td>
+                      <td><span className={`sc-score-chip ${scClass(s.avg)}`}>{scPct(s.avg)}</span></td>
+                      <td>{s.last ? scPct(s.last.score) : '—'}</td>
+                      <td>{s.last ? fmtDateLong(s.last.date) : <span className="sc-never">Not visited</span>}</td>
+                    </tr>
+                  ))}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="section-hint">DL and company averages count every visit equally. Colors: 90%+ green, 75–89% gold, under 75% red.</p>
+    </div>
+  );
+}
+
+function ShearCheckVisits({ stores, visits, onEmail, onDelete, isOwner }) {
+  const [code, setCode] = useState('');
+  const [open, setOpen] = useState(null);
+  const [sending, setSending] = useState(null);
+  const groups = useMemo(() => groupStoresByLeader(stores), [stores]);
+  const list = visits.filter(v => !code || v.code === code);
+  const send = async v => { setSending(v.id); await onEmail(v.code, v.id); setSending(null); };
+  return (
+    <div className="sc-visits">
+      <select className="text-input sc-range" value={code} onChange={e => setCode(e.target.value)}>
+        <option value="">All stores</option>
+        {groups.map(g => <optgroup key={g.leaderName} label={g.leaderName}>{g.stores.map(s => <option key={s.code} value={s.code}>{s.name}</option>)}</optgroup>)}
+      </select>
+      {!list.length && <p className="empty-note">No salon checks saved yet.</p>}
+      {list.map(v => {
+        const leader = getLeaderForStoreCode(v.code);
+        const isOpen = open === v.id;
+        return (
+          <div key={v.id} className="sc-card sc-visit">
+            <button type="button" className="sc-visit-head" onClick={() => setOpen(isOpen ? null : v.id)}>
+              <span className={`sc-score-chip big ${scClass(v.score)}`}>{scPct(v.score)}</span>
+              <span className="sc-visit-main">
+                <strong>{STORE_CODE_TO_NAME[v.code] || `Store ${v.code}`}</strong>
+                <span className="sc-visit-meta">{fmtDateLong(v.date)} · by {v.by || 'unknown'} · {v.no} No{v.emailedAt ? ` · emailed to ${v.emailedTo}` : ''}</span>
+              </span>
+              <span className="sc-visit-caret">{isOpen ? '▾' : '▸'}</span>
+            </button>
+            {isOpen && (
+              <div className="sc-visit-body">
+                <p className="sc-visit-meta">Manager: {v.manager || '—'} · Team: {v.team || '—'}</p>
+                {SALON_CHECK_SECTIONS.map(sec => (
+                  <div key={sec.id} className="sc-visit-sec">
+                    <p className="sc-visit-sec-title">{sec.title}</p>
+                    {sec.items.map(i => {
+                      const a = v.answers?.[i.id];
+                      return (
+                        <div key={i.id} className={`sc-visit-item ${a === 'no' ? 'sc-item-no' : ''}`}>
+                          <span className={`sc-mark sc-ans-${a || 'none'}`}>{a === 'yes' ? 'Yes' : a === 'no' ? 'No' : a === 'na' ? 'N/A' : '—'}</span>
+                          <span>{i.label}{v.notes?.[i.id] && <em className="sc-visit-note"> — {v.notes[i.id]}</em>}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+                {v.followUp && <div className="sc-last-follow"><strong>Follow up for next visit:</strong> {v.followUp}</div>}
+                <div className="sc-footer-btns">
+                  {leader && <button type="button" className="sc-btn-email" disabled={sending === v.id} onClick={() => send(v)}>{sending === v.id ? 'Sending…' : `${v.emailedAt ? 'Email again to' : 'Email'} ${leader.leaderName}`}</button>}
+                  {isOwner && <button type="button" className="link-btn sc-delete" onClick={() => { if (window.confirm(`Delete the ${fmtDateLong(v.date)} salon check for ${STORE_CODE_TO_NAME[v.code] || v.code}? This can't be undone.`)) onDelete(v.code, v.id); }}>Delete</button>}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Managers tab (store → manager assignment, powers the MANAGER tag) ─────
 function ManagersTab({ report, managers, onSaveManager, onImportManagers }) {
   const [query, setQuery] = useState('');
@@ -7030,7 +7314,7 @@ function topEmployeeLine(employees, n = 5) {
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
-function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists) {
+function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, salonChecks) {
   const employeesForCodeCtx = code => {
     if (report && !isReportStale(report)) return report.stores.find(st => st.code === code)?.employees || null;
     return fallbackEmployeesByStore?.[code] || null;
@@ -7182,6 +7466,23 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       const emp = (historyTotalsToReportShape(mtdTotals[e.code] || {}).employees || []).find(x => focusKey(x.name) === focusKey(e.name));
       const dl = getLeaderForStoreCode(e.code)?.leaderName || 'no DL';
       lines.push(`${e.name} (${STORE_CODE_TO_NAME[e.code] || `Store ${e.code}`}, DL ${dl}): TSTH goal $${Number(e.tsthGoal).toFixed(2)}, MTD TSTH ${emp?.tsth != null ? `$${emp.tsth.toFixed(2)}` : 'no data'}; CPH goal ${Number(e.cphGoal).toFixed(2)}, MTD CPH ${emp?.cph != null ? emp.cph.toFixed(2) : 'no data'}. Added ${e.addedAt || '?'} by ${e.addedBy || '?'}.`);
+    });
+    lines.push('');
+  }
+
+  // Shear Check salon visits (owner + DLs; a DL's salonChecks is already
+  // scoped to their stores by the server).
+  const scVisits = salonCheckList(salonChecks);
+  if (scVisits.length) {
+    const pctStr = x => (x == null ? 'n/a' : `${Math.round(x * 100)}%`);
+    const avgOf = list => { const v = list.filter(x => x.score != null); return v.length ? v.reduce((a, x) => a + x.score, 0) / v.length : null; };
+    lines.push(`SHEAR CHECK SALON VISITS (the Shear Check tab: an in-person salon checklist of ${SALON_CHECK_ITEMS.length} items across ${SALON_CHECK_SECTIONS.length} areas, each marked Yes/No/N/A; score = Yes ÷ (Yes + No), N/A not counted; saved visits are emailed to the store's DL). ${scVisits.length} visit(s) on file, all-time average ${pctStr(avgOf(scVisits))}.`);
+    const byCode = {};
+    scVisits.forEach(v => { (byCode[v.code] = byCode[v.code] || []).push(v); });
+    Object.entries(byCode).forEach(([code, list]) => {
+      const last = list[0];
+      const noItems = SALON_CHECK_ITEMS.filter(i => last.answers?.[i.id] === 'no').map(i => `${i.label}${last.notes?.[i.id] ? ` (${last.notes[i.id]})` : ''}`);
+      lines.push(`${STORE_CODE_TO_NAME[code] || `Store ${code}`} (DL ${getLeaderForStoreCode(code)?.leaderName || 'none'}): ${list.length} visit(s), average ${pctStr(avgOf(list))}; last visit ${last.date} by ${last.by || '?'} scored ${pctStr(last.score)}${noItems.length ? `; marked No: ${noItems.join('; ')}` : ''}${last.followUp ? `; follow-up for next visit: ${last.followUp}` : ''}. Earlier scores: ${list.slice(1, 6).map(v => `${v.date} ${pctStr(v.score)}`).join(', ') || 'none'}.`);
     });
     lines.push('');
   }
@@ -7579,7 +7880,7 @@ async function buildRankContext(rankToken) {
   return lines.join('\n');
 }
 
-function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, rankToken }) {
+function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, salonChecks, rankToken }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -7592,7 +7893,7 @@ function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists)
+      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, salonChecks)
         + await buildRankContext(rankToken);
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -8873,7 +9174,7 @@ function RewardsSetupTab({ token, showToast }) {
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'Focus Stylist', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Gift Cards', 'Budgets', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Loss Prevention', 'Setup'];
+const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'Focus Stylist', 'Shear Check', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Gift Cards', 'Budgets', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Loss Prevention', 'Setup'];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
@@ -8886,6 +9187,7 @@ export default function App() {
   const [managers, setManagers] = useState({});
   const [milestoneGoals, setMilestoneGoals] = useState({});
   const [focusStylists, setFocusStylists] = useState({});
+  const [salonChecks, setSalonChecks] = useState({});
   const [leases, setLeases] = useState({}); // owner-only: { [storeCode]: LeaseRecord }, see LeasesTab
   const [reviews, setReviews] = useState(null);
   const [reviewNotes, setReviewNotes] = useState({});
@@ -8973,8 +9275,10 @@ export default function App() {
       loadScopedByPrefix('daily_history_', token), loadScopedByPrefix('weekly_history_', token),
       loadScoped('daily_history', token), loadScoped('weekly_history', token), // legacy single-row format, if anything was saved before chunking
       loadScoped('focus_stylists', token),
-    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, newsReadsRes, hsaSignupsRes, leasesRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes, focusStylistsRes]) => {
+      loadScoped('salon_checks', token),
+    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, newsReadsRes, hsaSignupsRes, leasesRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes, focusStylistsRes, salonChecksRes]) => {
       if (focusStylistsRes.data) setFocusStylists(focusStylistsRes.data);
+      if (salonChecksRes.data) setSalonChecks(salonChecksRes.data);
       if (reportRes.data) setReport(ensureReportDerivedFields(reportRes.data)); else if (currentUser.role === 'owner') { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
@@ -9443,6 +9747,34 @@ export default function App() {
   }, [currentUser]);
 
   // "Finalize & email DLs" / "Send me a test first" (Goals tab, owner only).
+  // Shear Check: save a visit, email one to its store's DL, or delete one
+  // (owner only). Saves patch only that one visit (saveScoped), so nothing
+  // else in salon_checks is touched.
+  const handleSaveSalonCheck = useCallback(async visit => {
+    const r = await saveScoped(currentUser.token, 'salon_checks', { [visit.code]: { [visit.id]: visit } });
+    if (r.ok) {
+      setSalonChecks(r.data || {});
+      showToast(`Salon check saved for ${STORE_CODE_TO_NAME[visit.code] || visit.code}.`);
+    } else {
+      showToast(`Salon check not saved: ${r.error}`, 'error');
+    }
+    return r;
+  }, [currentUser]);
+  const handleEmailSalonCheck = useCallback(async (code, id) => {
+    const r = await emailSalonCheck(currentUser.token, code, id);
+    if (r.ok) {
+      setSalonChecks(prev => (prev?.[code]?.[id] ? { ...prev, [code]: { ...prev[code], [id]: { ...prev[code][id], emailedAt: r.emailedAt, emailedTo: r.leader } } } : prev));
+      showToast(`Emailed to ${r.leader}.`);
+    } else {
+      showToast(`Email not sent: ${r.error}`, 'error');
+    }
+    return r;
+  }, [currentUser]);
+  const handleDeleteSalonCheck = useCallback(async (code, id) => {
+    const r = await saveScoped(currentUser.token, 'salon_checks', { [code]: { [id]: null } });
+    if (r.ok) { setSalonChecks(r.data || {}); showToast('Salon check deleted.'); } else showToast(`Could not delete: ${r.error}`, 'error');
+  }, [currentUser]);
+
   const handleFinalizeGoals = useCallback(async (month, test) => {
     const r = await finalizeGoals(currentUser.token, month, test);
     if (!r.ok) {
@@ -10320,8 +10652,8 @@ export default function App() {
   // real state. The real state itself is never touched, and all writes are
   // blocked (presenter.js), so nothing here can reach stored data.
   const presenterData = useMemo(() => (presenting ? presenterView({
-    report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, focusStylists,
-  }, fallbackEmployeesByStore) : null), [presenting, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, focusStylists, fallbackEmployeesByStore]);
+    report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, focusStylists, salonChecks,
+  }, fallbackEmployeesByStore) : null), [presenting, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, focusStylists, salonChecks, fallbackEmployeesByStore]);
   const presenterFallbackEmployees = useMemo(
     () => (presenterData ? getEmployeesByStoreFromHistory(presenterData.history, presenterData.weeklyHistory) : null),
     [presenterData]
@@ -10349,17 +10681,19 @@ export default function App() {
 
   // Focus Stylist: DLs pick and see their own; leadership (owner) sees everyone.
   const canFocus = currentUser.role === 'owner' || currentUser.role === 'district_leader';
-  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner') && (t !== 'Gift Cards' || currentUser.role === 'owner') && (t !== 'Loss Prevention' || currentUser.role === 'owner') && (t !== 'Focus Stylist' || canFocus));
+  // Shear Check: same roles as Focus Stylist.
+  const canSalonCheck = canFocus;
+  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner') && (t !== 'Gift Cards' || currentUser.role === 'owner') && (t !== 'Loss Prevention' || currentUser.role === 'owner') && (t !== 'Focus Stylist' || canFocus) && (t !== 'Shear Check' || canSalonCheck));
   // A live weekly Stylist Report upload is no longer the only way to power
   // these tabs — Sales-Accrual + Attendance historical imports feed the
   // exact same tables via each tab's own current-month fallback (see
   // getCurrentMonthRange). Only actually block on "nothing at all yet".
   const hasHistoricalData = Object.keys(history || {}).length > 0 || Object.keys(weeklyHistory || {}).length > 0;
-  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases' && tab !== 'Gift Cards' && tab !== 'Loss Prevention' && tab !== 'Focus Stylist';
+  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases' && tab !== 'Gift Cards' && tab !== 'Loss Prevention' && tab !== 'Focus Stylist' && tab !== 'Shear Check';
 
   const d = presenterData
     ? { ...presenterData, fallbackEmployeesByStore: presenterFallbackEmployees }
-    : { report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, focusStylists, fallbackEmployeesByStore };
+    : { report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, focusStylists, salonChecks, fallbackEmployeesByStore };
 
   return (
     <div className="app">
@@ -10404,6 +10738,13 @@ export default function App() {
         )}
         {tab === 'Focus Stylist' && canFocus && (
           <FocusStylistTab focusStylists={d.focusStylists} history={d.history} weeklyHistory={d.weeklyHistory} onSaveFocus={handleSaveFocus} isOwner={currentUser.role === 'owner'} />
+        )}
+        {tab === 'Shear Check' && canSalonCheck && (
+          <ShearCheckTab
+            stores={(d.report ? d.report.stores.map(s => ({ name: s.name, code: s.code })) : Object.keys(d.fallbackEmployeesByStore || {}).map(code => ({ code, name: STORE_CODE_TO_NAME[code] || `Store ${code}` }))).sort((a, b) => a.name.localeCompare(b.name))}
+            salonChecks={d.salonChecks} managers={d.managers}
+            onSave={handleSaveSalonCheck} onEmail={handleEmailSalonCheck} onDelete={handleDeleteSalonCheck}
+            isOwner={currentUser.role === 'owner'} userName={currentUser.name} />
         )}
         {!needsReport && tab === 'Employees' && (report || hasHistoricalData) && (
           <EmployeesTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={d.managers} employeeRoster={d.employeeRoster} fallbackEmployeesByStore={d.fallbackEmployeesByStore} />
@@ -10519,7 +10860,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
+      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
     </div>
   );
 }

@@ -208,6 +208,27 @@ function fakeManagers(managers) {
 // per-store key is `${month}:` + the lowercased name (focusEntryKey in
 // App.js), so it's rebuilt from the faked name, keeping any month prefix.
 // Goals stay real, like counts elsewhere.
+// Shear Check visits: scores and answers stay real; every name and every
+// free-text note is swapped out.
+function fakeSalonChecks(checks) {
+  const names = t => (t ? t.split(',').map(n => n.trim()).filter(Boolean).map(fakePersonName).join(', ') : t);
+  const out = {};
+  Object.entries(checks || {}).forEach(([code, visits]) => {
+    out[code] = {};
+    Object.entries(visits || {}).forEach(([id, v]) => {
+      if (!v) return;
+      out[code][id] = {
+        ...v,
+        manager: names(v.manager), team: names(v.team), by: v.by ? fakePersonName(v.by) : v.by,
+        emailedTo: v.emailedTo ? fakePersonName(v.emailedTo) : v.emailedTo,
+        notes: Object.fromEntries(Object.keys(v.notes || {}).map(k => [k, 'Sample note.'])),
+        followUp: v.followUp ? 'Sample follow-up for next visit.' : v.followUp,
+      };
+    });
+  });
+  return out;
+}
+
 function fakeFocusStylists(focus) {
   const out = {};
   Object.entries(focus || {}).forEach(([code, entries]) => {
@@ -379,6 +400,7 @@ export function presenterView(real, realEmployeesByStore) {
     pointsSummary: fakePoints(real.pointsSummary),
     lpData: fakeLpData(real.lpData),
     focusStylists: fakeFocusStylists(real.focusStylists),
+    salonChecks: fakeSalonChecks(real.salonChecks),
   };
 }
 
