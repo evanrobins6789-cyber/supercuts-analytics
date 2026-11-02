@@ -229,67 +229,89 @@ function buildYoy(totals, lyTotals, onlyCodes = null) {
   YOY_METRICS.forEach(m => { metrics[m.key] = { cur: sum(totals, m.key), ly: sum(lyTotals, m.key) }; });
   return { metrics, storeCount: codes.length };
 }
+// The change, as a colored box: arrow + % on top, the raw difference under
+// it. Light green/red fill so up vs down reads at a glance.
+const CHANGE_FILL = { up: '#E6F2EA', down: '#F8E5E5', flat: BRAND.paper };
 function yoyChange(metric, cur, ly) {
   const diff = cur - ly;
-  const color = diff > 0 ? BRAND.green : diff < 0 ? BRAND.red : BRAND.inkSoft;
-  const arrow = diff > 0 ? '&#9650;' : diff < 0 ? '&#9660;' : '';
-  const sign = diff > 0 ? '+' : diff < 0 ? '&#8722;' : '';
+  const dir = diff > 0 ? 'up' : diff < 0 ? 'down' : 'flat';
+  const color = dir === 'up' ? BRAND.green : dir === 'down' ? BRAND.red : BRAND.inkSoft;
+  const arrow = dir === 'up' ? '&#9650;' : dir === 'down' ? '&#9660;' : '';
+  const sign = dir === 'up' ? '+' : dir === 'down' ? '&#8722;' : '';
   const pct = ly ? `${sign}${Math.abs((diff / ly) * 100).toFixed(1)}%` : '';
-  return { color, text: `${arrow} ${pct}${pct ? ' &middot; ' : ''}${sign}${metric.fmt(Math.abs(diff))}` };
+  return { color, fill: CHANGE_FILL[dir], pct: `${arrow} ${pct}`, diff: `${sign}${metric.fmt(Math.abs(diff))}` };
 }
-function yoyTile(metric, { cur, ly }) {
+function changeBox(ch, size = 12) {
+  return `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:${ch.fill};border-radius:5px;"><tr><td style="padding:5px 6px;text-align:center;font-family:${FONT};color:${ch.color};font-weight:700;"><div style="font-size:${size + 1}px;white-space:nowrap;">${ch.pct}</div><div style="font-size:${size - 1}px;white-space:nowrap;">${ch.diff}</div></td></tr></table>`;
+}
+
+// One tile per metric: this year and last year side by side, each labeled
+// with its year and dates, and the change box underneath.
+function yoyTile(metric, { cur, ly }, labels) {
   const ch = yoyChange(metric, cur, ly);
+  const col = (label, dates, value, color) => `
+    <td width="50%" style="padding:6px 4px;text-align:center;font-family:${FONT};vertical-align:top;">
+      <div style="font-size:12px;font-weight:700;color:${color};">${label}</div>
+      <div style="font-size:10.5px;color:${BRAND.inkSoft};">${dates}</div>
+      <div style="font-size:21px;font-weight:700;color:${color};margin-top:4px;">${value}</div>
+    </td>`;
   return `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${BRAND.card};border:1px solid ${BRAND.line};border-top:4px solid ${ch.color};border-radius:6px;">
-      <tr><td style="padding:12px 14px;font-family:${FONT};text-align:center;">
-        <div style="font-size:11px;font-weight:700;letter-spacing:0.6px;color:${BRAND.inkSoft};text-transform:uppercase;">${metric.label}</div>
-        <div style="font-size:24px;font-weight:700;color:${BRAND.navy};margin-top:4px;">${metric.fmt(cur)}</div>
-        <div style="font-size:12px;color:${BRAND.inkSoft};margin-top:2px;">Last year: ${metric.fmt(ly)}</div>
-        <div style="font-size:14px;font-weight:700;color:${ch.color};margin-top:8px;">${ch.text}</div>
-      </td></tr>
+      <tr><td colspan="2" style="padding:10px 12px 2px;font-family:${FONT};text-align:center;font-size:12px;font-weight:700;letter-spacing:0.8px;color:${BRAND.navy};text-transform:uppercase;">${metric.label}</td></tr>
+      <tr>
+        ${col(labels.cur, labels.curDates, metric.fmt(cur), BRAND.navy)}
+        ${col(labels.ly, labels.lyDates, metric.fmt(ly), BRAND.inkSoft)}
+      </tr>
+      <tr><td colspan="2" style="padding:4px 12px 12px;">${changeBox(ch, 14)}</td></tr>
     </table>`;
 }
-function yoyTiles(yoy) {
-  const tiles = YOY_METRICS.map((m, i) => `<td valign="top" width="50%" style="${i ? 'padding-left:8px;' : 'padding-right:8px;'}">${yoyTile(m, yoy.metrics[m.key])}</td>`).join('');
+function yoyTiles(yoy, labels) {
+  const tiles = YOY_METRICS.map((m, i) => `<td valign="top" width="50%" style="${i ? 'padding-left:8px;' : 'padding-right:8px;'}">${yoyTile(m, yoy.metrics[m.key], labels)}</td>`).join('');
   return `<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>${tiles}</tr></table></td></tr>`;
 }
 function yoyNote(text) {
   return `<tr><td style="padding:8px 2px 0;font-family:${FONT};font-size:11.5px;color:${BRAND.inkSoft};text-align:center;">${text}</td></tr>`;
 }
 
-// One table cell: the number, the colored change, and last year's number.
-// A store missing either week gets a gray note instead of a change, and is
-// left out of its group's Total row.
-function yoyCell(metric, cur, ly) {
-  const ch = yoyChange(metric, cur, ly);
-  return `<div style="font-weight:700;color:${BRAND.navy};">${metric.fmt(cur)}</div><div style="font-weight:700;color:${ch.color};font-size:11.5px;">${ch.text}</div><div style="color:${BRAND.inkSoft};font-size:11px;">LY ${metric.fmt(ly)}</div>`;
+// Per-store table: for each metric, a this-year column, a last-year column
+// and a change column, under a header that spans all three. A store missing
+// either week gets a gray "No data" instead of a change, and is left out of
+// its group's Total row.
+function storeYoyCells(metric, cur, ly, td, bold = false) {
+  const weight = bold ? 'font-weight:700;' : '';
+  const curCell = `<td style="${td}text-align:right;${weight}color:${BRAND.navy};">${cur == null ? '&mdash;' : metric.fmt(cur)}</td>`;
+  const lyCell = `<td style="${td}text-align:right;${weight}color:${BRAND.inkSoft};">${ly == null ? '&mdash;' : metric.fmt(ly)}</td>`;
+  const changeCell = cur == null || ly == null
+    ? `<td style="${td}text-align:center;font-size:10.5px;color:${BRAND.inkSoft};">No data ${cur == null ? 'this' : 'last'} year</td>`
+    : `<td style="${td}">${changeBox(yoyChange(metric, cur, ly), 11)}</td>`;
+  return curCell + lyCell + changeCell;
 }
-function storeYoyCell(metric, cur, ly) {
-  if (!cur) return `<span style="color:${BRAND.inkSoft};font-size:11.5px;">No data this week</span>`;
-  if (!ly) return `<div style="font-weight:700;color:${BRAND.navy};">${metric.fmt(metricOf(cur, metric.key))}</div><div style="color:${BRAND.inkSoft};font-size:11px;">No data last year</div>`;
-  return yoyCell(metric, metricOf(cur, metric.key), metricOf(ly, metric.key));
-}
-function storeYoyTable(title, codes, totals, lyTotals) {
-  const td = `padding:7px 8px;font-family:${FONT};font-size:12.5px;vertical-align:top;`;
-  const th = `padding:8px 10px;font-family:${FONT};font-size:12px;font-weight:700;color:#fff;`;
+function storeYoyTable(title, codes, totals, lyTotals, labels) {
+  const td = `padding:6px 5px;font-family:${FONT};font-size:12px;vertical-align:middle;`;
+  const th = `padding:6px 5px;font-family:${FONT};font-size:11px;font-weight:700;color:#fff;`;
   const storeName = code => STORE_CODE_TO_NAME[code] || `Store ${code}`;
+  const val = (t, key) => (t ? metricOf(t, key) : null);
   const rows = [...codes].sort((a, b) => storeName(a).localeCompare(storeName(b))).map((code, i) => `
     <tr style="background:${i % 2 ? BRAND.paper : BRAND.card};">
       <td style="${td}color:${BRAND.navy};">${escapeHtml(storeName(code))}</td>
-      ${YOY_METRICS.map(m => `<td style="${td}text-align:right;">${storeYoyCell(m, totals[code], lyTotals[code])}</td>`).join('')}
+      ${YOY_METRICS.map(m => storeYoyCells(m, val(totals[code], m.key), val(lyTotals[code], m.key), td)).join('')}
     </tr>`).join('');
   const yoy = buildYoy(totals, lyTotals, codes);
   const totalRow = yoy ? `
     <tr style="background:${BRAND.line};">
-      <td style="${td}font-weight:700;color:${BRAND.navy};">Total${yoy.storeCount < codes.length ? ` (${yoy.storeCount} of ${codes.length})` : ''}</td>
-      ${YOY_METRICS.map(m => `<td style="${td}text-align:right;">${yoyCell(m, yoy.metrics[m.key].cur, yoy.metrics[m.key].ly)}</td>`).join('')}
+      <td style="${td}font-weight:700;color:${BRAND.navy};">Total${yoy.storeCount < codes.length ? `<div style="font-size:10px;font-weight:400;color:${BRAND.inkSoft};">${yoy.storeCount} of ${codes.length} stores</div>` : ''}</td>
+      ${YOY_METRICS.map(m => storeYoyCells(m, yoy.metrics[m.key].cur, yoy.metrics[m.key].ly, td, true)).join('')}
     </tr>` : '';
+  const divider = `border-left:2px solid ${BRAND.card};`;
   return `
     <tr><td style="padding:12px 0 0;">
       <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;border:1px solid ${BRAND.line};">
+        <tr style="background:${BRAND.navy};">
+          <td rowspan="2" style="${th}font-size:12px;vertical-align:bottom;">${escapeHtml(title)}</td>
+          ${YOY_METRICS.map(m => `<td colspan="3" style="${th}${divider}text-align:center;font-size:12px;letter-spacing:0.6px;text-transform:uppercase;">${m.label}</td>`).join('')}
+        </tr>
         <tr style="background:${BRAND.navy2};">
-          <td style="${th}">${escapeHtml(title)}</td>
-          ${YOY_METRICS.map(m => `<td style="${th}text-align:right;">${m.label}</td>`).join('')}
+          ${YOY_METRICS.map(() => `<td style="${th}${divider}text-align:right;">${labels.cur}</td><td style="${th}text-align:right;color:#C7D3E3;">${labels.ly}</td><td width="78" style="${th}text-align:center;">Change</td>`).join('')}
         </tr>
         ${rows}${totalRow}
       </table>
@@ -299,20 +321,21 @@ function storeYoyTable(title, codes, totals, lyTotals) {
 // leaders: [{ name, storeCodes }], each listed store by store under its own
 // header. showCompany puts the company-wide tiles on top (default and owner
 // versions); without it, one leader's own group totals go there instead.
-function yoySection({ totals, lyTotals, lyRange, leaders = [], showCompany = true }) {
+function yoySection({ totals, lyTotals, range, lyRange, leaders = [], showCompany = true }) {
   const companyYoy = buildYoy(totals, lyTotals);
   if (!companyYoy) return '';
-  const lyDates = `${fmtDateLong(lyRange.start)} &ndash; ${fmtDateLong(lyRange.end)}`;
-  const parts = [sectionBand(`${EMOJI.chart} This Week vs Last Year`, BRAND.navy)];
+  const span = r => `${fmtDateShort(r.start)} &ndash; ${fmtDateShort(r.end)}`;
+  const labels = { cur: range.end.slice(0, 4), ly: lyRange.end.slice(0, 4), curDates: span(range), lyDates: span(lyRange) };
+  const parts = [sectionBand(`${EMOJI.chart} This Year vs Last Year &middot; ${span(range)}`, BRAND.navy)];
   if (showCompany) {
-    parts.push(yoyTiles(companyYoy));
-    parts.push(yoyNote(`Compared with ${lyDates}, counting only the ${companyYoy.storeCount} store${companyYoy.storeCount === 1 ? '' : 's'} with data in both years.`));
+    parts.push(yoyTiles(companyYoy, labels));
+    parts.push(yoyNote(`All stores. Counts only the ${companyYoy.storeCount} store${companyYoy.storeCount === 1 ? '' : 's'} with data in both years.`));
   } else {
     const own = buildYoy(totals, lyTotals, leaders.flatMap(l => l.storeCodes));
-    if (own) parts.push(yoyTiles(own));
-    parts.push(yoyNote(`Your stores, compared with ${lyDates}. Totals count only stores with data in both years.`));
+    if (own) parts.push(yoyTiles(own, labels));
+    parts.push(yoyNote(`Your stores combined. Totals count only stores with data in both years.`));
   }
-  leaders.forEach(l => parts.push(storeYoyTable(showCompany ? l.name : 'Your Stores', l.storeCodes, totals, lyTotals)));
+  leaders.forEach(l => parts.push(storeYoyTable(showCompany ? l.name : 'Your Stores', l.storeCodes, totals, lyTotals, labels)));
   return parts.join('');
 }
 
@@ -450,7 +473,7 @@ export default async function handler(req, res) {
     const proto = (req.headers['x-forwarded-proto'] || 'https').split(',')[0];
     const siteUrl = req.headers.host ? `${proto}://${req.headers.host}` : null;
     const lyRange = { start: shiftYearISO(range.start, -1), end: shiftYearISO(range.end, -1) };
-    const yoyBase = { totals, lyTotals: getRangeTotals(history, weeklyHistory, lyRange.start, lyRange.end), lyRange };
+    const yoyBase = { totals, lyTotals: getRangeTotals(history, weeklyHistory, lyRange.start, lyRange.end), range, lyRange };
     const leaders = LEADER_ROSTER_SECTIONS.flatMap(sec => sec.leaders);
     // Stores no DL/AS covers still get listed in the owner's copy.
     const assigned = new Set(leaders.flatMap(l => l.storeCodes));
