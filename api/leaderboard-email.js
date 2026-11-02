@@ -293,15 +293,24 @@ function yoyNote(text) {
 // its group's Total row.
 function storeYoyCells(metric, cur, ly, td, bold = false) {
   const weight = bold ? 'font-weight:700;' : '';
-  const curCell = `<td style="${td}text-align:right;${weight}color:${BRAND.navy};">${cur == null ? '&mdash;' : metric.fmt(cur)}</td>`;
-  const lyCell = `<td style="${td}text-align:right;${weight}color:${BRAND.inkSoft};">${ly == null ? '&mdash;' : metric.fmt(ly)}</td>`;
+  const curCell = `<td align="right" style="${td}${weight}color:${BRAND.navy};">${cur == null ? '&mdash;' : metric.fmt(cur)}</td>`;
+  const lyCell = `<td align="right" style="${td}${weight}color:${BRAND.inkSoft};">${ly == null ? '&mdash;' : metric.fmt(ly)}</td>`;
   const changeCell = cur == null || ly == null
-    ? `<td style="${td}text-align:center;font-size:10.5px;color:${BRAND.inkSoft};">No data ${cur == null ? 'this' : 'last'} year</td>`
-    : `<td style="${td}">${changeBox(yoyChange(metric, cur, ly), 11)}</td>`;
+    ? `<td align="center" style="${td}font-size:10.5px;color:${BRAND.inkSoft};">No data ${cur == null ? 'this' : 'last'} year</td>`
+    : storeChangeCell(yoyChange(metric, cur, ly), td);
   return curCell + lyCell + changeCell;
 }
+// Same look as changeBox, but the fill sits on the cell itself instead of a
+// nested table: the owner copy repeats this ~120 times, and the nested
+// version pushed it past GmailApp's ~200KB body limit.
+function storeChangeCell(ch, td) {
+  return `<td align="center" style="${td}background:${ch.fill};color:${ch.color};font-weight:700;white-space:nowrap;border:2px solid ${BRAND.card};">${ch.pct}<br><span style="font-size:10px;">${ch.diff}</span></td>`;
+}
+// Font family/size are set once on the table and inherited by its cells,
+// rather than repeated on every <td>, to keep the owner copy (16 tables)
+// well under GmailApp's body limit.
 function storeYoyTable(title, codes, totals, lyTotals, labels) {
-  const td = `padding:6px 5px;font-family:${FONT};font-size:12px;vertical-align:middle;`;
+  const td = 'padding:6px 5px;';
   const th = `padding:6px 5px;font-family:${FONT};font-size:11px;font-weight:700;color:#fff;`;
   const storeName = code => STORE_CODE_TO_NAME[code] || `Store ${code}`;
   const val = (t, key) => (t ? metricOf(t, key) : null);
@@ -319,7 +328,7 @@ function storeYoyTable(title, codes, totals, lyTotals, labels) {
   const divider = `border-left:2px solid ${BRAND.card};`;
   return `
     <tr><td style="padding:12px 0 0;">
-      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;border:1px solid ${BRAND.line};">
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;border:1px solid ${BRAND.line};font-family:${FONT};font-size:12px;">
         <tr style="background:${BRAND.navy};">
           <td rowspan="2" style="${th}font-size:12px;vertical-align:bottom;">${escapeHtml(title)}</td>
           ${YOY_METRICS.map(m => `<td colspan="3" style="${th}${divider}text-align:center;font-size:12px;letter-spacing:0.6px;text-transform:uppercase;">${m.label}</td>`).join('')}
@@ -439,7 +448,9 @@ function buildEmail(storeRows, range, news, events, todayISO, siteUrl, yoyHtml =
         </tr>
       </table>
     </div>`;
-  return { subject, html };
+  // Drop the template indentation between tags: it's pure bytes, and
+  // GmailApp.sendEmail rejects bodies over ~200KB.
+  return { subject, html: html.replace(/>\s*\n\s*</g, '><') };
 }
 
 // Named export alongside the default handler purely so this can be driven
