@@ -72,6 +72,13 @@ Last updated: 2026-11-02 (night). **New Focus Stylist tab.** Pushed to `main`.
 - **Also wired**: `handleSaveFocus` saves optimistically and reverts with a toast on failure. Presenter Mode fakes the names (`fakeFocusStylists` in `src/presenter.js`), and writes are blocked as usual. Tilly gets a FOCUS STYLISTS section with month-to-date actuals vs goals (`buildAIContext`), already scoped to what the login can see.
 - **Verified**: `CI=true npm run build` clean. `api/scoped-data.js` was run against a mock DB: 13/13 checks pass (DL add/edit/remove at own store, 403 at another DL's store, a second DL's save doesn't wipe the first, manager can't read or write, owner sees all). **Not verified**: anything in a real browser, or a real DL login.
 - **Area Supervisors** get the button only if their login's role is `district_leader`.
+- **Update the same night: a focus lasts one calendar month** (user request).
+  - FOCUS on Overview always adds to the current month, and ★ FOCUS reflects only this month's list.
+  - The tab has a month/year dropdown instead of the date range: the current month plus every month that has entries, newest first. Actuals cover that whole month (month-to-date for the current one).
+  - Entries are keyed per store as `YYYY-MM:<focusKey>` and carry `month`. The key is flat because the scoped patch merge is one level deep. Helpers: `focusMonthKey`/`focusEntryKey`/`focusMonthOf`/`focusEntriesList`/`currentFocusKeys`.
+  - A bare-key entry (pre-month) counts as its `addedAt` month, though none existed. The live row was checked: no `focus_stylists` row yet.
+  - `handleSaveFocus(target, goals)` now takes `{ code, name, month, entryKey }`. Tilly only gets the current month. Presenter keeps the month prefix.
+  - Nothing carries over to a new month automatically; the user didn't ask for that.
 
 Last updated: 2026-11-02 (evening). **The Monday email's Apps Script was handed over with real recipients, and a timeout was fixed.** The user's first `sendTestToMe` failed with "Supabase load failed: canceling statement due to statement timeout". `loadHistory` was pulling every `daily_history_*` row in one query, and 2025 history doubled that. Daily history is now split per store (`daily_history_YYYY-MM__<code>`). `loadHistory(ranges)` loads only the months the two weeks touch, plus the month before each start, by prefix. Local run: 1.6s, same numbers. The live endpoint returned ok after the push. RECIPIENTS was built from the user's existing list plus Gmail lookups. Addresses are deliberately not recorded here; they live only in the user's Apps Script.
 - Lisa Hair's address was added; she wasn't on the old list. A different Lisa (Lisa Lewis) was on the old list and gets company totals only.

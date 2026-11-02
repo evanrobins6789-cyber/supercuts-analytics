@@ -3193,8 +3193,13 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
                     footer={{ sales: s.sales, avgTicket: s.avgTicket, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, otherServices: s.otherServices, opc: s.opc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                     footerLabel="Store total / weighted avg"
                     focused={focused} onFocus={setFocused}
-                    focusKeys={new Set(Object.keys(focusStylists?.[s.code] || {}))}
-                    onFocusStylist={onSaveFocus ? e => setFocusTarget({ code: s.code, storeName: s.name, name: e.name, tsth: e.tsth, cph: e.cph }) : null}
+                    focusKeys={currentFocusKeys(focusStylists, s.code)}
+                    onFocusStylist={onSaveFocus ? e => {
+                      // Reuse this month's entry if there is one (an older entry may use a bare key).
+                      const month = focusMonthKey();
+                      const found = focusEntriesList({ [s.code]: focusStylists?.[s.code] }).find(x => x.month === month && focusKey(x.name) === focusKey(e.name));
+                      setFocusTarget({ code: s.code, storeName: s.name, name: e.name, tsth: e.tsth, cph: e.cph, month, entryKey: found ? found.entryKey : focusEntryKey(month, e.name) });
+                    } : null}
                   />
                 </div>
               )}
@@ -3208,9 +3213,9 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
       {focusTarget && (
         <FocusGoalModal
           target={focusTarget}
-          existing={focusStylists?.[focusTarget.code]?.[focusKey(focusTarget.name)] || null}
-          onSubmit={goalsIn => { onSaveFocus(focusTarget.code, focusTarget.name, goalsIn); setFocusTarget(null); }}
-          onRemove={() => { onSaveFocus(focusTarget.code, focusTarget.name, null); setFocusTarget(null); }}
+          existing={focusStylists?.[focusTarget.code]?.[focusTarget.entryKey] || null}
+          onSubmit={goalsIn => { onSaveFocus(focusTarget, goalsIn); setFocusTarget(null); }}
+          onRemove={() => { onSaveFocus(focusTarget, null); setFocusTarget(null); }}
           onClose={() => setFocusTarget(null)}
         />
       )}
@@ -3247,7 +3252,22 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
 // so a DL only ever reads/writes their own stores (api/scoped-data.js) and
 // the owner sees everyone. Stylists are matched to their numbers by store +
 // name, the same way the Employees tables list them.
+//
+// A focus lasts one calendar month: FOCUS on Overview always adds to the
+// current month, and the tab shows one month at a time. Entries are stored
+// per store as `${YYYY-MM}:${focusKey(name)}` (a flat key, because the
+// scoped patch merge is only one level deep per store). Entries saved
+// before months existed have a bare focusKey and count as their addedAt month.
 const focusKey = name => String(name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+const focusMonthKey = () => getCurrentMonthRange().start.slice(0, 7);
+const focusEntryKey = (month, name) => `${month}:${focusKey(name)}`;
+const focusMonthOf = entry => entry?.month || String(entry?.addedAt || '').slice(0, 7);
+// [{ code, entryKey, month, ...entry }] across every store.
+const focusEntriesList = focusStylists => Object.entries(focusStylists || {}).flatMap(([code, entries]) =>
+  Object.entries(entries || {}).filter(([, e]) => e).map(([entryKey, e]) => ({ ...e, code, entryKey, month: focusMonthOf(e) })));
+// The current month's focus keys (focusKey(name)) at one store, for Overview's ★ FOCUS state.
+const currentFocusKeys = (focusStylists, code) => new Set(
+  focusEntriesList({ [code]: focusStylists?.[code] }).filter(e => e.month === focusMonthKey()).map(e => focusKey(e.name)));
 
 function FocusGoalModal({ target, existing, onSubmit, onRemove, onClose }) {
   const [tsthGoal, setTsthGoal] = useState(existing?.tsthGoal ?? '');
@@ -3287,47 +3307,45 @@ function FocusGoalModal({ target, existing, onSubmit, onRemove, onClose }) {
   );
 }
 
-function FocusStylistTab({ focusStylists, report, history, weeklyHistory, dateRange, onDateRangeChange, onSaveFocus, isOwner }) {
+function FocusStylistTab({ focusStylists, history, weeklyHistory, onSaveFocus, isOwner }) {
   const [editTarget, setEditTarget] = useState(null);
-  // Same range rule as Overview: the live report's period when it's
-  // current, otherwise the picked range, otherwise month-to-date.
-  const usingDefaultRange = isReportStale(report) && !(dateRange.start && dateRange.end);
-  const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
-  const isHistorical = !!(effectiveRange.start && effectiveRange.end);
+  const thisMonth = focusMonthKey();
+  const [month, setMonth] = useState(thisMonth);
+  const entries = useMemo(() => focusEntriesList(focusStylists), [focusStylists]);
+  // The current month is always offered (even before anyone is picked), plus every month that has a list.
+  const monthOptions = useMemo(() => [...new Set([thisMonth, ...entries.map(e => e.month).filter(Boolean)])].sort().reverse(), [entries, thisMonth]);
+  // Actuals for the whole selected month (month-to-date for the current one).
+  const range = useMemo(() => {
+    const [y, m] = month.split('-').map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    return { start: `${month}-01`, end: month === thisMonth ? getCurrentMonthRange().end : `${month}-${String(lastDay).padStart(2, '0')}` };
+  }, [month, thisMonth]);
 
   // { [storeCode]: Map(focusKey → employee row) } for the actual TSTH/CPH.
   const employeesByStore = useMemo(() => {
     const out = {};
-    const add = (code, employees) => {
-      out[code] = new Map((employees || []).map(e => [focusKey(e.name), e]));
-    };
-    if (isHistorical) {
-      const totals = getRangeTotals(history, weeklyHistory, effectiveRange.start, effectiveRange.end);
-      Object.entries(totals).forEach(([code, t]) => add(code, historyTotalsToReportShape(t).employees));
-    } else if (report) {
-      report.stores.forEach(s => add(s.code, s.employees));
-    }
+    const totals = getRangeTotals(history, weeklyHistory, range.start, range.end);
+    Object.entries(totals).forEach(([code, t]) => {
+      out[code] = new Map((historyTotalsToReportShape(t).employees || []).map(e => [focusKey(e.name), e]));
+    });
     return out;
-  }, [isHistorical, history, weeklyHistory, effectiveRange.start, effectiveRange.end, report]);
+  }, [history, weeklyHistory, range.start, range.end]);
 
   const groups = useMemo(() => {
     const leaderOrder = leaderSections().flatMap(sec => sec.leaders.map(l => l.name));
     const byLeader = {};
-    Object.entries(focusStylists || {}).forEach(([code, entries]) => {
-      const leader = getLeaderForStoreCode(code);
+    entries.filter(e => e.month === month).forEach(entry => {
+      const leader = getLeaderForStoreCode(entry.code);
       const groupName = leader?.leaderName || 'No DL assigned';
-      Object.values(entries || {}).forEach(entry => {
-        if (!entry) return;
-        if (!byLeader[groupName]) byLeader[groupName] = { name: groupName, role: leader?.role || '', rows: [] };
-        const actual = employeesByStore[code]?.get(focusKey(entry.name)) || null;
-        byLeader[groupName].rows.push({ ...entry, code, storeName: STORE_CODE_TO_NAME[code] || `Store ${code}`, actual });
-      });
+      if (!byLeader[groupName]) byLeader[groupName] = { name: groupName, role: leader?.role || '', rows: [] };
+      const actual = employeesByStore[entry.code]?.get(focusKey(entry.name)) || null;
+      byLeader[groupName].rows.push({ ...entry, storeName: STORE_CODE_TO_NAME[entry.code] || `Store ${entry.code}`, actual });
     });
     const rank = name => { const i = leaderOrder.indexOf(name); return i === -1 ? leaderOrder.length : i; };
     return Object.values(byLeader)
       .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name))
       .map(g => ({ ...g, rows: g.rows.sort((a, b) => a.storeName.localeCompare(b.storeName) || a.name.localeCompare(b.name)) }));
-  }, [focusStylists, employeesByStore]);
+  }, [entries, month, employeesByStore]);
 
   const total = groups.reduce((n, g) => n + g.rows.length, 0);
   const vsGoal = (actual, goal, fmt) => {
@@ -3337,11 +3355,21 @@ function FocusStylistTab({ focusStylists, report, history, weeklyHistory, dateRa
 
   return (
     <div className="tab-content">
-      <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
+      <div className="focus-month-bar">
+        <label htmlFor="focus-month">Month</label>
+        <select id="focus-month" className="text-input focus-month-select" value={month} onChange={e => setMonth(e.target.value)}>
+          {monthOptions.map(m => <option key={m} value={m}>{fmtMonthLong(m)}{m === thisMonth ? ' (this month)' : ''}</option>)}
+        </select>
+      </div>
       <p className="section-hint">
-        {isOwner ? 'Every focus stylist, grouped by DL.' : 'Your focus stylists.'} Actual TSTH and CPH are for {isHistorical ? `${fmtDateLong(effectiveRange.start)} – ${fmtDateLong(effectiveRange.end)}` : 'the current report'}: green means at or above goal, red means below. Add stylists with the FOCUS button next to their name on the Overview tab.
+        {isOwner ? 'Every focus stylist, grouped by DL.' : 'Your focus stylists.'} A focus lasts for the month. Actual TSTH and CPH are {month === thisMonth ? 'month-to-date' : `for all of ${fmtMonthLong(month)}`}: green means at or above goal, red means below.{month === thisMonth ? ' Add stylists with the FOCUS button next to their name on the Overview tab.' : ''}
       </p>
-      {!total && <div className="empty-state"><p className="empty-title">No focus stylists yet</p><p>Open a store on the Overview tab and click FOCUS next to a stylist's name.</p></div>}
+      {!total && (
+        <div className="empty-state">
+          <p className="empty-title">No focus stylists for {fmtMonthLong(month)}</p>
+          {month === thisMonth && <p>Open a store on the Overview tab and click FOCUS next to a stylist's name.</p>}
+        </div>
+      )}}
       <div className="dl-list">
         {groups.map(g => (
           <div key={g.name} className="dl-card">
@@ -3368,7 +3396,7 @@ function FocusStylistTab({ focusStylists, report, history, weeklyHistory, dateRa
                 </thead>
                 <tbody>
                   {g.rows.map(r => (
-                    <tr key={`${r.code}-${r.name}`}>
+                    <tr key={`${r.code}-${r.entryKey}`}>
                       <td className="ledger-name-col">{r.name}</td>
                       <td className="ledger-text-col">{r.storeName}</td>
                       <td>{fmtRate(r.tsthGoal)}</td>
@@ -3376,7 +3404,7 @@ function FocusStylistTab({ focusStylists, report, history, weeklyHistory, dateRa
                       <td>{fmtNum(r.cphGoal, 2)}</td>
                       <td>{vsGoal(r.actual?.cph, r.cphGoal, n => fmtNum(n, 2))}</td>
                       <td className="ledger-text-col focus-added">{r.addedAt ? fmtDateShort(r.addedAt) : ''}{r.addedBy ? ` · ${r.addedBy}` : ''}</td>
-                      <td><button type="button" className="focus-btn focus-btn--on" onClick={() => setEditTarget({ code: r.code, storeName: r.storeName, name: r.name, tsth: r.actual?.tsth, cph: r.actual?.cph })}>Edit</button></td>
+                      <td><button type="button" className="focus-btn focus-btn--on" onClick={() => setEditTarget({ code: r.code, storeName: r.storeName, name: r.name, tsth: r.actual?.tsth, cph: r.actual?.cph, entryKey: r.entryKey, month: r.month })}>Edit</button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -3388,9 +3416,9 @@ function FocusStylistTab({ focusStylists, report, history, weeklyHistory, dateRa
       {editTarget && (
         <FocusGoalModal
           target={editTarget}
-          existing={focusStylists?.[editTarget.code]?.[focusKey(editTarget.name)] || null}
-          onSubmit={goalsIn => { onSaveFocus(editTarget.code, editTarget.name, goalsIn); setEditTarget(null); }}
-          onRemove={() => { onSaveFocus(editTarget.code, editTarget.name, null); setEditTarget(null); }}
+          existing={focusStylists?.[editTarget.code]?.[editTarget.entryKey] || null}
+          onSubmit={goalsIn => { onSaveFocus(editTarget, goalsIn); setEditTarget(null); }}
+          onRemove={() => { onSaveFocus(editTarget, null); setEditTarget(null); }}
           onClose={() => setEditTarget(null)}
         />
       )}
@@ -6972,11 +7000,12 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   // Focus stylists (DL/leadership picks with TSTH/CPH goals) vs their
   // month-to-date actuals. Already scoped server-side: a DL's list only has
   // their own stores, managers/employees get none.
-  const focusEntries = Object.entries(focusStylists || {}).flatMap(([code, entries]) => Object.values(entries || {}).filter(Boolean).map(e => ({ ...e, code })));
+  // A focus lasts one month, so only this month's list is current.
+  const focusEntries = focusEntriesList(focusStylists).filter(e => e.month === focusMonthKey());
   if (focusEntries.length) {
     const { start, end } = getCurrentMonthRange();
     const mtdTotals = getRangeTotals(history, weeklyHistory, start, end);
-    lines.push(`FOCUS STYLISTS (picked by DLs/leadership on the Focus Stylist tab, with goals), month-to-date ${start} through ${end}:`);
+    lines.push(`FOCUS STYLISTS this month (picked by DLs/leadership on the Focus Stylist tab, with goals; each focus lasts one month), month-to-date ${start} through ${end}:`);
     focusEntries.forEach(e => {
       const emp = (historyTotalsToReportShape(mtdTotals[e.code] || {}).employees || []).find(x => focusKey(x.name) === focusKey(e.name));
       const dl = getLeaderForStoreCode(e.code)?.leaderName || 'no DL';
@@ -9153,8 +9182,12 @@ export default function App() {
   // Focus Stylist add/edit (goals object) or remove (null). Patches only
   // this one stylist's entry through saveScoped, so it never touches other
   // stylists or other DLs' stores; on failure the local change is undone.
-  const handleSaveFocus = useCallback((storeCode, name, goalsIn) => {
-    const key = focusKey(name);
+  // target: { code, name, month, entryKey } (entryKey is the stored key —
+  // `${month}:${focusKey(name)}`, or a bare focusKey for an older entry).
+  const handleSaveFocus = useCallback((target, goalsIn) => {
+    const { code: storeCode, name } = target;
+    const month = target.month || focusMonthKey();
+    const key = target.entryKey || focusEntryKey(month, name);
     let before = null;
     let entry = null;
     setFocusStylists(prev => {
@@ -9162,6 +9195,7 @@ export default function App() {
       const prior = prev?.[storeCode]?.[key];
       entry = goalsIn ? {
         name,
+        month,
         tsthGoal: goalsIn.tsthGoal,
         cphGoal: goalsIn.cphGoal,
         addedBy: prior?.addedBy || currentUser.name,
@@ -10221,7 +10255,7 @@ export default function App() {
             focusStylists={d.focusStylists} onSaveFocus={canFocus ? handleSaveFocus : null} />
         )}
         {tab === 'Focus Stylist' && canFocus && (
-          <FocusStylistTab focusStylists={d.focusStylists} report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} onSaveFocus={handleSaveFocus} isOwner={currentUser.role === 'owner'} />
+          <FocusStylistTab focusStylists={d.focusStylists} history={d.history} weeklyHistory={d.weeklyHistory} onSaveFocus={handleSaveFocus} isOwner={currentUser.role === 'owner'} />
         )}
         {!needsReport && tab === 'Employees' && (report || hasHistoricalData) && (
           <EmployeesTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={d.managers} employeeRoster={d.employeeRoster} fallbackEmployeesByStore={d.fallbackEmployeesByStore} />
