@@ -5303,6 +5303,7 @@ function ShearCheckTab({ stores, salonChecks, managers, onSave, onEmail, onDelet
 function ShearCheckForm({ stores, visits, managers, onSave, onEmail, userName, onSaved }) {
   const [form, setForm] = useState(() => scLoadDraft() || scEmptyForm());
   const [busy, setBusy] = useState(null); // 'save' | 'email' | null
+  const [openNotes, setOpenNotes] = useState({}); // phone only: note boxes opened with ✎
   useEffect(() => { scSaveDraft(form); }, [form]);
   const groups = useMemo(() => groupStoresByLeader(stores), [stores]);
   const leader = form.code ? getLeaderForStoreCode(form.code) : null;
@@ -5363,30 +5364,37 @@ function ShearCheckForm({ stores, visits, managers, onSave, onEmail, userName, o
         {lastVisit?.followUp && <div className="sc-last-follow"><strong>Follow-up from last visit:</strong> {lastVisit.followUp}</div>}
       </div>
 
-      {SALON_CHECK_SECTIONS.map((sec, si) => (
-        <div key={sec.id} className="sc-card sc-section">
-          <div className="sc-section-head">
-            <span className="sc-section-title">{si + 1}. {sec.title}</span>
-            <button type="button" className="link-btn" onClick={() => markSection(sec, 'yes')}>Mark rest Yes</button>
-          </div>
-          {sec.items.map(item => {
-            const a = form.answers[item.id];
-            return (
-              <div key={item.id} className={`sc-item ${a === 'no' ? 'sc-item-no' : ''}`}>
-                <div className="sc-item-row">
-                  <span className="sc-item-label">{item.label}</span>
+      {/* One compact card: slim section bars, and on each row the Yes / No /
+          N/A buttons sit right before the question (lined up down the page),
+          with the note on the same line. On a phone the note box stays
+          hidden until the item is marked No, has text, or ✎ is tapped. */}
+      <div className="sc-card sc-checklist">
+        {SALON_CHECK_SECTIONS.map((sec, si) => (
+          <React.Fragment key={sec.id}>
+            <div className="sc-sec-bar">
+              <span>{si + 1}. {sec.title}</span>
+              <button type="button" className="sc-sec-yes" onClick={() => markSection(sec, 'yes')}>Mark rest Yes</button>
+            </div>
+            {sec.items.map(item => {
+              const a = form.answers[item.id];
+              const noteText = form.notes[item.id] || '';
+              const showNote = a === 'no' || !!noteText || openNotes[item.id];
+              return (
+                <div key={item.id} className={`sc-row ${a === 'no' ? 'sc-row-no' : ''} ${showNote ? 'sc-row-note-open' : ''}`}>
                   <div className="sc-answers">
                     {[['yes', 'Yes'], ['no', 'No'], ['na', 'N/A']].map(([k, label]) => (
                       <button key={k} type="button" className={`sc-ans sc-ans-${k} ${a === k ? 'on' : ''}`} onClick={() => answer(item.id, k)}>{label}</button>
                     ))}
                   </div>
+                  <span className="sc-item-label">{item.label}</span>
+                  <button type="button" className="sc-note-toggle" aria-label="Add a note" onClick={() => setOpenNotes(prev => ({ ...prev, [item.id]: !prev[item.id] }))}>✎</button>
+                  <input type="text" className="sc-note" placeholder={a === 'no' ? 'What needs fixing?' : 'Note'} value={noteText} onChange={e => note(item.id, e.target.value)} />
                 </div>
-                <input type="text" className="sc-note" placeholder={a === 'no' ? 'What needs fixing?' : 'Notes (optional)'} value={form.notes[item.id] || ''} onChange={e => note(item.id, e.target.value)} />
-              </div>
-            );
-          })}
-        </div>
-      ))}
+              );
+            })}
+          </React.Fragment>
+        ))}
+      </div>
 
       <div className="sc-card">
         <p className="sc-section-title">Follow Up for Next Visit</p>
