@@ -20,6 +20,8 @@ const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_', 'gift_card_hist
 // gift_card_history_* back at all, and giftCardGoal is stripped out of the
 // store_goals they do see (and refused if a non-owner tries to write it).
 const OWNER_ONLY_GOAL_FIELDS = ['giftCardGoal'];
+// Matches the field itself and its monthly form (`giftCardGoal:2026-11`).
+const isOwnerOnlyGoalField = k => OWNER_ONLY_GOAL_FIELDS.some(f => k === f || k.startsWith(`${f}:`));
 // Goal fields any role may read but only the owner may write.
 const OWNER_ONLY_GOAL_WRITE_PREFIXES = ['salesGoal:'];
 
@@ -98,7 +100,7 @@ function filterPayload(key, payload, employee) {
     Object.entries(scoped).forEach(([code, g]) => {
       if (!g || typeof g !== 'object') { out[code] = g; return; }
       const rest = { ...g };
-      OWNER_ONLY_GOAL_FIELDS.forEach(f => { delete rest[f]; });
+      Object.keys(rest).forEach(k => { if (isOwnerOnlyGoalField(k)) delete rest[k]; });
       out[code] = rest;
     });
     return out;
@@ -180,7 +182,7 @@ export default async function handler(req, res) {
           res.status(403).json({ error: 'Only the owner can modify lease data.' });
           return;
         }
-        if (key === 'store_goals' && Object.values(patch).some(v => v && typeof v === 'object' && OWNER_ONLY_GOAL_FIELDS.some(f => f in v))) {
+        if (key === 'store_goals' && Object.values(patch).some(v => v && typeof v === 'object' && Object.keys(v).some(isOwnerOnlyGoalField))) {
           res.status(403).json({ error: 'Only the owner can set gift card goals.' });
           return;
         }

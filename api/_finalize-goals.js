@@ -25,21 +25,28 @@ const OTHER_GOALS = [
   { key: 'colorGoal', label: 'Color $' },
   { key: 'bottleGoal', label: 'Bottles' },
   { key: 'signatureSGoal', label: 'Signature Service' },
+  { key: 'retailAttachGoal', label: 'Retail Attach %' },
+  { key: 'bottleToColorGoal', label: 'Bottle-to-Color %' },
+  { key: 'bottleToSSGoal', label: 'Bottle-to-SS %' },
 ];
 
 function leaderEmail({ leader, rows, month, lyMonth, prevMonth, prevPartial, siteUrl }) {
   const td = `padding:7px 8px;font-family:${FONT};font-size:12.5px;border-bottom:1px solid ${BRAND.line};`;
   const th = `padding:7px 8px;font-family:${FONT};font-size:11.5px;font-weight:700;color:#fff;background:${BRAND.navy2};`;
   const money = n => (n == null ? '&mdash;' : fmt$(n));
+  // Per-day / per-week averages: bigger and bold so they read at a glance.
+  const avg = 'font-size:13.5px;font-weight:700;margin-top:3px;';
+  const goalAvg = `${avg}color:${BRAND.navy};`;
+  const refAvg = `${avg}color:#444;`;
   const body = rows.map((r, i) => `
     <tr style="background:${i % 2 ? BRAND.paper : BRAND.card};">
       <td style="${td}color:${BRAND.navy};font-weight:700;">${escapeHtml(r.name)}</td>
       <td style="${td}text-align:right;">
         <div style="font-weight:700;color:${BRAND.navy};font-size:14px;">${money(r.goal)}</div>
-        ${r.breakdown ? `<div style="color:${BRAND.inkSoft};font-size:11px;">${fmt$(r.breakdown.daily)}/day &middot; ${fmt$(r.breakdown.weekly)}/wk</div>` : ''}
+        ${r.breakdown ? `<div style="${goalAvg}">${fmt$(r.breakdown.daily)}/day &middot; ${fmt$(r.breakdown.weekly)}/wk</div>` : ''}
       </td>
-      <td style="${td}text-align:right;">${money(r.ly?.sales)}<div style="color:${BRAND.inkSoft};font-size:11px;">${r.ly?.daily != null ? `${fmt$(r.ly.daily)}/day` : ''}</div></td>
-      <td style="${td}text-align:right;">${money(r.prev?.sales)}<div style="color:${BRAND.inkSoft};font-size:11px;">${r.prev?.daily != null ? `${fmt$(r.prev.daily)}/day` : ''}</div></td>
+      <td style="${td}text-align:right;">${money(r.ly?.sales)}<div style="${refAvg}">${r.ly?.daily != null ? `${fmt$(r.ly.daily)}/day` : ''}</div></td>
+      <td style="${td}text-align:right;">${money(r.prev?.sales)}<div style="${refAvg}">${r.prev?.daily != null ? `${fmt$(r.prev.daily)}/day` : ''}</div></td>
     </tr>`).join('');
   const sum = f => rows.reduce((s, r) => s + (f(r) || 0), 0);
   const totalGoal = sum(r => r.goal);
@@ -47,7 +54,7 @@ function leaderEmail({ leader, rows, month, lyMonth, prevMonth, prevPartial, sit
   const totalRow = `
     <tr style="background:${BRAND.line};">
       <td style="${td}font-weight:700;color:${BRAND.navy};">Total</td>
-      <td style="${td}text-align:right;font-weight:700;color:${BRAND.navy};">${fmt$(totalGoal)}${totalBreak ? `<div style="color:${BRAND.inkSoft};font-size:11px;font-weight:400;">${fmt$(totalBreak.daily)}/day &middot; ${fmt$(totalBreak.weekly)}/wk</div>` : ''}</td>
+      <td style="${td}text-align:right;font-weight:700;color:${BRAND.navy};">${fmt$(totalGoal)}${totalBreak ? `<div style="${goalAvg}">${fmt$(totalBreak.daily)}/day &middot; ${fmt$(totalBreak.weekly)}/wk</div>` : ''}</td>
       <td style="${td}text-align:right;font-weight:700;">${fmt$(sum(r => r.ly?.sales))}</td>
       <td style="${td}text-align:right;font-weight:700;">${fmt$(sum(r => r.prev?.sales))}</td>
     </tr>`;

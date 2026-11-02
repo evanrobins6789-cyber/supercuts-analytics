@@ -3,8 +3,7 @@ import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip } fro
 import { Bar } from 'react-chartjs-2';
 import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDataByPrefix, supabase } from './db';
 import {
-  parseStylistReport, parseEmployeeStartDates, parseGoalFile, downloadGoalTemplate, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
-  parseColorAttachGoalsFile,
+  parseStylistReport, parseEmployeeStartDates, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
   parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory, parseGiftCardFile, mergeGiftCardsIntoHistory,
   buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile, parseMasterSalonListFile, parseHsaScheduleFile,
 } from './parser';
@@ -3737,33 +3736,31 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   // parser.js's Invoice No handling and metrics.js's
   // historyTotalsToReportShape/rollupRows, which recompute it from raw
   // colorTicketCount/colorTicketsWithRetail sums, never averaging per-store
-  // percentages directly) and only falls back to the manually-imported
-  // `goals[code][actualField]` snapshot when it doesn't — older Sales-
-  // Accrual data with no Invoice No column, or the live weekly Stylist
-  // Report, which has no per-ticket detail at all. The goal side is always
-  // goals-only (imported from the DL Color Goals file) — there's nothing to
-  // compute a goal from.
+  // percentages directly). With no ticket-linked data (older Sales-Accrual
+  // with no Invoice No column, or the live weekly Stylist Report) it shows
+  // "—"; the old imported attach % snapshot is no longer used (2026-11-02).
+  // The goal is the Monthly Retail Attach % goal (`goalField`, typed as a
+  // whole percent), averaged over the days shown.
   const showAttach = !!attachMetric;
   const attachFmt = (attachMetric && attachMetric.fmt) || fmtPct;
   const attachActualForRow = s => {
-    if (!showAttach) return null;
-    if (attachMetric.rowKey && s[attachMetric.rowKey] != null) return s[attachMetric.rowKey];
-    return goals?.[s.code]?.[attachMetric.actualField] ?? null;
+    if (!showAttach || !attachMetric.rowKey) return null;
+    return s[attachMetric.rowKey] ?? null;
   };
-  const getAttachGoal = code => (showAttach && goals?.[code]?.[attachMetric.goalField] != null ? goals[code][attachMetric.goalField] : null);
-  // Unweighted fallback average — only reached when a group/company has no
-  // real computed rollup available at all (no ticket-linked Sales-Accrual
-  // data anywhere in the range), otherwise `groupAttachActual` below prefers
-  // the rollup's own recomputed-from-sums figure.
-  const avgFromGoals = (storesArr, field) => {
-    const vals = storesArr.map(st => (goals?.[st.code]?.[field])).filter(v => v != null);
+  const getAttachGoal = code => {
+    if (!showAttach) return null;
+    const v = goalForRange(goals, code, attachMetric.goalField, goalStart, goalEnd, { rate: true }).value;
+    return v == null ? null : v / 100;
+  };
+  // A group's attach goal is the plain average of its stores' goals.
+  const avgAttachGoal = storesArr => {
+    if (!showAttach) return null;
+    const vals = storesArr.map(st => getAttachGoal(st.code)).filter(v => v != null);
     return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
   };
-  const avgAttachGoal = storesArr => (showAttach ? avgFromGoals(storesArr, attachMetric.goalField) : null);
   const groupAttachActual = (storesArr, computedTotals) => {
-    if (!showAttach) return null;
-    if (attachMetric.rowKey && computedTotals && computedTotals[attachMetric.rowKey] != null) return computedTotals[attachMetric.rowKey];
-    return avgFromGoals(storesArr, attachMetric.actualField);
+    if (!showAttach || !attachMetric.rowKey || !computedTotals) return null;
+    return computedTotals[attachMetric.rowKey] ?? null;
   };
   const showRef = !!refMetric;
   const refFmt = (refMetric && refMetric.fmt) || fmt$;
@@ -4796,7 +4793,8 @@ function GiftCardsTab({ giftCardHistory, goals, query, onQuery, dateRange, onDat
   const usingDefaultRange = !(dateRange?.start && dateRange?.end);
   const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const hasAnyData = Object.keys(giftCardHistory || {}).length > 0;
-  const getGoal = code => (goals?.[code]?.giftCardGoal != null ? goals[code].giftCardGoal : null);
+  // Monthly Gift Cards $ goal (Goals tab, owner only), scaled to the dates shown.
+  const getGoal = code => goalForRange(goals, code, 'giftCardGoal', effectiveRange.start, effectiveRange.end).value;
 
   // Every store with a sale in range OR a goal set, so a store with a goal
   // and no sales yet still shows up (as behind goal) instead of vanishing.
@@ -4956,7 +4954,6 @@ function GiftCardsTab({ giftCardHistory, goals, query, onQuery, dateRange, onDat
   );
 }
 
-const GOAL_FIELD_LABELS = { salesGoal: 'sales', colorGoal: 'color', bottleGoal: 'bottle', signatureSGoal: 'signature service', bottleToColorGoal: 'bottle-to-color %', bottleToSSGoal: 'bottle-to-SS %', giftCardGoal: 'gift card' };
 
 // ─── Monthly goals (top of the Goals tab) ───────────────────────────────────
 // Retail $ and Color $ goals set for one month at a time, next to each
@@ -4964,49 +4961,63 @@ const GOAL_FIELD_LABELS = { salesGoal: 'sales', colorGoal: 'color', bottleGoal: 
 // and weekly sales average. Saved into store_goals as flat per-month
 // fields (`retailGoal:2026-11`), because the scoped patch merge is one
 // level deep per store; so DL scoping works exactly like the other goals.
-// The standing Sales/Color/Bottle goals below are separate and unchanged.
+// These are the only goals on the site (2026-11-02): the old standing
+// goals (`goals[code].salesGoal` etc., no month) are no longer read
+// anywhere, though the old values are still in store_goals.
 // ownerOnly: leadership sets it (also enforced in api/scoped-data.js); DLs see it read-only.
+// ownerVisible: hidden from everyone but the owner (gift cards; the server
+//   strips it from what DLs get, see OWNER_ONLY_GOAL_FIELDS).
+// pct: typed as a whole percent ("15" = 15%), and a rate, so goalForRange
+//   averages it over the days shown instead of scaling it.
 const MONTHLY_GOAL_FIELDS = [
   { key: 'salesGoal', label: 'Sales $', money: true, ownerOnly: true },
   { key: 'retailGoal', label: 'Retail $', money: true },
   { key: 'colorGoal', label: 'Color $', money: true },
   { key: 'bottleGoal', label: 'Bottles' },
   { key: 'signatureSGoal', label: 'Signature Service' },
+  { key: 'retailAttachGoal', label: 'Retail Attach %', pct: true },
+  { key: 'bottleToColorGoal', label: 'Bottle-to-Color %', pct: true },
+  { key: 'bottleToSSGoal', label: 'Bottle-to-SS %', pct: true },
+  { key: 'giftCardGoal', label: 'Gift Cards $', money: true, ownerVisible: true },
 ];
+const monthlyGoalFieldsFor = isOwner => MONTHLY_GOAL_FIELDS.filter(f => !f.ownerVisible || isOwner);
+const fmtGoalValue = (f, v) => (v === '' || v == null ? '—' : f.money ? fmt$(v) : f.pct ? `${fmtNum(v, 0)}%` : fmtInt(v));
 const monthlyGoalKey = (field, month) => `${field}:${month}`;
 const isoDayDiff = (a, b) => Math.round((new Date(`${b}T00:00:00`) - new Date(`${a}T00:00:00`)) / 86400000);
 // A store's goal for the dates being viewed. When every month the range
 // touches has a Monthly Goal for `field`, it's those goals scaled to the
 // days shown (a week of November = 7/30 of November's goal; month-to-date
-// = the days so far). Otherwise it falls back to the old standing goal
-// (`goals[code][field]`), unchanged. Returns { value, monthly }.
-function goalForRange(goals, code, field, start, end) {
+// = the days so far). With { rate: true } (a % goal) it's instead the
+// day-weighted average of those months' goals, unscaled. If any month in
+// the range has no Monthly Goal, there's no goal (null), never the old
+// standing goal. Returns { value, monthly }.
+function goalForRange(goals, code, field, start, end, { rate = false } = {}) {
   const g = goals?.[code];
-  if (!g) return { value: null, monthly: false };
-  if (start && end && start <= end) {
-    let total = 0;
-    let complete = true;
-    for (let mk = start.slice(0, 7); mk <= end.slice(0, 7); mk = shiftMonthKey(mk, 1)) {
-      const v = g[monthlyGoalKey(field, mk)];
-      if (v == null) { complete = false; break; }
-      const [y, m] = mk.split('-').map(Number);
-      const dim = new Date(y, m, 0).getDate();
-      const monthEnd = `${mk}-${String(dim).padStart(2, '0')}`;
-      const s = start > `${mk}-01` ? start : `${mk}-01`;
-      const e = end < monthEnd ? end : monthEnd;
-      total += Number(v) * ((isoDayDiff(s, e) + 1) / dim);
-    }
-    if (complete) return { value: total, monthly: true };
+  if (!g || !start || !end || start > end) return { value: null, monthly: false };
+  let total = 0;
+  let days = 0;
+  for (let mk = start.slice(0, 7); mk <= end.slice(0, 7); mk = shiftMonthKey(mk, 1)) {
+    const v = g[monthlyGoalKey(field, mk)];
+    if (v == null || v === '') return { value: null, monthly: false };
+    const [y, m] = mk.split('-').map(Number);
+    const dim = new Date(y, m, 0).getDate();
+    const monthEnd = `${mk}-${String(dim).padStart(2, '0')}`;
+    const s = start > `${mk}-01` ? start : `${mk}-01`;
+    const e = end < monthEnd ? end : monthEnd;
+    const n = isoDayDiff(s, e) + 1;
+    total += rate ? Number(v) * n : Number(v) * (n / dim);
+    days += n;
   }
-  return { value: g[field] ?? null, monthly: false };
+  return { value: rate ? total / days : total, monthly: true };
 }
 // One-line note for a tab: which goals it's comparing against.
 function goalSourceNote(start, end, usesMonthly) {
-  if (!usesMonthly || !start || !end) return null;
+  if (!start || !end) return null;
   const days = isoDayDiff(start, end) + 1;
   const months = [];
   for (let mk = start.slice(0, 7); mk <= end.slice(0, 7); mk = shiftMonthKey(mk, 1)) months.push(fmtMonthLong(mk));
-  return `Goals are the ${months.join(' / ')} Monthly Goals (Goals tab), scaled to the ${days} day${days === 1 ? '' : 's'} shown. Stores without a Monthly Goal use their standing goal.`;
+  if (!usesMonthly) return `No Monthly Goals are set for ${months.join(' / ')} yet (Goals tab), so goal columns show —.`;
+  return `Goals are the ${months.join(' / ')} Monthly Goals (Goals tab), scaled to the ${days} day${days === 1 ? '' : 's'} shown. A store with no goal for every month shown has no goal here.`;
 }
 const MONTHLY_REF_METRICS = [
   { key: 'cuts', label: 'Cuts', fmt: fmtInt },
@@ -5056,6 +5067,7 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
   const prevRef = useMemo(() => monthlyReference(history, weeklyHistory, prevMonth), [history, weeklyHistory, prevMonth]);
   const prevIsPartial = prevMonth === thisMonth;
   const groups = groupStoresByLeader(stores);
+  const fields = monthlyGoalFieldsFor(isOwner);
 
   const getVal = (code, field) => {
     const k = monthlyGoalKey(field, month);
@@ -5109,13 +5121,13 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
       <td key={f.key} className={cls}>
         {editable ? (
           <input
-            type="number" className="goal-input" placeholder={f.money ? '$0' : '0'}
+            type="number" className="goal-input" placeholder={f.money ? '$0' : f.pct ? '0%' : '0'}
             value={value}
             onChange={e => { const k = monthlyGoalKey(f.key, month); const v = e.target.value; setDrafts(prev => ({ ...prev, [code]: { ...prev[code], [k]: v } })); }}
             onBlur={() => handleBlur(code, f.key)}
           />
         ) : (
-          <span className="mg-readonly">{value === '' ? '—' : (f.money ? fmt$(value) : fmtInt(value))}</span>
+          <span className="mg-readonly">{fmtGoalValue(f, value)}</span>
         )}
         {breakdown && <span className="mg-breakdown">{fmt$(breakdown.daily)}/day · {fmt$(breakdown.weekly)}/wk</span>}
       </td>
@@ -5145,7 +5157,7 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
         <div className="mg-bump-row mg-finalize-row">
           <button type="button" className="mg-finalize-btn" disabled={finalizing}
             onClick={async () => {
-              if (!window.confirm(`Finalize ${fmtMonthLong(month)} Sales goals and email each DL?\n\nEach DL gets their stores' Sales goals (per day and per week), ${fmtMonthLong(lyMonth)} and ${fmtMonthLong(prevMonth)} for comparison, and a reminder of which Retail, Color, Bottles and Signature Service goals they still need to set.`)) return;
+              if (!window.confirm(`Finalize ${fmtMonthLong(month)} Sales goals and email each DL?\n\nEach DL gets their stores' Sales goals (per day and per week), ${fmtMonthLong(lyMonth)} and ${fmtMonthLong(prevMonth)} for comparison, and a reminder of which other goals they still need to set.`)) return;
               setFinalizing(true);
               await onFinalize(month, false);
               setFinalizing(false);
@@ -5159,7 +5171,7 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
         </div>
       )}
       <p className="section-hint">
-        Goals for {fmtMonthLong(month)}, next to the same month last year ({fmtMonthLong(lyMonth)}) and last month ({fmtMonthLong(prevMonth)}{prevIsPartial ? ', so far' : ''}). {isOwner ? 'Sales goals are set by leadership: the buttons above round to the nearest $500, or type any store by hand.' : 'Sales goals are set by leadership.'} Milestone stays the same every month until leadership changes it (same as Setup › Milestone Goals). Each Sales goal shows what it works out to per day and per week ({fmtMonthLong(month)} has {new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()} days). Daily Avg is sales ÷ days the store was open; Weekly Avg is sales ÷ weeks in the month. Goals save when you click out of the box.
+        Goals for {fmtMonthLong(month)}, next to the same month last year ({fmtMonthLong(lyMonth)}) and last month ({fmtMonthLong(prevMonth)}{prevIsPartial ? ', so far' : ''}). {isOwner ? 'Sales goals are set by leadership: the buttons above round to the nearest $500, or type any store by hand.' : 'Sales goals are set by leadership.'} Milestone stays the same every month until leadership changes it (same as Setup › Milestone Goals). Each Sales goal shows what it works out to per day and per week ({fmtMonthLong(month)} has {new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()} days). Daily Avg is sales ÷ days the store was open; Weekly Avg is sales ÷ weeks in the month. The % goals are whole percents (type 15 for 15%). Goals save when you click out of the box.
       </p>
       <div className="ledger-scroll">
         <table className="ledger-table monthly-goals-table">
@@ -5168,25 +5180,25 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
               <th rowSpan={2} className="ledger-name-col">Store</th>
               <th colSpan={MONTHLY_REF_METRICS.length} className="mg-group">{fmtMonthLong(lyMonth)}</th>
               <th colSpan={MONTHLY_REF_METRICS.length} className="mg-group">{fmtMonthLong(prevMonth)}{prevIsPartial ? ' (so far)' : ''}</th>
-              <th colSpan={MONTHLY_GOAL_FIELDS.length} className="mg-group mg-goal-group">{fmtMonthLong(month)} Goals</th>
+              <th colSpan={fields.length} className="mg-group mg-goal-group">{fmtMonthLong(month)} Goals</th>
               <th rowSpan={2} className="mg-group mg-milestone-group">Milestone<span className="mg-milestone-sub">every month</span></th>
             </tr>
             <tr>
               {MONTHLY_REF_METRICS.map((m, i) => <th key={`ly-${m.key}`} className={i === 0 ? 'mg-first' : ''}>{m.label}</th>)}
               {MONTHLY_REF_METRICS.map((m, i) => <th key={`pm-${m.key}`} className={i === 0 ? 'mg-first' : ''}>{m.label}</th>)}
-              {MONTHLY_GOAL_FIELDS.map((f, i) => <th key={f.key} className={`mg-goal-col ${i === 0 ? 'mg-first' : ''}`}>{f.label}</th>)}
+              {fields.map((f, i) => <th key={f.key} className={`mg-goal-col ${i === 0 ? 'mg-first' : ''}`}>{f.label}</th>)}
             </tr>
           </thead>
           <tbody>
             {groups.map(g => (
               <React.Fragment key={g.leaderName}>
-                <tr className="mg-dl-row"><td className="ledger-name-col">{g.leaderName}</td><td colSpan={MONTHLY_REF_METRICS.length * 2 + MONTHLY_GOAL_FIELDS.length + 1}></td></tr>
+                <tr className="mg-dl-row"><td className="ledger-name-col">{g.leaderName}</td><td colSpan={MONTHLY_REF_METRICS.length * 2 + fields.length + 1}></td></tr>
                 {g.stores.map(s => (
                   <tr key={s.code}>
                     <td className="ledger-name-col">{s.name}</td>
                     {refCells(lyRef, s.code)}
                     {refCells(prevRef, s.code)}
-                    {MONTHLY_GOAL_FIELDS.map((f, i) => goalCell(s.code, f, i))}
+                    {fields.map((f, i) => goalCell(s.code, f, i))}
                     {milestoneCell(s.code)}
                   </tr>
                 ))}
@@ -5199,23 +5211,8 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
   );
 }
 
-function GoalsTab({ report, goals, onSaveGoal, onApplySalesGoals, milestoneGoals, onSaveMilestoneGoal, onFinalize, onImportGoals, onImportColorAttachGoals, fallbackEmployeesByStore, isOwner, history, weeklyHistory }) {
+function GoalsTab({ report, goals, onSaveGoal, onApplySalesGoals, milestoneGoals, onSaveMilestoneGoal, onFinalize, fallbackEmployeesByStore, isOwner, history, weeklyHistory }) {
   const [query, setQuery] = useState('');
-  const [drafts, setDrafts] = useState({}); // { code: { salesGoal, colorGoal, bottleGoal, signatureSGoal } } — in-progress edits
-  const [importing, setImporting] = useState(null); // 'colorGoal' | 'bottleGoal' | null
-  const [importingColorAttach, setImportingColorAttach] = useState(false);
-
-  const handleImportColorAttachFile = async file => {
-    setImportingColorAttach(true);
-    await onImportColorAttachGoals(file);
-    setImportingColorAttach(false);
-  };
-
-  const handleImportFile = async (field, file) => {
-    setImporting(field);
-    await onImportGoals(field, file);
-    setImporting(null);
-  };
 
   // A live weekly Stylist Report isn't always on file (see the rest of the
   // app's month-to-date fallback) — goals are forward-looking and shouldn't
@@ -5233,147 +5230,12 @@ function GoalsTab({ report, goals, onSaveGoal, onApplySalesGoals, milestoneGoals
     .filter(s => !query.trim() || s.name.toLowerCase().includes(query.trim().toLowerCase()))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const getVal = (code, field) => {
-    if (drafts[code]?.[field] !== undefined) return drafts[code][field];
-    return goals?.[code]?.[field] ?? '';
-  };
-
-  const handleChange = (code, field, value) => {
-    setDrafts(prev => ({ ...prev, [code]: { ...prev[code], [field]: value } }));
-  };
-
-  const handleBlur = (code, field) => {
-    const raw = drafts[code]?.[field];
-    if (raw === undefined) return;
-    const num = raw === '' ? null : Number(raw);
-    onSaveGoal(code, field, isNaN(num) ? null : num);
-  };
-
-  const goalField = (code, field, placeholder = '$0') => (
-    <input
-      type="number" className="goal-input" placeholder={placeholder}
-      value={getVal(code, field)}
-      onChange={e => handleChange(code, field, e.target.value)}
-      onBlur={() => handleBlur(code, field)}
-    />
-  );
-
-  const handleDownloadTemplate = () => {
-    const rows = groupStoresByLeader(allStores).flatMap(g => g.stores.map(s => ({ leaderName: g.leaderName, storeName: s.name })));
-    downloadGoalTemplate(rows);
-  };
-
+  // Monthly Goals are the only goals on the site; the old standing-goal
+  // table and its file imports were removed 2026-11-02.
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
       <MonthlyGoalsSection stores={stores} allStores={allStores} goals={goals} onSaveGoal={onSaveGoal} onApplySalesGoals={onApplySalesGoals} milestoneGoals={milestoneGoals} onSaveMilestoneGoal={onSaveMilestoneGoal} onFinalize={onFinalize} history={history} weeklyHistory={weeklyHistory} isOwner={isOwner} />
-      <p className="lease-card-title standing-goals-title">Standing Goals</p>
-      <p className="section-hint">Set a weekly Sales, Color, Bottle, and Signature Service goal per store. Sales tracks total revenue (services + retail combined); Color goal tracks $ sold in color services specifically. Bottle and Signature Service goals track a unit count instead — bottles of retail product sold, and number of Signature Services performed. Color, Bottle, and Signature Service show up as "Goal"/"vs Goal" columns on their tabs; Sales goals show up on the Overview tab. Bottle-to-Color % and Bottle-to-SS % are target ratios of bottles sold per color service / per Signature Service performed — enter a whole percent (e.g. "15" for 15%).{isOwner && ' Gift Card Goal is $ of gift cards sold per store per month — only you (the owner) can see or set it, and it shows on the Gift Cards tab.'}</p>
-
-      <p className="section-hint">Download a blank sheet listing your stores (grouped by DL), fill in the Goal column, then import it below with whichever button matches what you filled in.</p>
-      <div className="goal-import-row">
-        <button type="button" className="goal-import-btn" onClick={handleDownloadTemplate}>
-          ⬇ Download blank goal sheet (DL | Store | Goal)
-        </button>
-      </div>
-
-      <div className="goal-import-row">
-        <label className="goal-import-btn">
-          <input
-            type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
-            onChange={e => { if (e.target.files[0]) handleImportFile('salesGoal', e.target.files[0]); e.target.value = ''; }}
-          />
-          {importing === 'salesGoal' ? <span className="spinner small" /> : '📥'} Import Sales Goals from file
-        </label>
-        <label className="goal-import-btn">
-          <input
-            type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
-            onChange={e => { if (e.target.files[0]) handleImportFile('colorGoal', e.target.files[0]); e.target.value = ''; }}
-          />
-          {importing === 'colorGoal' ? <span className="spinner small" /> : '📥'} Import Color Goals from file
-        </label>
-        <label className="goal-import-btn">
-          <input
-            type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
-            onChange={e => { if (e.target.files[0]) handleImportFile('bottleGoal', e.target.files[0]); e.target.value = ''; }}
-          />
-          {importing === 'bottleGoal' ? <span className="spinner small" /> : '📥'} Import Bottle Goals from file
-        </label>
-        <label className="goal-import-btn">
-          <input
-            type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
-            onChange={e => { if (e.target.files[0]) handleImportFile('signatureSGoal', e.target.files[0]); e.target.value = ''; }}
-          />
-          {importing === 'signatureSGoal' ? <span className="spinner small" /> : '📥'} Import Signature Service Goals from file
-        </label>
-        <label className="goal-import-btn">
-          <input
-            type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
-            onChange={e => { if (e.target.files[0]) handleImportFile('bottleToColorGoal', e.target.files[0]); e.target.value = ''; }}
-          />
-          {importing === 'bottleToColorGoal' ? <span className="spinner small" /> : '📥'} Import Bottle-to-Color % Goals from file
-        </label>
-        <label className="goal-import-btn">
-          <input
-            type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
-            onChange={e => { if (e.target.files[0]) handleImportFile('bottleToSSGoal', e.target.files[0]); e.target.value = ''; }}
-          />
-          {importing === 'bottleToSSGoal' ? <span className="spinner small" /> : '📥'} Import Bottle-to-SS % Goals from file
-        </label>
-        {isOwner && (
-          <label className="goal-import-btn">
-            <input
-              type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
-              onChange={e => { if (e.target.files[0]) handleImportFile('giftCardGoal', e.target.files[0]); e.target.value = ''; }}
-            />
-            {importing === 'giftCardGoal' ? <span className="spinner small" /> : '📥'} Import Gift Card Goals from file
-          </label>
-        )}
-      </div>
-
-      {onImportColorAttachGoals && (
-        <div className="goal-import-row">
-          <label className="goal-import-btn">
-            <input
-              type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
-              onChange={e => { if (e.target.files[0]) handleImportColorAttachFile(e.target.files[0]); e.target.value = ''; }}
-            />
-            {importingColorAttach ? <span className="spinner small" /> : '📥'} Import Color Goals + Retail Attach % (DL Color Goals file)
-          </label>
-        </div>
-      )}
-      <p className="section-hint">The DL Color Goals file sets Color Goal, Retail Attach % (color tickets that also have a retail item — actual and goal), and a same-month-last-year Color $ reference all at once, matched by the Salon column. The Color Sales tab shows a real computed Retail Attach % whenever the period you're viewing has Sales-Accrual data with an Invoice No column to link tickets by — this file's attach % is only used as a fallback for periods that don't (older Sales-Accrual imports, or the live current-period report). The Retail Attach % Goal always comes from this file either way — there's nothing to compute a goal from.</p>
-
-      <div className="ledger-scroll">
-        <table className="ledger-table">
-          <thead>
-            <tr>
-              <th className="ledger-name-col">Store</th>
-              <th>Sales Goal</th>
-              <th>Color Goal</th>
-              <th>Bottle Goal</th>
-              <th>Signature Service Goal</th>
-              <th>Bottle-to-Color % Goal</th>
-              <th>Bottle-to-SS % Goal</th>
-              {isOwner && <th>Gift Card Goal</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {stores.map(s => (
-              <tr key={s.code}>
-                <td className="ledger-name-col">{s.name}</td>
-                <td>{goalField(s.code, 'salesGoal')}</td>
-                <td>{goalField(s.code, 'colorGoal')}</td>
-                <td>{goalField(s.code, 'bottleGoal', '0')}</td>
-                <td>{goalField(s.code, 'signatureSGoal', '0')}</td>
-                <td>{goalField(s.code, 'bottleToColorGoal', '0%')}</td>
-                <td>{goalField(s.code, 'bottleToSSGoal', '0%')}</td>
-                {isOwner && <td>{goalField(s.code, 'giftCardGoal')}</td>}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
       {!stores.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
     </div>
   );
@@ -7346,12 +7208,10 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     lines.push(`CURRENT REPORT PERIOD: ${report.dateRangeLabel || 'unknown'}`);
     lines.push(`Company totals — Sales: $${Math.round(t.sales)}, Avg Ticket: $${t.avgTicket != null ? t.avgTicket.toFixed(2) : 'n/a'}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}, Other Services: $${Math.round(t.otherServices || 0)}, OPC: ${t.opc != null ? t.opc.toFixed(2) : 'n/a'}, Cuts: ${Math.round(t.haircuts || 0)}, CPH: ${t.cph != null ? t.cph.toFixed(2) : 'n/a'}`);
     lines.push('');
-    lines.push('Per-store totals for the CURRENT period (Store: Sales, Avg Ticket, TSTH, Hours, Color, Retail, CPC, RPC, Other Services, OPC, Cuts, CPH, goals if set):');
+    lines.push('Per-store totals for the CURRENT period (Store: Sales, Avg Ticket, TSTH, Hours, Color, Retail, CPC, RPC, Other Services, OPC, Cuts, CPH; goals are in MONTHLY GOALS below):');
     report.stores.forEach(s => {
       const st = s.totals;
-      const goal = goals?.[s.code];
-      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Bottle Goal: ${goal.bottleGoal ?? 'none'} bottles, Signature Service Goal: ${goal.signatureSGoal ?? 'none'} services, Bottle-to-Color % Goal: ${goal.bottleToColorGoal ?? 'none'}, Bottle-to-SS % Goal: ${goal.bottleToSSGoal ?? 'none'}` : '';
-      lines.push(`${s.name}: Sales $${Math.round(st.sales)}, Avg Ticket $${st.avgTicket != null ? st.avgTicket.toFixed(2) : 'n/a'}, TSTH $${st.tsth != null ? st.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(st.totalHours)}, Color $${Math.round(st.colorSales)}, Retail $${Math.round(st.retail)}, CPC ${st.cpc != null ? st.cpc.toFixed(2) : 'n/a'}, RPC ${st.rpc != null ? st.rpc.toFixed(2) : 'n/a'}, Other Services $${Math.round(st.otherServices || 0)}, OPC ${st.opc != null ? st.opc.toFixed(2) : 'n/a'}, Cuts ${Math.round(st.haircuts || 0)}, CPH ${st.cph != null ? st.cph.toFixed(2) : 'n/a'}${goalStr}`);
+      lines.push(`${s.name}: Sales $${Math.round(st.sales)}, Avg Ticket $${st.avgTicket != null ? st.avgTicket.toFixed(2) : 'n/a'}, TSTH $${st.tsth != null ? st.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(st.totalHours)}, Color $${Math.round(st.colorSales)}, Retail $${Math.round(st.retail)}, CPC ${st.cpc != null ? st.cpc.toFixed(2) : 'n/a'}, RPC ${st.rpc != null ? st.rpc.toFixed(2) : 'n/a'}, Other Services $${Math.round(st.otherServices || 0)}, OPC ${st.opc != null ? st.opc.toFixed(2) : 'n/a'}, Cuts ${Math.round(st.haircuts || 0)}, CPH ${st.cph != null ? st.cph.toFixed(2) : 'n/a'}`);
     });
     currentStoreRows = report.stores.map(s => ({ name: s.name, code: s.code, ...s.totals }));
     currentAllEmployees = report.allEmployees || [];
@@ -7366,13 +7226,11 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     lines.push(`CURRENT REPORT PERIOD: ${fmtDateLong(start)} – ${fmtDateLong(end)} (month-to-date — no current Stylist Report on file, sourced from Sales-Accrual/Attendance instead)`);
     lines.push(`Company totals — Sales: $${Math.round(t.sales)}, Avg Ticket: $${t.avgTicket != null ? t.avgTicket.toFixed(2) : 'n/a'}, TSTH: $${t.tsth != null ? t.tsth.toFixed(2) : 'n/a'}, Total Hours: ${Math.round(t.totalHours)}, Color Sales: $${Math.round(t.colorSales)}, Retail: $${Math.round(t.retail)}, CPC: ${t.cpc != null ? t.cpc.toFixed(2) : 'n/a'}, RPC: ${t.rpc != null ? t.rpc.toFixed(2) : 'n/a'}, Other Services: $${Math.round(t.otherServices || 0)}, OPC: ${t.opc != null ? t.opc.toFixed(2) : 'n/a'}, Cuts: ${Math.round(t.haircuts || 0)}, CPH: ${t.cph != null ? t.cph.toFixed(2) : 'n/a'}, SS: ${Math.round(t.signatureSCount || 0)}|$${Math.round(t.signatureS || 0)}, Retail Attach % (Color): ${t.retailAttachPct != null ? `${(t.retailAttachPct * 100).toFixed(0)}% (${t.colorTicketsWithRetail}/${t.colorTicketCount} color tickets)` : 'n/a (no Invoice No-linked Sales-Accrual data for this range)'}, Retail Attach % (Signature Service): ${t.signatureAttachPct != null ? `${(t.signatureAttachPct * 100).toFixed(0)}% (${t.signatureTicketsWithRetail}/${t.signatureTicketCount} SS tickets)` : 'n/a (no Invoice No-linked Sales-Accrual data for this range)'}`);
     lines.push('');
-    lines.push('Per-store totals for the CURRENT period (Store: Sales, Avg Ticket, TSTH, Hours, Color, Retail, CPC, RPC, Other Services, OPC, Cuts, CPH, Retail Attach % for Color and Signature Service (real, computed from Sales-Accrual ticket linkage — n/a if this range has no Invoice No data), goals if set):');
+    lines.push('Per-store totals for the CURRENT period (Store: Sales, Avg Ticket, TSTH, Hours, Color, Retail, CPC, RPC, Other Services, OPC, Cuts, CPH, Retail Attach % for Color and Signature Service (real, computed from Sales-Accrual ticket linkage — n/a if this range has no Invoice No data); goals are in MONTHLY GOALS below):');
     currentStoreRows.forEach(s => {
-      const goal = goals?.[s.code];
-      const goalStr = goal ? ` | Sales Goal: ${goal.salesGoal ?? 'none'}, Color Goal: ${goal.colorGoal ?? 'none'}, Bottle Goal: ${goal.bottleGoal ?? 'none'} bottles, Signature Service Goal: ${goal.signatureSGoal ?? 'none'} services, Bottle-to-Color % Goal: ${goal.bottleToColorGoal ?? 'none'}, Bottle-to-SS % Goal: ${goal.bottleToSSGoal ?? 'none'}` : '';
       const attachStr = s.retailAttachPct != null ? `${(s.retailAttachPct * 100).toFixed(0)}% (${s.colorTicketsWithRetail}/${s.colorTicketCount})` : 'n/a';
       const sigAttachStr = s.signatureAttachPct != null ? `${(s.signatureAttachPct * 100).toFixed(0)}% (${s.signatureTicketsWithRetail}/${s.signatureTicketCount})` : 'n/a';
-      lines.push(`${s.name}: Sales $${Math.round(s.sales)}, Avg Ticket $${s.avgTicket != null ? s.avgTicket.toFixed(2) : 'n/a'}, TSTH $${s.tsth != null ? s.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(s.totalHours)}, Color $${Math.round(s.colorSales)}, Retail $${Math.round(s.retail)}, CPC ${s.cpc != null ? s.cpc.toFixed(2) : 'n/a'}, RPC ${s.rpc != null ? s.rpc.toFixed(2) : 'n/a'}, Other Services $${Math.round(s.otherServices || 0)}, OPC ${s.opc != null ? s.opc.toFixed(2) : 'n/a'}, Cuts ${Math.round(s.haircuts || 0)}, CPH ${s.cph != null ? s.cph.toFixed(2) : 'n/a'}, Retail Attach % (Color) ${attachStr}, Retail Attach % (Signature Service) ${sigAttachStr}${goalStr}`);
+      lines.push(`${s.name}: Sales $${Math.round(s.sales)}, Avg Ticket $${s.avgTicket != null ? s.avgTicket.toFixed(2) : 'n/a'}, TSTH $${s.tsth != null ? s.tsth.toFixed(2) : 'n/a'}, Hours ${Math.round(s.totalHours)}, Color $${Math.round(s.colorSales)}, Retail $${Math.round(s.retail)}, CPC ${s.cpc != null ? s.cpc.toFixed(2) : 'n/a'}, RPC ${s.rpc != null ? s.rpc.toFixed(2) : 'n/a'}, Other Services $${Math.round(s.otherServices || 0)}, OPC ${s.opc != null ? s.opc.toFixed(2) : 'n/a'}, Cuts ${Math.round(s.haircuts || 0)}, CPH ${s.cph != null ? s.cph.toFixed(2) : 'n/a'}, Retail Attach % (Color) ${attachStr}, Retail Attach % (Signature Service) ${sigAttachStr}`);
     });
   }
   if (currentAllEmployees.length) {
@@ -7385,9 +7243,10 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     });
   }
 
-  // Monthly Retail $/Color $ goals (Goals tab, top section), stored as
-  // `retailGoal:YYYY-MM` / `colorGoal:YYYY-MM` fields on store_goals. Listed
-  // for this month and next, alongside the reference figures DLs saw.
+  // Monthly Goals (Goals tab), stored as `<field>:YYYY-MM` on store_goals.
+  // These are the only goals on the site. Listed for this month and next,
+  // alongside the reference figures DLs saw. A DL's goals never include
+  // giftCardGoal (the server strips it).
   if (goals && Object.keys(goals).length) {
     const thisMonth = getCurrentMonthRange().start.slice(0, 7);
     [thisMonth, shiftMonthKey(thisMonth, 1)].forEach(mk => {
@@ -7396,33 +7255,18 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       const ly = monthlyReference(history, weeklyHistory, shiftMonthKey(mk, -12));
       const pm = monthlyReference(history, weeklyHistory, shiftMonthKey(mk, -1));
       const refStr = r => (r ? `Cuts ${r.cuts}, CPD ${r.cpd != null ? r.cpd.toFixed(1) : 'n/a'}, Sales $${Math.round(r.sales)}, Daily Avg ${r.daily != null ? `$${Math.round(r.daily)}` : 'n/a'}, Weekly Avg ${r.weekly != null ? `$${Math.round(r.weekly)}` : 'n/a'}` : 'no data');
-      lines.push(`MONTHLY GOALS for ${fmtMonthLong(mk)} (for this month only, set on the Goals tab: Sales $ by leadership, broken into per-day and per-week over the calendar days of the month; Retail $, Color $, Bottles (unit count) and Signature Service (count of services) by DLs; reference = same month last year (${fmtMonthLong(shiftMonthKey(mk, -12))}) and the month before (${fmtMonthLong(shiftMonthKey(mk, -1))})):`);
+      lines.push(`MONTHLY GOALS for ${fmtMonthLong(mk)} (for this month only, set on the Goals tab: Sales $ by leadership, broken into per-day and per-week over the calendar days of the month; Retail $, Color $, Bottles (unit count), Signature Service (count of services, NOT dollars), Retail Attach % (share of color tickets that also have a retail item), Bottle-to-Color % and Bottle-to-SS % (bottles per color service / per Signature Service; goal-only, no actual is computed) by DLs; Gift Cards $ by the owner only. The app's tabs compare actuals against these goals scaled to the dates being viewed (% goals are not scaled). A store with no goal for a month has no goal at all; there are no standing goals any more; reference = same month last year (${fmtMonthLong(shiftMonthKey(mk, -12))}) and the month before (${fmtMonthLong(shiftMonthKey(mk, -1))})):`);
       rows.forEach(([code, g]) => {
         const v = f => g[monthlyGoalKey(f, mk)];
-        const money = n => (n != null ? `$${Math.round(n)}` : 'none');
+        const money = n => `$${Math.round(n)}`;
         const sb = salesGoalBreakdown(v('salesGoal'), mk);
-        lines.push(`${STORE_CODE_TO_NAME[code] || `Store ${code}`}: Sales Goal ${money(v('salesGoal'))}${sb ? ` ($${Math.round(sb.daily)}/day, $${Math.round(sb.weekly)}/week)` : ''}, Retail Goal ${money(v('retailGoal'))}, Color Goal ${money(v('colorGoal'))}, Bottle Goal ${v('bottleGoal') ?? 'none'} bottles, Signature Service Goal ${v('signatureSGoal') ?? 'none'} services | ${fmtMonthLong(shiftMonthKey(mk, -12))}: ${refStr(ly[code])} | ${fmtMonthLong(shiftMonthKey(mk, -1))}: ${refStr(pm[code])}`);
+        const goalStr = MONTHLY_GOAL_FIELDS.filter(f => f.key !== 'salesGoal' && (!f.ownerVisible || v(f.key) != null)).map(f => {
+          const val = v(f.key);
+          return `${f.label} Goal ${val == null ? 'none' : f.money ? money(val) : f.pct ? `${val}%` : val}`;
+        }).join(', ');
+        lines.push(`${STORE_CODE_TO_NAME[code] || `Store ${code}`}: Sales Goal ${money(v('salesGoal'))}${sb ? ` ($${Math.round(sb.daily)}/day, $${Math.round(sb.weekly)}/week)` : ''}, ${goalStr} | ${fmtMonthLong(shiftMonthKey(mk, -12))}: ${refStr(ly[code])} | ${fmtMonthLong(shiftMonthKey(mk, -1))}: ${refStr(pm[code])}`);
       });
       lines.push('');
-    });
-  }
-
-  // Store goals — independent of any report/period, since a goal is a
-  // standing target, not tied to a specific historical month.
-  if (goals && Object.keys(goals).length) {
-    lines.push('');
-    lines.push('STORE GOALS (Sales/Color/Bottle/Signature Service targets — standing targets, not specific to any period, entered by DLs on the Goals tab; Sales/Color Goal are $ figures, Bottle Goal is a unit count of retail product sold, Signature Service Goal is a unit count of services performed — NOT a dollar figure, despite Signature Service dollar totals appearing elsewhere in this context. Bottle-to-Color %/Bottle-to-SS % Goals are DL-entered target ratios of bottles sold per color service / per Signature Service performed — the app does not currently compute an actual figure to compare these against, they are goal-only. Retail Attach % = color tickets that also have a retail item attached. The figure below is the fallback value imported from the user\'s own DL Color Goals file — the Color Sales tab itself may show a different, more accurate REAL figure computed straight from Sales-Accrual ticket data (Invoice No) for whatever period is being viewed there, whenever that data is available; the goal always comes from this import either way, since there\'s nothing to compute a goal from. Color (Last Year) is the same calendar month\'s Color $ from the prior year, imported for comparison — it is NOT the current period\'s color figure, which is in CURRENT REPORT PERIOD above.):');
-    Object.entries(goals).forEach(([code, g]) => {
-      if (g.salesGoal == null && g.colorGoal == null && g.bottleGoal == null && g.signatureSGoal == null && g.bottleToColorGoal == null && g.bottleToSSGoal == null && g.retailAttach == null && g.retailAttachGoal == null && g.colorLastYear == null) return;
-      const name = STORE_CODE_TO_NAME[code] || `Store ${code}`;
-      const attachStr = (g.retailAttach != null || g.retailAttachGoal != null)
-        ? `, Retail Attach % ${g.retailAttach != null ? `${(g.retailAttach * 100).toFixed(0)}%` : 'none'} (Goal ${g.retailAttachGoal != null ? `${(g.retailAttachGoal * 100).toFixed(0)}%` : 'none'})`
-        : '';
-      const lastYearStr = g.colorLastYear != null ? `, Color (Last Year) $${Math.round(g.colorLastYear)}` : '';
-      const ratioGoalStr = (g.bottleToColorGoal != null || g.bottleToSSGoal != null)
-        ? `, Bottle-to-Color % Goal ${g.bottleToColorGoal ?? 'none'}, Bottle-to-SS % Goal ${g.bottleToSSGoal ?? 'none'}`
-        : '';
-      lines.push(`${name}: Sales Goal ${g.salesGoal ?? 'none'}, Color Goal ${g.colorGoal ?? 'none'}, Bottle Goal ${g.bottleGoal ?? 'none'} bottles, Signature Service Goal ${g.signatureSGoal ?? 'none'} services${ratioGoalStr}${attachStr}${lastYearStr}`);
     });
   }
 
@@ -7672,7 +7516,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   const giftRecords = Object.values(giftCardHistory || {});
   if (giftRecords.length) {
     lines.push('');
-    lines.push('GIFT CARD SALES (owner-only data — from the separate Gift Cards report; sales only, not redemptions; "Gift Card Goal" is a monthly $ target per store):');
+    lines.push('GIFT CARD SALES (owner-only data — from the separate Gift Cards report; sales only, not redemptions; "goal" is that month\'s Gift Cards $ Monthly Goal from the Goals tab):');
     const months = [...new Set(giftRecords.map(r => r.date.slice(0, 7)))].sort();
     months.forEach(month => {
       const [y, m] = month.split('-').map(Number);
@@ -7681,13 +7525,11 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       const all = Object.values(totals);
       lines.push(`${month}: company ${fmt$(all.reduce((s, t) => s + t.giftCards, 0))}, ${all.reduce((s, t) => s + t.giftCardCount, 0)} sold`);
       Object.entries(totals).sort((a, b) => b[1].giftCards - a[1].giftCards).forEach(([code, t]) => {
-        const goal = goals?.[code]?.giftCardGoal;
+        const goal = goals?.[code]?.[monthlyGoalKey('giftCardGoal', month)];
         const sellers = Object.values(t.sellers).sort((a, b) => b.giftCards - a.giftCards).map(e => `${e.name} ${fmt$(e.giftCards)} (${e.giftCardCount})`).join(', ');
         lines.push(`  ${STORE_CODE_TO_NAME[code] || `Store ${code}`}: ${fmt$(t.giftCards)}, ${t.giftCardCount} sold${goal != null ? `, goal ${fmt$(goal)}` : ''}${sellers ? ` — sold by ${sellers}` : ''}`);
       });
     });
-    const withGoals = Object.entries(goals || {}).filter(([, g]) => g?.giftCardGoal != null);
-    if (withGoals.length) lines.push(`Gift Card Goals set: ${withGoals.map(([code, g]) => `${STORE_CODE_TO_NAME[code] || code} ${fmt$(g.giftCardGoal)}`).join(', ')}`);
   }
 
   // Loss Prevention (owner only — App passes lpData only on the owner's
@@ -10107,98 +9949,8 @@ export default function App() {
     });
   }, [currentUser]);
 
-  // Queued through importChainRef (same serialization the Sales-Accrual/
-  // Attendance/Reviews batches use) so importing more than one goal type
-  // back to back can't race locally — each import always starts from
-  // goalsRef's latest value instead of a snapshot that predates a
-  // still-in-flight sibling import. Saves through saveScoped with only the
-  // touched store codes (not the whole goals object) — see handleSaveGoal's
-  // comment above for why a full-object overwrite from local state is
-  // unsafe for a non-owner.
-  const handleImportGoals = useCallback((field, file) => {
-    const task = async () => {
-      try {
-        const parsed = await parseGoalFile(file);
-        const next = { ...goalsRef.current };
-        const patch = {};
-        let matched = 0;
-        const unmatched = [];
-        parsed.entries.forEach(e => {
-          const code = getCodeForStoreName(e.storeName);
-          if (code) { next[code] = { ...next[code], [field]: e.amount }; patch[code] = { [field]: e.amount }; matched++; }
-          else unmatched.push(e.storeName);
-        });
-        goalsRef.current = next;
-        setGoals(next);
-        const result = matched ? await saveScoped(currentUser.token, 'store_goals', patch) : { ok: true };
-        if (result.ok && result.data) { goalsRef.current = result.data; setGoals(result.data); }
-        const label = GOAL_FIELD_LABELS[field] || field;
-        if (!result.ok) {
-          showToast(`Imported ${matched} ${label} goals, but couldn't sync to Supabase (${result.error})`, 'error');
-        } else if (unmatched.length) {
-          showToast(`Imported ${matched} ${label} goals from ${file.name} — ${unmatched.length} store name${unmatched.length > 1 ? 's' : ''} not recognized: ${unmatched.slice(0, 3).join(', ')}${unmatched.length > 3 ? '…' : ''}`, 'error');
-        } else {
-          showToast(`Imported ${matched} ${label} goals from ${file.name} (${parsed.periodLabel.trim()})`);
-        }
-      } catch (err) {
-        showToast(err.message, 'error');
-      }
-    };
-    const queued = importChainRef.current.then(task, task);
-    importChainRef.current = queued.then(() => {}, () => {});
-    return queued;
-  }, [currentUser]);
-
-  // The DL Color Goals file bundles 4 fields per store in one sheet (new
-  // Color $ goal, current Retail/Color attach %, new attach % goal, and a
-  // same-month-last-year Color $ reference) — same queued/saveScoped pattern
-  // as handleImportGoals above, just patching several fields per store in
-  // one pass instead of one. A field only overwrites what the file actually
-  // had a value for (null entries are skipped, not written as null), so a
-  // future re-import that's missing e.g. the last-year column doesn't wipe
-  // out an already-saved value from a previous import.
-  const handleImportColorAttachGoals = useCallback(file => {
-    const task = async () => {
-      try {
-        const parsed = await parseColorAttachGoalsFile(file);
-        const next = { ...goalsRef.current };
-        const patch = {};
-        let matched = 0;
-        const unmatched = [];
-        parsed.entries.forEach(e => {
-          const code = getCodeForStoreName(e.storeName);
-          if (!code) { unmatched.push(e.storeName); return; }
-          const fields = {};
-          ['colorLastYear', 'colorGoal', 'retailAttach', 'retailAttachGoal'].forEach(f => {
-            if (e[f] != null) fields[f] = e[f];
-          });
-          if (!Object.keys(fields).length) return;
-          next[code] = { ...next[code], ...fields };
-          patch[code] = fields;
-          matched++;
-        });
-        goalsRef.current = next;
-        setGoals(next);
-        const result = matched ? await saveScoped(currentUser.token, 'store_goals', patch) : { ok: true };
-        if (result.ok && result.data) { goalsRef.current = result.data; setGoals(result.data); }
-        if (!result.ok) {
-          showToast(`Imported ${matched} store(s) of color goals/attach data, but couldn't sync to Supabase (${result.error})`, 'error');
-        } else if (unmatched.length) {
-          showToast(`Imported ${matched} store(s) from ${file.name} — ${unmatched.length} store name${unmatched.length > 1 ? 's' : ''} not recognized: ${unmatched.slice(0, 3).join(', ')}${unmatched.length > 3 ? '…' : ''}`, 'error');
-        } else {
-          showToast(`Imported color goals + retail attach for ${matched} store(s) from ${file.name}`);
-        }
-      } catch (err) {
-        showToast(err.message, 'error');
-      }
-    };
-    const queued = importChainRef.current.then(task, task);
-    importChainRef.current = queued.then(() => {}, () => {});
-    return queued;
-  }, [currentUser]);
-
   // Queued through importChainRef and saved via saveScoped (only the touched
-  // store codes) for the same reason handleImportGoals is above — a local
+  // store codes) for the same reason handleSaveGoal is above — a local
   // full-object overwrite from a non-owner's own (already scoped-down)
   // state would silently delete every other store's manager.
   const handleImportManagers = useCallback(file => {
@@ -10671,7 +10423,6 @@ export default function App() {
             title="Color Sales" metricA={{ key: 'colorSales', label: 'Color Sales', fmt: fmt$ }} metricB={{ key: 'cpc', label: 'CPC', fmt: fmtNum }}
             goalType="colorGoal" goals={d.goals}
             attachMetric={{ rowKey: 'retailAttachPct', actualField: 'retailAttach', goalField: 'retailAttachGoal', label: 'Retail Attach %' }}
-            refMetric={{ field: 'colorLastYear', label: 'Color (Last Year)' }}
             history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
             isOwner={currentUser.role === 'owner'}
             showPrevMonthColor
@@ -10710,7 +10461,7 @@ export default function App() {
           />
         )}
         {tab === 'Goals' && (
-          <GoalsTab report={d.report} goals={d.goals} isOwner={currentUser.role === 'owner'} onSaveGoal={handleSaveGoal} onApplySalesGoals={handleApplySalesGoals} milestoneGoals={d.milestoneGoals} onSaveMilestoneGoal={handleSaveMilestoneGoal} onFinalize={handleFinalizeGoals} onImportGoals={handleImportGoals} onImportColorAttachGoals={handleImportColorAttachGoals} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} />
+          <GoalsTab report={d.report} goals={d.goals} isOwner={currentUser.role === 'owner'} onSaveGoal={handleSaveGoal} onApplySalesGoals={handleApplySalesGoals} milestoneGoals={d.milestoneGoals} onSaveMilestoneGoal={handleSaveMilestoneGoal} onFinalize={handleFinalizeGoals} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} />
         )}
         {tab === 'Leases' && (
           <LeasesTab
