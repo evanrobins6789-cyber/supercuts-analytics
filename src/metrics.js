@@ -319,7 +319,7 @@ export function getStoreCutsPerDay(history, weeklyHistory, start, end) {
 }
 export const cpdOf = entry => (entry && entry.days > 0 ? entry.cuts / entry.days : null);
 
-// ─── Monthly goals (Goals tab + api/finalize-goals.js) ──────────────────────
+// ─── Monthly goals (Goals tab + api/_finalize-goals.js) ──────────────────────
 // Shared so the site and the DL goals email show identical numbers.
 
 // "2026-11", +1 → "2026-12"; -12 → "2025-11".

@@ -5016,7 +5016,7 @@ const MONTHLY_REF_METRICS = [
   { key: 'weekly', label: 'Weekly Avg', fmt: fmt$ },
 ];
 // Cuts/CPD/Sales/Daily/Weekly for one month, through today. The math lives
-// in metrics.js so the DL goals email (api/finalize-goals.js) matches.
+// in metrics.js so the DL goals email (api/_finalize-goals.js) matches.
 const monthlyReference = (history, weeklyHistory, mk) => sharedMonthlyReference(history, weeklyHistory, mk, getCurrentMonthRange().end);
 const SALES_GOAL_BUMPS = [1000, 2000, 3000];
 // Button-set Sales goals land on the nearest $500 (e.g. $40,501 → $40,500,

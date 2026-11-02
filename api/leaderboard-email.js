@@ -459,7 +459,7 @@ function buildEmail(storeRows, range, news, events, todayISO, siteUrl, yoyHtml =
 // local Supabase credentials), so this is the seam that makes "does the
 // email actually look right" checkable at all without a live send.
 export { buildEmail, buildYoy, yoySection };
-// Shared with api/finalize-goals.js (the DL monthly goals email) so it
+// Shared with api/_finalize-goals.js (the DL monthly goals email) so it
 // loads history the same way and looks like this email.
 export { loadHistory, loadRow, BRAND, FONT, escapeHtml, fmt$, fmtInt, sectionBand };
 

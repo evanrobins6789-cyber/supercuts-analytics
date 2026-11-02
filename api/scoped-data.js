@@ -11,6 +11,7 @@
 import { createServiceClient, requireSession } from '../src/serverAuth.js';
 import { rollup } from '../src/parser.js';
 import { getCodeForStoreName } from '../src/storeDirectory.js';
+import { handleFinalizeGoals } from './_finalize-goals.js';
 
 const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases', 'focus_stylists']);
 const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_', 'gift_card_history_'];
@@ -124,6 +125,12 @@ async function loadRow(supabase, key) {
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' });
+    return;
+  }
+  // Goals tab "Finalize & email DLs" rides on this function (it does its
+  // own owner-session check); see api/_finalize-goals.js for why.
+  if (req.body?.action === 'finalize-goals') {
+    await handleFinalizeGoals(req, res);
     return;
   }
 

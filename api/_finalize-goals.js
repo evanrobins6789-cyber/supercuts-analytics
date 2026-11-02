@@ -1,4 +1,4 @@
-// Vercel serverless function — Node.js runtime.
+// Server-side handler (not its own Vercel function — see handleFinalizeGoals).
 // Leadership's "Finalize & email DLs" button on the Goals tab (Monthly
 // Goals). Builds one email per District Leader / Area Supervisor listing
 // their stores' Sales goal for the month (with the per-day and per-week
@@ -121,11 +121,10 @@ export function buildGoalEmails({ goals, history, weeklyHistory, month, todayISO
   return { emails, withoutGoals };
 }
 
-export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed' });
-    return;
-  }
+// Called from api/scoped-data.js ({ action: 'finalize-goals' }) rather than
+// being its own function: the Hobby plan allows 12 serverless functions per
+// deployment, and the leading underscore keeps Vercel from counting this file.
+export async function handleFinalizeGoals(req, res) {
   const supabase = createServiceClient();
   if (!supabase) {
     res.status(500).json({ error: 'Login is not configured on this deployment.' });
