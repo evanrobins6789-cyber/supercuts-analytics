@@ -60,6 +60,20 @@
 - Confirm the Signature Service tab now shows 1016/$12,142.36 for Aug 1–9 (already corrected directly in Supabase, not just in code) — and if you have a cleaner source for the 1017/$12,154.36 figure you originally gave me, worth checking where that extra unit/$12 comes from.
 - None of the 2026-08-13 changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
 
+Last updated: 2026-11-02 (latest). **Tabs now compare actuals against the Monthly Goals.** Pushed to `main`.
+- **`goalForRange(goals, code, field, start, end)`** (next to `monthlyGoalKey`): when every month the viewed range touches has a `<field>:YYYY-MM` goal, it returns those goals **scaled to the days shown** (`{ value, monthly: true }`). A week of October = 7/31 of October's goal, and month-to-date = days so far ÷ days in month. Otherwise it falls back to the standing `goals[code][field]`, unscaled, as before. `goalSourceNote()` prints a hint line on each tab when monthly goals are in use.
+- **Overview**: the store-card Sales Goal / vs Goal use `goalForRange(…'salesGoal')`.
+- **Retail / Color Sales / Signature Service** (`StoreMetricTab`): `getGoal` goes through `goalForRange`. The live report uses `report.startDateISO/endDateISO`.
+  - Retail's primary goal changed from `bottleGoal` to **`retailGoal` ($ vs Retail)** with `goalLabel="Retail"`. Bottles moved to a new `extraGoal` prop (Bottles | Bottles Goal | Bottles vs Goal, plus a Progress bar on DL cards), still falling back to the standing `bottleGoal`.
+  - There's no standing `retailGoal`, so Retail Goal shows "—" until a Monthly Retail goal is set.
+- **Totals fix**: DL-group and company "vs Goal" and the Progress bars now compare only stores that **have** a goal (`actualWithGoal`). Before, a group total added sales from goal-less stores against a partial goal sum; this applied to the standing goals too.
+- **Verified**: build and no-undef lint clean. jsdom render of the Retail tab with real October history for Bensalem + East Windsor:
+  - Monthly goals for Bensalem only (Retail $1,500, Bottles 100), standing Bottle 50 for East Windsor.
+  - Full October: Bensalem Retail $845 vs $1,500 = -$655, and the company row also shows -$655 (it showed +$915 before the totals fix). Bottles 146 vs 150.
+  - Oct 1–7: the Retail goal scaled to $339 (7/31).
+  - `goalForRange` unit checks: full month 15,500; a week 3,500; a range crossing into a month without a goal falls back.
+- **Not verified**: a real browser.
+
 Last updated: 2026-11-02 (later still). **Monthly Goals: Sales/Bottles/SS goals added, plus leadership +$ buttons.** Pushed to `main`.
 - **Goal columns** are now Sales $, Retail $, Color $, Bottles, Signature Service (`MONTHLY_GOAL_FIELDS`), stored as `<field>:YYYY-MM` on `store_goals`.
 - **Sales $ is leadership-only** (user's choice). DLs see it read-only. This is enforced in `api/scoped-data.js` via `OWNER_ONLY_GOAL_WRITE_PREFIXES = ['salesGoal:']`, a write-only check (DLs still read it). The old standing `salesGoal` is unchanged and still DL-editable.

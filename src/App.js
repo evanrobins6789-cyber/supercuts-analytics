@@ -2980,7 +2980,6 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews, currentUser, n
 function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery, managers, isOwner, goals, giftCardHistory, rankToken, focusStylists = {}, onSaveFocus = null }) {
   const [sortBy, setSortBy] = useState('tsth');
   const [focusTarget, setFocusTarget] = useState(null);
-  const getSalesGoal = code => goals?.[code]?.salesGoal ?? null;
   const [expanded, setExpanded] = useState({});
   const [focused, setFocused] = useState(null);
   // No live weekly Stylist Report and no explicit date range picked — fall
@@ -2989,6 +2988,11 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
   const usingDefaultRange = isReportStale(report) && !(dateRange.start && dateRange.end);
   const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const isHistorical = !!(effectiveRange.start && effectiveRange.end);
+  // Monthly Sales goal scaled to the dates shown, else the standing goal.
+  const goalStart = isHistorical ? effectiveRange.start : report?.startDateISO;
+  const goalEnd = isHistorical ? effectiveRange.end : report?.endDateISO;
+  const getSalesGoal = code => goalForRange(goals, code, 'salesGoal', goalStart, goalEnd).value;
+  const salesGoalNote = goalSourceNote(goalStart, goalEnd, Object.keys(goals || {}).some(code => goalForRange(goals, code, 'salesGoal', goalStart, goalEnd).monthly));
   const showGiftCards = !!(isOwner && giftCardHistory);
   const metrics = showGiftCards ? [...OVERVIEW_METRICS, GIFT_CARD_METRIC] : OVERVIEW_METRICS;
   const metric = metrics.find(m => m.key === selected) || metrics[0];
@@ -3095,6 +3099,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
       <SearchBox value={query} onChange={onQuery} placeholder="Search stores or employees…" />
 
       <p className="section-hint">{rankToken ? 'Tap any metric to see where your store ranks company-wide, with the 5 stores above and below you.' : 'Tap any metric to see the top 10 and bottom 10 stores for it.'}</p>
+      {salesGoalNote && <p className="section-hint">Sales Goal / vs Goal on each store: {salesGoalNote}</p>}
       {yoy && <p className="section-hint">Green/red under each tile: change vs the same dates last year ({fmtDateLong(shiftYearISO(cpdStart, -1))}–{fmtDateLong(shiftYearISO(cpdEnd, -1))}), comparing only the {yoy.storeCount} store{yoy.storeCount === 1 ? '' : 's'} with data in both years.</p>}
       <div className="summary-grid">
         {metrics.map(m => {
@@ -3680,7 +3685,11 @@ function getPrevMonthRange() {
 }
 
 // ─── Single-focus store tabs (Retail, Color Sales) — grouped by DL ─────────
-function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers, isOwner, showProducts, goalMetricKey, goalMetricLabel, goalFmt, attachMetric, refMetric }) {
+// goalLabel: names the goal columns ("Retail Goal") when a tab has two.
+// extraGoal ({ type, metricKey, label, fmt }): a second goal shown as its
+// own actual | goal | vs goal columns (Retail: Bottles next to Retail $).
+// Both goals go through goalForRange, so Monthly Goals apply when set.
+function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalType, goals, history, weeklyHistory, dateRange, onDateRangeChange, showPrevMonthColor, managers, isOwner, showProducts, goalMetricKey, goalMetricLabel, goalFmt, attachMetric, refMetric, goalLabel, extraGoal }) {
   const [sortBy, setSortBy] = useState(metricA.key);
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat' | 'products'
   const [expanded, setExpanded] = useState({});
@@ -3694,7 +3703,31 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   // than the $ retail figure metricA still shows, so the two can be decoupled.
   const goalKey = goalMetricKey || metricA.key;
   const goalFormatter = goalFmt || fmt$;
-  const getGoal = code => (goalType && goals?.[code]?.[goalType] != null ? goals[code][goalType] : null);
+  const goalStart = isHistorical ? effectiveRange.start : report?.startDateISO;
+  const goalEnd = isHistorical ? effectiveRange.end : report?.endDateISO;
+  const getGoal = code => (goalType ? goalForRange(goals, code, goalType, goalStart, goalEnd).value : null);
+  const getExtraGoal = code => (extraGoal ? goalForRange(goals, code, extraGoal.type, goalStart, goalEnd).value : null);
+  const goalNote = goalSourceNote(goalStart, goalEnd, Object.keys(goals || {}).some(code =>
+    (goalType && goalForRange(goals, code, goalType, goalStart, goalEnd).monthly) || (extraGoal && goalForRange(goals, code, extraGoal.type, goalStart, goalEnd).monthly)));
+  const goalHead = goalLabel ? `${goalLabel} Goal` : 'Goal';
+  // Group/company vs Goal only counts stores that have a goal, so a store
+  // with no goal doesn't inflate the total it's compared against.
+  const actualWithGoal = (storesArr, key, getter) => storesArr.reduce((sum, st) => sum + ((getter(st.code) ?? 0) > 0 ? (st[key] || 0) : 0), 0);
+  const sumExtraGoal = storesArr => storesArr.reduce((sum, st) => sum + (getExtraGoal(st.code) ?? 0), 0);
+  // actual | goal | vs goal cells for extraGoal (goal null/0 shows "—").
+  const extraGoalCells = (actual, goal, compareActual = actual) => {
+    if (!extraGoal) return null;
+    const f = extraGoal.fmt || fmt$;
+    const has = goal != null && goal > 0;
+    const diff = has ? (compareActual || 0) - goal : null;
+    return (
+      <>
+        <td>{f(actual)}</td>
+        <td>{has ? f(goal) : '—'}</td>
+        <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${f(diff)}` : '—'}</td>
+      </>
+    );
+  };
   const showGoals = !!goalType;
   const showGoalMetricCol = showGoals && goalKey !== metricA.key && goalKey !== metricB.key;
   // attachMetric ({ rowKey, actualField, goalField, label }). The actual
@@ -3738,7 +3771,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   // the same month) — additive, so a group/company total is a real sum, not
   // an average like avgAttach above.
   const sumRef = storesArr => storesArr.reduce((sum, st) => sum + (getRef(st.code) || 0), 0);
-  const colCount = 3 + (showGoals ? 2 : 0) + (showPrevMonthColor ? 1 : 0) + (showGoalMetricCol ? 1 : 0) + (showAttach ? 3 : 0) + (showRef ? 1 : 0);
+  const colCount = 3 + (showGoals ? 2 : 0) + (extraGoal && showGoals ? 3 : 0) + (showPrevMonthColor ? 1 : 0) + (showGoalMetricCol ? 1 : 0) + (showAttach ? 3 : 0) + (showRef ? 1 : 0);
 
   const prevMonthColorByCode = useMemo(() => {
     if (!showPrevMonthColor) return {};
@@ -3770,7 +3803,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
         prevMonthColor: showPrevMonthColor ? prevMonthColorByCode[s.code] : undefined,
       };
     });
-  }, [isHistorical, history, weeklyHistory, effectiveRange.start, effectiveRange.end, report, goals, goalType, showPrevMonthColor, prevMonthColorByCode]);
+  }, [isHistorical, history, weeklyHistory, effectiveRange.start, effectiveRange.end, report, goals, goalType, showPrevMonthColor, prevMonthColorByCode, goalStart, goalEnd]);
   const groups = useMemo(() => groupStoresByLeader(rows), [rows]);
   const toggleStore = code => setExpanded(prev => ({ ...prev, [code]: !prev[code] }));
   const toggleLeader = name => setExpandedLeader(prev => ({ ...prev, [name]: !prev[name] }));
@@ -3838,12 +3871,14 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
 
   const groupGoalTotal = storesArr => storesArr.reduce((s, st) => s + (getGoal(st.code) ?? 0), 0);
   const companyGoalTotal = rows.reduce((s, st) => s + (getGoal(st.code) ?? 0), 0);
+  const companyGoalActual = actualWithGoal(rows, goalKey, getGoal);
   const prevMonthColSum = arr => arr.reduce((s, st) => s + (st.prevMonthColor || 0), 0);
 
   return (
     <div className="tab-content">
       {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
       {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
+      {goalNote && <p className="section-hint">{goalNote}</p>}
       <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
 
       <div className="view-toggle">
@@ -3875,7 +3910,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
             const groupTotals = rollupRows(g.stores);
             const sortedStores = sortByMetric(g.stores, sortBy, 'desc');
             const goalTotal = groupGoalTotal(g.stores);
-            const groupDiff = goalTotal > 0 ? (groupTotals[goalKey] || 0) - goalTotal : null;
+            const groupDiff = goalTotal > 0 ? actualWithGoal(g.stores, goalKey, getGoal) - goalTotal : null;
             const isLeaderOpen = !!expandedLeader[g.leaderName];
             return (
               <div key={g.leaderName} className="dl-card">
@@ -3892,7 +3927,10 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                     {showGoalMetricCol && <div className="dl-stat"><span className="dl-stat-label">{goalMetricLabel}</span><span className="dl-stat-value">{goalFormatter(groupTotals[goalKey])}</span></div>}
                     {showGoals && <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{goalTotal > 0 ? goalFormatter(goalTotal) : '—'}</span></div>}
                     {showGoals && (
-                      <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={groupTotals[goalKey]} milestone={goalTotal} fmt={goalFmt && goalFormatter} compactFmt={goalFmt && goalFormatter} /></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={actualWithGoal(g.stores, goalKey, getGoal)} milestone={goalTotal} fmt={goalFmt && goalFormatter} compactFmt={goalFmt && goalFormatter} /></div>
+                    )}
+                    {showGoals && extraGoal && sumExtraGoal(g.stores) > 0 && (
+                      <div className="dl-stat"><span className="dl-stat-label">{extraGoal.label} Progress</span><MilestoneThermometer actual={actualWithGoal(g.stores, extraGoal.metricKey, getExtraGoal)} milestone={sumExtraGoal(g.stores)} fmt={extraGoal.fmt} compactFmt={extraGoal.fmt} /></div>
                     )}
                     {showRef && <div className="dl-stat"><span className="dl-stat-label">{refMetric.label}</span><span className="dl-stat-value">{refFmt(sumRef(g.stores))}</span></div>}
                     {showAttach && <div className="dl-stat"><span className="dl-stat-label">{attachMetric.label}</span><span className="dl-stat-value">{attachFmt(groupAttachActual(g.stores, groupTotals))}</span></div>}
@@ -3907,7 +3945,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                           <th className="ledger-name-col">Store</th><th>{metricA.label}</th><th>{metricB.label}</th>
                           {showPrevMonthColor && <th>Prev Month Color</th>}
                           {showGoalMetricCol && <th>{goalMetricLabel}</th>}
-                          {showGoals && <><th>Goal</th><th>vs Goal</th></>}
+                          {showGoals && <><th>{goalHead}</th><th>vs Goal</th>{extraGoal && <><th>{extraGoal.label}</th><th>{extraGoal.label} Goal</th><th>{extraGoal.label} vs Goal</th></>}</>}
                           {showRef && <th>{refMetric.label}</th>}
                           {showAttach && <><th>{attachMetric.label}</th><th>{attachMetric.label} Goal</th><th>Attach vs Goal</th></>}
                         </tr>
@@ -3934,7 +3972,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                                 {showGoals && (
                                   <>
                                     <td>{goal != null ? goalFormatter(goal) : '—'}</td>
-                                    <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${goalFormatter(diff)}` : '—'}</td>
+                                    <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${goalFormatter(diff)}` : '—'}</td>{extraGoal && extraGoalCells(s[extraGoal.metricKey], getExtraGoal(s.code))}
                                   </>
                                 )}
                                 {showRef && <td>{getRef(s.code) != null ? refFmt(getRef(s.code)) : '—'}</td>}
@@ -3976,6 +4014,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                               <td className={vsGoalClass(groupDiff)}>
                                 {groupDiff != null ? `${groupDiff >= 0 ? '+' : ''}${goalFormatter(groupDiff)}` : '—'}
                               </td>
+                              {extraGoal && extraGoalCells(groupTotals[extraGoal.metricKey], sumExtraGoal(g.stores), actualWithGoal(g.stores, extraGoal.metricKey, getExtraGoal))}
                             </>
                           )}
                           {showRef && <td>{refFmt(sumRef(g.stores))}</td>}
@@ -4010,7 +4049,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                 <th className="ledger-name-col">Store</th><th>{metricA.label}</th><th>{metricB.label}</th>
                 {showPrevMonthColor && <th>Prev Month Color</th>}
                 {showGoalMetricCol && <th>{goalMetricLabel}</th>}
-                {showGoals && <><th>Goal</th><th>vs Goal</th></>}
+                {showGoals && <><th>{goalHead}</th><th>vs Goal</th>{extraGoal && <><th>{extraGoal.label}</th><th>{extraGoal.label} Goal</th><th>{extraGoal.label} vs Goal</th></>}</>}
                 {showRef && <th>{refMetric.label}</th>}
                 {showAttach && <><th>{attachMetric.label}</th><th>{attachMetric.label} Goal</th><th>Attach vs Goal</th></>}
               </tr>
@@ -4037,7 +4076,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                       {showGoals && (
                         <>
                           <td>{goal != null ? goalFormatter(goal) : '—'}</td>
-                          <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${goalFormatter(diff)}` : '—'}</td>
+                          <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${goalFormatter(diff)}` : '—'}</td>{extraGoal && extraGoalCells(s[extraGoal.metricKey], getExtraGoal(s.code))}
                         </>
                       )}
                       {showRef && <td>{getRef(s.code) != null ? refFmt(getRef(s.code)) : '—'}</td>}
@@ -4077,9 +4116,10 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                   {showGoals && (
                     <>
                       <td>{companyGoalTotal > 0 ? goalFormatter(companyGoalTotal) : '—'}</td>
-                      <td className={companyGoalTotal > 0 ? vsGoalClass((t[goalKey] || 0) - companyGoalTotal) : ''}>
-                        {companyGoalTotal > 0 ? `${(t[goalKey] || 0) - companyGoalTotal >= 0 ? '+' : ''}${goalFormatter((t[goalKey] || 0) - companyGoalTotal)}` : '—'}
+                      <td className={companyGoalTotal > 0 ? vsGoalClass(companyGoalActual - companyGoalTotal) : ''}>
+                        {companyGoalTotal > 0 ? `${companyGoalActual - companyGoalTotal >= 0 ? '+' : ''}${goalFormatter(companyGoalActual - companyGoalTotal)}` : '—'}
                       </td>
+                      {extraGoal && extraGoalCells(t[extraGoal.metricKey], sumExtraGoal(rows), actualWithGoal(rows, extraGoal.metricKey, getExtraGoal))}
                     </>
                   )}
                   {showRef && <td>{refFmt(sumRef(sortedFlat))}</td>}
@@ -4933,6 +4973,40 @@ const MONTHLY_GOAL_FIELDS = [
   { key: 'signatureSGoal', label: 'Signature Service' },
 ];
 const monthlyGoalKey = (field, month) => `${field}:${month}`;
+const isoDayDiff = (a, b) => Math.round((new Date(`${b}T00:00:00`) - new Date(`${a}T00:00:00`)) / 86400000);
+// A store's goal for the dates being viewed. When every month the range
+// touches has a Monthly Goal for `field`, it's those goals scaled to the
+// days shown (a week of November = 7/30 of November's goal; month-to-date
+// = the days so far). Otherwise it falls back to the old standing goal
+// (`goals[code][field]`), unchanged. Returns { value, monthly }.
+function goalForRange(goals, code, field, start, end) {
+  const g = goals?.[code];
+  if (!g) return { value: null, monthly: false };
+  if (start && end && start <= end) {
+    let total = 0;
+    let complete = true;
+    for (let mk = start.slice(0, 7); mk <= end.slice(0, 7); mk = shiftMonthKey(mk, 1)) {
+      const v = g[monthlyGoalKey(field, mk)];
+      if (v == null) { complete = false; break; }
+      const [y, m] = mk.split('-').map(Number);
+      const dim = new Date(y, m, 0).getDate();
+      const monthEnd = `${mk}-${String(dim).padStart(2, '0')}`;
+      const s = start > `${mk}-01` ? start : `${mk}-01`;
+      const e = end < monthEnd ? end : monthEnd;
+      total += Number(v) * ((isoDayDiff(s, e) + 1) / dim);
+    }
+    if (complete) return { value: total, monthly: true };
+  }
+  return { value: g[field] ?? null, monthly: false };
+}
+// One-line note for a tab: which goals it's comparing against.
+function goalSourceNote(start, end, usesMonthly) {
+  if (!usesMonthly || !start || !end) return null;
+  const days = isoDayDiff(start, end) + 1;
+  const months = [];
+  for (let mk = start.slice(0, 7); mk <= end.slice(0, 7); mk = shiftMonthKey(mk, 1)) months.push(fmtMonthLong(mk));
+  return `Goals are the ${months.join(' / ')} Monthly Goals (Goals tab), scaled to the ${days} day${days === 1 ? '' : 's'} shown. Stores without a Monthly Goal use their standing goal.`;
+}
 const shiftMonthKey = (mk, n) => {
   const [y, m] = mk.split('-').map(Number);
   const d = new Date(y, m - 1 + n, 1);
@@ -10523,7 +10597,8 @@ export default function App() {
           <StoreMetricTab
             report={d.report} query={queries.Retail} onQuery={v => setQuery('Retail', v)}
             title="Retail" metricA={{ key: 'retail', label: 'Retail', fmt: fmt$ }} metricB={{ key: 'rpc', label: 'RPC', fmt: fmtNum }}
-            goalType="bottleGoal" goals={d.goals} goalMetricKey="bottles" goalMetricLabel="Bottles" goalFmt={fmtInt}
+            goalType="retailGoal" goalLabel="Retail" goals={d.goals}
+            extraGoal={{ type: 'bottleGoal', metricKey: 'bottles', label: 'Bottles', fmt: fmtInt }}
             history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
             managers={d.managers} isOwner={currentUser.role === 'owner'}
             showProducts
@@ -10634,6 +10709,7 @@ export default function App() {
     </div>
   );
 }
+
 
 
 
