@@ -60,6 +60,18 @@
 - Confirm the Signature Service tab now shows 1016/$12,142.36 for Aug 1–9 (already corrected directly in Supabase, not just in code) — and if you have a cleaner source for the 1017/$12,154.36 figure you originally gave me, worth checking where that extra unit/$12 comes from.
 - None of the 2026-08-13 changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
 
+Last updated: 2026-11-02 (late night). **Goals tab: new Monthly Goals section on top.** Pushed to `main`.
+- **What the user asked for**: each store's same month last year and last month, showing Cuts, CPD, Sales, Daily sales avg and Weekly sales avg. On Nov 2 that's Nov 2025 and Oct 2026. DLs then set Retail $ and Color $ goals. The user picked per-month goals over one standing number. Their message cut off after "retail, color", and they confirmed only those two in a follow-up question.
+- **How**: `MonthlyGoalsSection` (above `GoalsTab`) has a month dropdown (last, this, next month). Stores are grouped by DL via `groupStoresByLeader`. Reference columns come from `monthlyReference()`:
+  - Cuts and Sales come from `getRangeTotals`.
+  - CPD = cuts ÷ open days (`getStoreCutsPerDay`).
+  - Daily Avg = sales ÷ those same open days.
+  - Weekly Avg = sales ÷ (calendar days in the range ÷ 7).
+  - A current month shows "(so far)".
+- **Storage**: goals live in `store_goals` as flat fields `retailGoal:YYYY-MM` / `colorGoal:YYYY-MM`, saved on blur through the existing `onSaveGoal` → `saveScoped`, so DL scoping and the no-overwrite merge are unchanged.
+- **Not wired yet**: the **standing** `colorGoal` (Color Sales tab's Goal/vs Goal) is separate and untouched, and nothing compares actual Retail/Color $ against the new monthly goals. Ask the user before connecting them. Tilly gets a MONTHLY GOALS section (this month and next) with the reference figures. The standing table is now headed "Standing Goals".
+- **Verified**: build clean, no-undef lint clean. A jsdom render test against real Nov 2025 / Oct 2026 history for Bensalem and East Windsor passed. Bensalem Nov 2025 showed 465 cuts, 16.0 CPD, $14,906, $514/day, $3,478/wk, all hand-checked. Typing a retail goal saved `['80948', 'retailGoal:2026-11', 9000]`. **Not verified** in a real browser.
+
 Last updated: 2026-11-02 (night). **New Focus Stylist tab.** Pushed to `main`.
 - **What the user asked for**: DLs and leadership click FOCUS next to a stylist on Overview, a popup asks for TSTH and CPH goals, and the stylist then shows on a Focus Stylist tab grouped by DL. DLs see only their own stylists; leadership (owner login) sees everyone.
 - **Storage**: a new `focus_stylists` row in `weekly_report`, read and written only through `api/scoped-data.js` (added to `SENSITIVE_KEYS` and `PATCHABLE_KEYS`). The shape is `{ [storeCode]: { [focusKey(name)]: { name, tsthGoal, cphGoal, addedBy, addedAt, updatedAt? } } }`.

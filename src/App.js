@@ -4917,7 +4917,142 @@ function GiftCardsTab({ giftCardHistory, goals, query, onQuery, dateRange, onDat
 
 const GOAL_FIELD_LABELS = { salesGoal: 'sales', colorGoal: 'color', bottleGoal: 'bottle', signatureSGoal: 'signature service', bottleToColorGoal: 'bottle-to-color %', bottleToSSGoal: 'bottle-to-SS %', giftCardGoal: 'gift card' };
 
-function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttachGoals, fallbackEmployeesByStore, isOwner }) {
+// ─── Monthly goals (top of the Goals tab) ───────────────────────────────────
+// Retail $ and Color $ goals set for one month at a time, next to each
+// store's same-month-last-year and previous-month Cuts, CPD, Sales, daily
+// and weekly sales average. Saved into store_goals as flat per-month
+// fields (`retailGoal:2026-11`), because the scoped patch merge is one
+// level deep per store; so DL scoping works exactly like the other goals.
+// The standing Sales/Color/Bottle goals below are separate and unchanged.
+const MONTHLY_GOAL_FIELDS = [
+  { key: 'retailGoal', label: 'Retail $' },
+  { key: 'colorGoal', label: 'Color $' },
+];
+const monthlyGoalKey = (field, month) => `${field}:${month}`;
+const shiftMonthKey = (mk, n) => {
+  const [y, m] = mk.split('-').map(Number);
+  const d = new Date(y, m - 1 + n, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+// Whole month, or month-to-date if it's the current month.
+function monthKeyRange(mk) {
+  const [y, m] = mk.split('-').map(Number);
+  const last = `${mk}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+  const today = getCurrentMonthRange().end;
+  return { start: `${mk}-01`, end: last > today ? today : last };
+}
+const MONTHLY_REF_METRICS = [
+  { key: 'cuts', label: 'Cuts', fmt: fmtInt },
+  { key: 'cpd', label: 'CPD', fmt: n => fmtNum(n, 1) },
+  { key: 'sales', label: 'Sales', fmt: fmt$ },
+  { key: 'daily', label: 'Daily Avg', fmt: fmt$ },
+  { key: 'weekly', label: 'Weekly Avg', fmt: fmt$ },
+];
+// { [storeCode]: { cuts, cpd, sales, daily, weekly } } for one month.
+// Daily avg = sales ÷ days the store had cuts (same days CPD uses); weekly
+// avg = sales ÷ (calendar days in the range ÷ 7).
+function monthlyReference(history, weeklyHistory, mk) {
+  const { start, end } = monthKeyRange(mk);
+  if (start > end) return {};
+  const calendarDays = Math.round((new Date(`${end}T00:00:00`) - new Date(`${start}T00:00:00`)) / 86400000) + 1;
+  const totals = getRangeTotals(history, weeklyHistory, start, end);
+  const cpd = getStoreCutsPerDay(history, weeklyHistory, start, end);
+  const out = {};
+  Object.entries(totals).forEach(([code, t]) => {
+    const sales = historyTotalsToReportShape(t).sales || 0;
+    const days = cpd[code]?.days || 0;
+    out[code] = { cuts: t.haircuts || 0, cpd: cpdOf(cpd[code]), sales, daily: days > 0 ? sales / days : null, weekly: calendarDays > 0 ? sales / (calendarDays / 7) : null };
+  });
+  return out;
+}
+
+function MonthlyGoalsSection({ stores, goals, onSaveGoal, history, weeklyHistory }) {
+  const thisMonth = getCurrentMonthRange().start.slice(0, 7);
+  const [month, setMonth] = useState(thisMonth);
+  const [drafts, setDrafts] = useState({});
+  const lyMonth = shiftMonthKey(month, -12);
+  const prevMonth = shiftMonthKey(month, -1);
+  const lyRef = useMemo(() => monthlyReference(history, weeklyHistory, lyMonth), [history, weeklyHistory, lyMonth]);
+  const prevRef = useMemo(() => monthlyReference(history, weeklyHistory, prevMonth), [history, weeklyHistory, prevMonth]);
+  const prevIsPartial = prevMonth === thisMonth;
+  const groups = groupStoresByLeader(stores);
+
+  const getVal = (code, field) => {
+    const k = monthlyGoalKey(field, month);
+    if (drafts[code]?.[k] !== undefined) return drafts[code][k];
+    return goals?.[code]?.[k] ?? '';
+  };
+  const handleBlur = (code, field) => {
+    const k = monthlyGoalKey(field, month);
+    const raw = drafts[code]?.[k];
+    if (raw === undefined) return;
+    const num = raw === '' ? null : Number(raw);
+    onSaveGoal(code, k, isNaN(num) ? null : num);
+  };
+  const refCells = (ref, code) => MONTHLY_REF_METRICS.map((m, i) => {
+    const v = ref[code]?.[m.key];
+    return <td key={m.key} className={i === 0 ? 'mg-first' : ''}>{v == null ? '—' : m.fmt(v)}</td>;
+  });
+
+  return (
+    <div className="monthly-goals">
+      <div className="monthly-goals-head">
+        <p className="lease-card-title">Monthly Goals</p>
+        <select className="text-input focus-month-select" value={month} onChange={e => { setMonth(e.target.value); setDrafts({}); }}>
+          {[shiftMonthKey(thisMonth, -1), thisMonth, shiftMonthKey(thisMonth, 1)].map(m => (
+            <option key={m} value={m}>{fmtMonthLong(m)}{m === thisMonth ? ' (this month)' : ''}</option>
+          ))}
+        </select>
+      </div>
+      <p className="section-hint">
+        Set each store's Retail and Color goal for {fmtMonthLong(month)}, using the same month last year ({fmtMonthLong(lyMonth)}) and last month ({fmtMonthLong(prevMonth)}{prevIsPartial ? ', so far' : ''}) as a guide. Daily Avg is sales ÷ days the store was open; Weekly Avg is sales ÷ weeks in the month. Goals save when you click out of the box.
+      </p>
+      <div className="ledger-scroll">
+        <table className="ledger-table monthly-goals-table">
+          <thead>
+            <tr>
+              <th rowSpan={2} className="ledger-name-col">Store</th>
+              <th colSpan={MONTHLY_REF_METRICS.length} className="mg-group">{fmtMonthLong(lyMonth)}</th>
+              <th colSpan={MONTHLY_REF_METRICS.length} className="mg-group">{fmtMonthLong(prevMonth)}{prevIsPartial ? ' (so far)' : ''}</th>
+              <th colSpan={MONTHLY_GOAL_FIELDS.length} className="mg-group mg-goal-group">{fmtMonthLong(month)} Goals</th>
+            </tr>
+            <tr>
+              {MONTHLY_REF_METRICS.map((m, i) => <th key={`ly-${m.key}`} className={i === 0 ? 'mg-first' : ''}>{m.label}</th>)}
+              {MONTHLY_REF_METRICS.map((m, i) => <th key={`pm-${m.key}`} className={i === 0 ? 'mg-first' : ''}>{m.label}</th>)}
+              {MONTHLY_GOAL_FIELDS.map((f, i) => <th key={f.key} className={`mg-goal-col ${i === 0 ? 'mg-first' : ''}`}>{f.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map(g => (
+              <React.Fragment key={g.leaderName}>
+                <tr className="mg-dl-row"><td className="ledger-name-col">{g.leaderName}</td><td colSpan={MONTHLY_REF_METRICS.length * 2 + MONTHLY_GOAL_FIELDS.length}></td></tr>
+                {g.stores.map(s => (
+                  <tr key={s.code}>
+                    <td className="ledger-name-col">{s.name}</td>
+                    {refCells(lyRef, s.code)}
+                    {refCells(prevRef, s.code)}
+                    {MONTHLY_GOAL_FIELDS.map((f, i) => (
+                      <td key={f.key} className={`mg-goal-col ${i === 0 ? 'mg-first' : ''}`}>
+                        <input
+                          type="number" className="goal-input" placeholder="$0"
+                          value={getVal(s.code, f.key)}
+                          onChange={e => { const k = monthlyGoalKey(f.key, month); const v = e.target.value; setDrafts(prev => ({ ...prev, [s.code]: { ...prev[s.code], [k]: v } })); }}
+                          onBlur={() => handleBlur(s.code, f.key)}
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttachGoals, fallbackEmployeesByStore, isOwner, history, weeklyHistory }) {
   const [query, setQuery] = useState('');
   const [drafts, setDrafts] = useState({}); // { code: { salesGoal, colorGoal, bottleGoal, signatureSGoal } } — in-progress edits
   const [importing, setImporting] = useState(null); // 'colorGoal' | 'bottleGoal' | null
@@ -4984,6 +5119,8 @@ function GoalsTab({ report, goals, onSaveGoal, onImportGoals, onImportColorAttac
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
+      <MonthlyGoalsSection stores={stores} goals={goals} onSaveGoal={onSaveGoal} history={history} weeklyHistory={weeklyHistory} />
+      <p className="lease-card-title standing-goals-title">Standing Goals</p>
       <p className="section-hint">Set a weekly Sales, Color, Bottle, and Signature Service goal per store. Sales tracks total revenue (services + retail combined); Color goal tracks $ sold in color services specifically. Bottle and Signature Service goals track a unit count instead — bottles of retail product sold, and number of Signature Services performed. Color, Bottle, and Signature Service show up as "Goal"/"vs Goal" columns on their tabs; Sales goals show up on the Overview tab. Bottle-to-Color % and Bottle-to-SS % are target ratios of bottles sold per color service / per Signature Service performed — enter a whole percent (e.g. "15" for 15%).{isOwner && ' Gift Card Goal is $ of gift cards sold per store per month — only you (the owner) can see or set it, and it shows on the Gift Cards tab.'}</p>
 
       <p className="section-hint">Download a blank sheet listing your stores (grouped by DL), fill in the Goal column, then import it below with whichever button matches what you filled in.</p>
@@ -7098,6 +7235,27 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     lines.push('EVERY EMPLOYEE THIS PERIOD (Name @ Store: Sales, Color, Retail, Cuts, Hours, CPH):');
     currentAllEmployees.forEach(e => {
       lines.push(`${e.name} @ ${e.store}: Sales $${Math.round(e.sales)}, Color $${Math.round(e.colorSales)}, Retail $${Math.round(e.retail)}, Cuts ${Math.round(e.haircuts || 0)}, Hours ${Math.round(e.totalHours)}, CPH ${e.cph != null ? e.cph.toFixed(2) : 'n/a'}`);
+    });
+  }
+
+  // Monthly Retail $/Color $ goals (Goals tab, top section), stored as
+  // `retailGoal:YYYY-MM` / `colorGoal:YYYY-MM` fields on store_goals. Listed
+  // for this month and next, alongside the reference figures DLs saw.
+  if (goals && Object.keys(goals).length) {
+    const thisMonth = getCurrentMonthRange().start.slice(0, 7);
+    [thisMonth, shiftMonthKey(thisMonth, 1)].forEach(mk => {
+      const rows = Object.entries(goals).filter(([, g]) => g && MONTHLY_GOAL_FIELDS.some(f => g[monthlyGoalKey(f.key, mk)] != null));
+      if (!rows.length) return;
+      const ly = monthlyReference(history, weeklyHistory, shiftMonthKey(mk, -12));
+      const pm = monthlyReference(history, weeklyHistory, shiftMonthKey(mk, -1));
+      const refStr = r => (r ? `Cuts ${r.cuts}, CPD ${r.cpd != null ? r.cpd.toFixed(1) : 'n/a'}, Sales $${Math.round(r.sales)}, Daily Avg ${r.daily != null ? `$${Math.round(r.daily)}` : 'n/a'}, Weekly Avg ${r.weekly != null ? `$${Math.round(r.weekly)}` : 'n/a'}` : 'no data');
+      lines.push(`MONTHLY GOALS for ${fmtMonthLong(mk)} (Retail $ and Color $ targets set by DLs on the Goals tab for this month only; reference = same month last year (${fmtMonthLong(shiftMonthKey(mk, -12))}) and the month before (${fmtMonthLong(shiftMonthKey(mk, -1))})):`);
+      rows.forEach(([code, g]) => {
+        const r = g[monthlyGoalKey('retailGoal', mk)];
+        const c = g[monthlyGoalKey('colorGoal', mk)];
+        lines.push(`${STORE_CODE_TO_NAME[code] || `Store ${code}`}: Retail Goal ${r != null ? `$${Math.round(r)}` : 'none'}, Color Goal ${c != null ? `$${Math.round(c)}` : 'none'} | ${fmtMonthLong(shiftMonthKey(mk, -12))}: ${refStr(ly[code])} | ${fmtMonthLong(shiftMonthKey(mk, -1))}: ${refStr(pm[code])}`);
+      });
+      lines.push('');
     });
   }
 
@@ -10339,7 +10497,7 @@ export default function App() {
           />
         )}
         {tab === 'Goals' && (
-          <GoalsTab report={d.report} goals={d.goals} isOwner={currentUser.role === 'owner'} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} onImportColorAttachGoals={handleImportColorAttachGoals} fallbackEmployeesByStore={d.fallbackEmployeesByStore} />
+          <GoalsTab report={d.report} goals={d.goals} isOwner={currentUser.role === 'owner'} onSaveGoal={handleSaveGoal} onImportGoals={handleImportGoals} onImportColorAttachGoals={handleImportColorAttachGoals} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} />
         )}
         {tab === 'Leases' && (
           <LeasesTab
@@ -10399,4 +10557,5 @@ export default function App() {
     </div>
   );
 }
+
 
