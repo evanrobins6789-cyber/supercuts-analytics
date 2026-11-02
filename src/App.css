@@ -512,6 +512,10 @@
 .mg-bump-btn { padding: 6px 14px; border: none; border-radius: 16px; background: var(--green); color: #fff; font-weight: 700; font-size: 13px; cursor: pointer; }
 .mg-bump-btn:hover { background: #24663F; }
 .mg-bump-btn:disabled { background: var(--silver); cursor: not-allowed; }
+.mg-finalize-row { padding-top: 6px; border-top: 1px dashed var(--line); }
+.mg-finalize-btn { padding: 8px 18px; border: none; border-radius: 8px; background: var(--red); color: #fff; font-weight: 700; font-size: 13.5px; cursor: pointer; }
+.mg-finalize-btn:hover { background: var(--red-deep); }
+.mg-finalize-btn:disabled { background: var(--silver); cursor: wait; }
 .mg-bump-note { font-size: 11.5px; color: var(--ink-soft); }
 .focus-prev { color: var(--ink-soft); }
 .focus-change { display: block; font-size: 10px; font-weight: 600; color: var(--ink-soft); white-space: nowrap; }

@@ -11,7 +11,7 @@ import {
 import {
   getSession, setSession, clearSession, checkEligible, signUp, logIn, logOut,
   loadScoped, loadScopedByPrefix, saveScoped, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
-  pointsBalance, pointsAllBalances, pointsTransactions, pointsDeleteTransaction,
+  pointsBalance, pointsAllBalances, pointsTransactions, pointsDeleteTransaction, finalizeGoals,
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled,
   leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank, lpLoad, lpSave,
 } from './auth';
@@ -25,6 +25,7 @@ import {
   EMPTY_RANGE_TOTALS, addRangeInto, expandDateRangeDays, mergeEmployeesInto, finalizeEmployee,
   getRangeTotals, historyTotalsToReportShape, rollupRows, addDaysISO, isoWeekStart, getLastFullWeekRange, sortByMetric,
   shiftYearISO, getStoreCutsPerDay, cpdOf,
+  shiftMonthKey, salesGoalBreakdown, monthlyReference as sharedMonthlyReference,
 } from './metrics';
 import { BITMOJI_POOLS } from './bitmoji';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
@@ -5007,18 +5008,6 @@ function goalSourceNote(start, end, usesMonthly) {
   for (let mk = start.slice(0, 7); mk <= end.slice(0, 7); mk = shiftMonthKey(mk, 1)) months.push(fmtMonthLong(mk));
   return `Goals are the ${months.join(' / ')} Monthly Goals (Goals tab), scaled to the ${days} day${days === 1 ? '' : 's'} shown. Stores without a Monthly Goal use their standing goal.`;
 }
-const shiftMonthKey = (mk, n) => {
-  const [y, m] = mk.split('-').map(Number);
-  const d = new Date(y, m - 1 + n, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-};
-// Whole month, or month-to-date if it's the current month.
-function monthKeyRange(mk) {
-  const [y, m] = mk.split('-').map(Number);
-  const last = `${mk}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
-  const today = getCurrentMonthRange().end;
-  return { start: `${mk}-01`, end: last > today ? today : last };
-}
 const MONTHLY_REF_METRICS = [
   { key: 'cuts', label: 'Cuts', fmt: fmtInt },
   { key: 'cpd', label: 'CPD', fmt: n => fmtNum(n, 1) },
@@ -5026,40 +5015,18 @@ const MONTHLY_REF_METRICS = [
   { key: 'daily', label: 'Daily Avg', fmt: fmt$ },
   { key: 'weekly', label: 'Weekly Avg', fmt: fmt$ },
 ];
-// { [storeCode]: { cuts, cpd, sales, daily, weekly } } for one month.
-// Daily avg = sales ÷ days the store had cuts (same days CPD uses); weekly
-// avg = sales ÷ (calendar days in the range ÷ 7).
-function monthlyReference(history, weeklyHistory, mk) {
-  const { start, end } = monthKeyRange(mk);
-  if (start > end) return {};
-  const calendarDays = Math.round((new Date(`${end}T00:00:00`) - new Date(`${start}T00:00:00`)) / 86400000) + 1;
-  const totals = getRangeTotals(history, weeklyHistory, start, end);
-  const cpd = getStoreCutsPerDay(history, weeklyHistory, start, end);
-  const out = {};
-  Object.entries(totals).forEach(([code, t]) => {
-    const sales = historyTotalsToReportShape(t).sales || 0;
-    const days = cpd[code]?.days || 0;
-    out[code] = { cuts: t.haircuts || 0, cpd: cpdOf(cpd[code]), sales, daily: days > 0 ? sales / days : null, weekly: calendarDays > 0 ? sales / (calendarDays / 7) : null };
-  });
-  return out;
-}
-
-// Sales $ per day and per week for a monthly Sales goal: goal ÷ calendar
-// days in the month, and goal ÷ (calendar days ÷ 7).
-function salesGoalBreakdown(goal, mk) {
-  if (goal == null || goal === '' || isNaN(Number(goal))) return null;
-  const [y, m] = mk.split('-').map(Number);
-  const days = new Date(y, m, 0).getDate();
-  return { daily: Number(goal) / days, weekly: Number(goal) / (days / 7) };
-}
+// Cuts/CPD/Sales/Daily/Weekly for one month, through today. The math lives
+// in metrics.js so the DL goals email (api/finalize-goals.js) matches.
+const monthlyReference = (history, weeklyHistory, mk) => sharedMonthlyReference(history, weeklyHistory, mk, getCurrentMonthRange().end);
 const SALES_GOAL_BUMPS = [1000, 2000, 3000];
 // Button-set Sales goals land on the nearest $500 (e.g. $40,501 → $40,500,
 // $40,750 → $41,000). A goal leadership types by hand is kept as typed.
 const roundToNearest500 = n => Math.round(n / 500) * 500;
 
-function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySalesGoals, milestoneGoals, onSaveMilestoneGoal, history, weeklyHistory, isOwner }) {
+function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySalesGoals, milestoneGoals, onSaveMilestoneGoal, onFinalize, history, weeklyHistory, isOwner }) {
   const thisMonth = getCurrentMonthRange().start.slice(0, 7);
   const [month, setMonth] = useState(thisMonth);
+  const [finalizing, setFinalizing] = useState(false);
   const [drafts, setDrafts] = useState({});
   // Milestone is the standing stretch goal from milestone_goals (the same
   // value as Setup > Milestone Goals and the DL/Homepage thermometers). It
@@ -5174,6 +5141,23 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
           {prevIsPartial && <span className="mg-bump-note">{fmtMonthLong(prevMonth)} isn't finished yet, so these work once it is. You can still type goals by hand.</span>}
         </div>
       )}
+      {isOwner && (
+        <div className="mg-bump-row mg-finalize-row">
+          <button type="button" className="mg-finalize-btn" disabled={finalizing}
+            onClick={async () => {
+              if (!window.confirm(`Finalize ${fmtMonthLong(month)} Sales goals and email each DL?\n\nEach DL gets their stores' Sales goals (per day and per week), ${fmtMonthLong(lyMonth)} and ${fmtMonthLong(prevMonth)} for comparison, and a reminder of which Retail, Color, Bottles and Signature Service goals they still need to set.`)) return;
+              setFinalizing(true);
+              await onFinalize(month, false);
+              setFinalizing(false);
+            }}>
+            {finalizing ? 'Sending…' : `✉ Finalize & email DLs`}
+          </button>
+          <button type="button" className="link-btn" disabled={finalizing}
+            onClick={async () => { setFinalizing(true); await onFinalize(month, true); setFinalizing(false); }}>
+            Send me a test first
+          </button>
+        </div>
+      )}
       <p className="section-hint">
         Goals for {fmtMonthLong(month)}, next to the same month last year ({fmtMonthLong(lyMonth)}) and last month ({fmtMonthLong(prevMonth)}{prevIsPartial ? ', so far' : ''}). {isOwner ? 'Sales goals are set by leadership: the buttons above round to the nearest $500, or type any store by hand.' : 'Sales goals are set by leadership.'} Milestone stays the same every month until leadership changes it (same as Setup › Milestone Goals). Each Sales goal shows what it works out to per day and per week ({fmtMonthLong(month)} has {new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()} days). Daily Avg is sales ÷ days the store was open; Weekly Avg is sales ÷ weeks in the month. Goals save when you click out of the box.
       </p>
@@ -5215,7 +5199,7 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
   );
 }
 
-function GoalsTab({ report, goals, onSaveGoal, onApplySalesGoals, milestoneGoals, onSaveMilestoneGoal, onImportGoals, onImportColorAttachGoals, fallbackEmployeesByStore, isOwner, history, weeklyHistory }) {
+function GoalsTab({ report, goals, onSaveGoal, onApplySalesGoals, milestoneGoals, onSaveMilestoneGoal, onFinalize, onImportGoals, onImportColorAttachGoals, fallbackEmployeesByStore, isOwner, history, weeklyHistory }) {
   const [query, setQuery] = useState('');
   const [drafts, setDrafts] = useState({}); // { code: { salesGoal, colorGoal, bottleGoal, signatureSGoal } } — in-progress edits
   const [importing, setImporting] = useState(null); // 'colorGoal' | 'bottleGoal' | null
@@ -5282,7 +5266,7 @@ function GoalsTab({ report, goals, onSaveGoal, onApplySalesGoals, milestoneGoals
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
-      <MonthlyGoalsSection stores={stores} allStores={allStores} goals={goals} onSaveGoal={onSaveGoal} onApplySalesGoals={onApplySalesGoals} milestoneGoals={milestoneGoals} onSaveMilestoneGoal={onSaveMilestoneGoal} history={history} weeklyHistory={weeklyHistory} isOwner={isOwner} />
+      <MonthlyGoalsSection stores={stores} allStores={allStores} goals={goals} onSaveGoal={onSaveGoal} onApplySalesGoals={onApplySalesGoals} milestoneGoals={milestoneGoals} onSaveMilestoneGoal={onSaveMilestoneGoal} onFinalize={onFinalize} history={history} weeklyHistory={weeklyHistory} isOwner={isOwner} />
       <p className="lease-card-title standing-goals-title">Standing Goals</p>
       <p className="section-hint">Set a weekly Sales, Color, Bottle, and Signature Service goal per store. Sales tracks total revenue (services + retail combined); Color goal tracks $ sold in color services specifically. Bottle and Signature Service goals track a unit count instead — bottles of retail product sold, and number of Signature Services performed. Color, Bottle, and Signature Service show up as "Goal"/"vs Goal" columns on their tabs; Sales goals show up on the Overview tab. Bottle-to-Color % and Bottle-to-SS % are target ratios of bottles sold per color service / per Signature Service performed — enter a whole percent (e.g. "15" for 15%).{isOwner && ' Gift Card Goal is $ of gift cards sold per store per month — only you (the owner) can see or set it, and it shows on the Gift Cards tab.'}</p>
 
@@ -8169,6 +8153,41 @@ function sendWeeklyLeaderboard() {
     MailApp.sendEmail(Session.getActiveUser().getEmail(), 'Weekly Leaderboard: some recipients were skipped',
       skipped.join('\\n') + '\\n\\nLeader names it knows: ' + Object.keys(data.byLeader || {}).join(', '));
   }
+}
+
+// Goals tab → "Finalize & email DLs". The site posts one ready-made email
+// per leader here; this sends each to that leader's address in RECIPIENTS.
+// Needs this script deployed as a web app (Deploy → New deployment → Web
+// app, Execute as: Me, Who has access: Anyone) and that URL saved in Vercel
+// as GOALS_EMAIL_WEBAPP_URL. A test goes only to the first 'ALL' address.
+function doPost(e) {
+  const body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+  if (body.secret !== SHARED_SECRET) return jsonOut({ ok: false, error: 'Invalid secret.' });
+  if (body.action !== 'goals') return jsonOut({ ok: false, error: 'Unknown action.' });
+  const emails = body.emails || {};
+  const list = Array.isArray(RECIPIENTS) ? [] : Object.entries(RECIPIENTS);
+  const sent = [];
+  const skipped = [];
+  if (body.test) {
+    const me = (list.find(([, who]) => who === 'ALL') || [])[0];
+    const first = Object.keys(emails)[0];
+    if (!me || !first) return jsonOut({ ok: false, error: 'Nothing to test with (needs an ALL recipient and at least one leader email).' });
+    GmailApp.sendEmail(me, '[TEST] ' + emails[first].subject, 'This email requires HTML support to view.', { htmlBody: emails[first].html });
+    return jsonOut({ ok: true, sent: [me + ' (copy of ' + first + "'s email)"], skipped: [] });
+  }
+  const covered = {};
+  list.forEach(([email, who]) => {
+    if (!who || who === 'ALL' || email.indexOf('EMAIL_HERE') === 0 || email.indexOf('@') < 0 || !emails[who]) return;
+    GmailApp.sendEmail(email, emails[who].subject, 'This email requires HTML support to view.', { htmlBody: emails[who].html });
+    sent.push(who + ' (' + email + ')');
+    covered[who] = true;
+  });
+  Object.keys(emails).forEach(who => { if (!covered[who]) skipped.push(who); });
+  return jsonOut({ ok: true, sent: sent, skipped: skipped });
+}
+
+function jsonOut(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }`;
   const script = `// Google Apps Script — forwards labeled Gmail reports to the site so
 // weekly reports upload themselves. Paste this whole file in at
@@ -9579,6 +9598,21 @@ export default function App() {
     });
   }, [currentUser]);
 
+  // "Finalize & email DLs" / "Send me a test first" (Goals tab, owner only).
+  const handleFinalizeGoals = useCallback(async (month, test) => {
+    const r = await finalizeGoals(currentUser.token, month, test);
+    if (!r.ok) {
+      showToast(`Goal emails not sent: ${r.error}`, 'error');
+      return;
+    }
+    const sent = r.sent?.length || 0;
+    const notes = [
+      r.skipped?.length ? `No email address for: ${r.skipped.join('; ')}` : '',
+      !test && r.withoutGoals?.length ? `No Sales goals yet (not emailed): ${r.withoutGoals.join(', ')}` : '',
+    ].filter(Boolean).join(' · ');
+    showToast(test ? `Test email sent (${r.sent?.join(', ') || 'no recipient'}).` : `Sent ${sent} DL goal email${sent === 1 ? '' : 's'}.${notes ? ` ${notes}` : ''}`, notes ? 'error' : undefined);
+  }, [currentUser]);
+
   const handleSaveManager = useCallback((storeCode, name) => {
     setManagers(prev => {
       const next = { ...prev };
@@ -10676,7 +10710,7 @@ export default function App() {
           />
         )}
         {tab === 'Goals' && (
-          <GoalsTab report={d.report} goals={d.goals} isOwner={currentUser.role === 'owner'} onSaveGoal={handleSaveGoal} onApplySalesGoals={handleApplySalesGoals} milestoneGoals={d.milestoneGoals} onSaveMilestoneGoal={handleSaveMilestoneGoal} onImportGoals={handleImportGoals} onImportColorAttachGoals={handleImportColorAttachGoals} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} />
+          <GoalsTab report={d.report} goals={d.goals} isOwner={currentUser.role === 'owner'} onSaveGoal={handleSaveGoal} onApplySalesGoals={handleApplySalesGoals} milestoneGoals={d.milestoneGoals} onSaveMilestoneGoal={handleSaveMilestoneGoal} onFinalize={handleFinalizeGoals} onImportGoals={handleImportGoals} onImportColorAttachGoals={handleImportColorAttachGoals} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} />
         )}
         {tab === 'Leases' && (
           <LeasesTab
@@ -10736,6 +10770,7 @@ export default function App() {
     </div>
   );
 }
+
 
 
 

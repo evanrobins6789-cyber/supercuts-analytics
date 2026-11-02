@@ -318,3 +318,47 @@ export function getStoreCutsPerDay(history, weeklyHistory, start, end) {
   return out;
 }
 export const cpdOf = entry => (entry && entry.days > 0 ? entry.cuts / entry.days : null);
+
+// ─── Monthly goals (Goals tab + api/finalize-goals.js) ──────────────────────
+// Shared so the site and the DL goals email show identical numbers.
+
+// "2026-11", +1 → "2026-12"; -12 → "2025-11".
+export function shiftMonthKey(mk, n) {
+  const [y, m] = mk.split('-').map(Number);
+  const d = new Date(y, m - 1 + n, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// Whole month, or through `todayISO` if the month isn't over yet.
+export function monthKeyRange(mk, todayISO) {
+  const [y, m] = mk.split('-').map(Number);
+  const last = `${mk}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+  return { start: `${mk}-01`, end: todayISO && last > todayISO ? todayISO : last };
+}
+
+// { [storeCode]: { cuts, cpd, sales, daily, weekly } } for one month.
+// Daily avg = sales ÷ days the store had cuts (same days CPD uses); weekly
+// avg = sales ÷ (calendar days in the range ÷ 7).
+export function monthlyReference(history, weeklyHistory, mk, todayISO) {
+  const { start, end } = monthKeyRange(mk, todayISO);
+  if (start > end) return {};
+  const calendarDays = Math.round((new Date(`${end}T00:00:00`) - new Date(`${start}T00:00:00`)) / 86400000) + 1;
+  const totals = getRangeTotals(history, weeklyHistory, start, end);
+  const cpd = getStoreCutsPerDay(history, weeklyHistory, start, end);
+  const out = {};
+  Object.entries(totals).forEach(([code, t]) => {
+    const sales = historyTotalsToReportShape(t).sales || 0;
+    const days = cpd[code]?.days || 0;
+    out[code] = { cuts: t.haircuts || 0, cpd: cpdOf(cpd[code]), sales, daily: days > 0 ? sales / days : null, weekly: calendarDays > 0 ? sales / (calendarDays / 7) : null };
+  });
+  return out;
+}
+
+// A monthly Sales goal per day and per week: goal ÷ calendar days in the
+// month, and goal ÷ (calendar days ÷ 7).
+export function salesGoalBreakdown(goal, mk) {
+  if (goal == null || goal === '' || isNaN(Number(goal))) return null;
+  const [y, m] = mk.split('-').map(Number);
+  const days = new Date(y, m, 0).getDate();
+  return { daily: Number(goal) / days, weekly: Number(goal) / (days / 7) };
+}

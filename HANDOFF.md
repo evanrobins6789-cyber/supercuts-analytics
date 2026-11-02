@@ -60,6 +60,24 @@
 - Confirm the Signature Service tab now shows 1016/$12,142.36 for Aug 1–9 (already corrected directly in Supabase, not just in code) — and if you have a cleaner source for the 1017/$12,154.36 figure you originally gave me, worth checking where that extra unit/$12 comes from.
 - None of the 2026-08-13 changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
 
+Last updated: 2026-11-02 (after midnight). **"Finalize & email DLs" button on Monthly Goals (leadership only).** Pushed to `main`. **It doesn't work until the user does the Apps Script web-app setup below.**
+- **What the user asked for**: a Finalize button that emails each DL their Sales goals for the month, with the previous-year and previous-month numbers, plus a reminder to set their other goals.
+- **Flow**: Goals tab → `finalizeGoals()` (`src/auth.js`, goes through `postWrite`, so Presenter Mode blocks it) → **`api/finalize-goals.js`**. That endpoint is owner-session only (403 otherwise). It loads `store_goals` plus history for the two reference months (`loadHistory` exported from `api/leaderboard-email.js`) and builds one HTML email per roster leader with `buildGoalEmails`:
+  - Store | `<Month>` Goal ($/day · $/wk) | same month last year (sales, $/day) | last month, plus a Total row.
+  - A gold Reminder box listing each store's still-blank Retail $ / Color $ / Bottles / Signature Service, plus an "Open the Goals tab" button.
+  - Leaders with no Sales goal on any store are skipped and reported.
+- **Sending**: the endpoint POSTs `{ secret, action: 'goals', test, emails: { [leaderName]: { subject, html } } }` to the Apps Script **web app** at env `GOALS_EMAIL_WEBAPP_URL`, using the same `LEADERBOARD_EMAIL_SECRET`. The script's new `doPost` sends each email to the RECIPIENTS entries mapped to that leader name, and returns `{ sent, skipped }`.
+- **"Send me a test first"**: sends one leader's email, marked [TEST], to the first `'ALL'` address in RECIPIENTS only (Evan's).
+- **User setup still needed**:
+  1. Add `doPost`/`jsonOut` to the Apps Script. It's in the Setup › Email Reports template, and the full script was given in chat.
+  2. Deploy it as a Web app (Execute as: Me, Who has access: Anyone).
+  3. Give the `/exec` URL so it can be saved as `GOALS_EMAIL_WEBAPP_URL` in Vercel. The Vercel MCP tools can do it, then redeploy.
+- **Refactor**: `shiftMonthKey`, `monthKeyRange`, `monthlyReference` and `salesGoalBreakdown` moved to `src/metrics.js` (taking `todayISO`). App.js imports them, and its `monthlyReference` wraps the shared one with today's date, so the Goals tab and the email can't drift.
+- **Verified**: build and no-undef lint clean.
+  - Built all 16 leaders' emails from the real `store_goals` (Nov goals = Oct + $2,000, not yet rounded) and real Nov 2025 / Oct 2026 history. Lisa's email lists 6 stores, a total of $151,230 ($5,041/day), and all 4 other goals still blank. About 10KB.
+  - jsdom: the Goals section still renders the same reference numbers, and both buttons call `onFinalize(month, test)`.
+  - **Not verified**: the endpoint's auth path or a real send through Apps Script. The web app doesn't exist yet.
+
 Last updated: 2026-11-02 (end of night). **Sales goals round to $500; Milestone column on Monthly Goals.** Pushed to `main`.
 - **Rounding**: the +$1k/2k/3k buttons now set `roundToNearest500(lastMonthSales + X)`. Hand-typed Sales goals are kept as typed.
 - **Existing November goals are not rounded**: all 59 `salesGoal:2026-11` values were saved by a button click before this change (e.g. 8150 = 40501). They get rounded when leadership clicks the same + button again. Store 8961 = 22000 may have been typed by hand, and a re-click would overwrite it.

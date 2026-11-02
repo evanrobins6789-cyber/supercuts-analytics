@@ -171,6 +171,12 @@ export function rosterLoginCounts(token) {
 
 // Employee points / "Tillie's Nest" shop — thin wrappers over api/points.js,
 // same postJson shape as the roster wrappers above.
+// Leadership's "Finalize & email DLs" (Goals tab → api/finalize-goals.js).
+// A write as far as presenter mode is concerned: it sends real email.
+export function finalizeGoals(token, month, test) {
+  return postWrite('/api/finalize-goals', { token, month, test: !!test });
+}
+
 export function pointsBalance(token) {
   return postRead('pointsBalance', '/api/points', { action: 'balance', token });
 }
