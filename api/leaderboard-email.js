@@ -28,7 +28,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { STORE_CODE_TO_NAME } from '../src/storeDirectory.js';
-import { getRangeTotals, historyTotalsToReportShape, getLastFullWeekRange, sortByMetric } from '../src/metrics.js';
+import { getRangeTotals, historyTotalsToReportShape, getLastFullWeekRange, sortByMetric, shiftYearISO } from '../src/metrics.js';
 
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY || '';
@@ -91,7 +91,7 @@ const NEWS_ACCENTS = [BRAND.navy2, BRAND.green, BRAND.gold, BRAND.red, BRAND.bro
 // the email client's own HTML parser resolves them to the glyph.
 const EMOJI = {
   megaphone: '&#x1F4E3;', calendar: '&#x1F4C5;', bags: '&#x1F6CD;&#xFE0F;',
-  palette: '&#x1F3A8;', haircut: '&#x1F487;',
+  palette: '&#x1F3A8;', haircut: '&#x1F487;', chart: '&#x1F4C8;',
 };
 
 const fmt$ = n => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -204,6 +204,48 @@ function eventsSection(events, todayISO) {
     <tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${cards}</table></td></tr>`;
 }
 
+// Last week vs the same dates last year (shiftYearISO, same as the Overview
+// tiles' YOY line). Like-for-like stores only: a store with no data in one
+// of the two weeks is left out of both sides, so a new or not-yet-imported
+// store can't inflate the change. Up is green, down is red. `yoy` is null
+// when no store has data in both years, and the section is left out.
+const YOY_METRICS = [
+  { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
+  { key: 'sales', label: 'Sales', fmt: fmt$ },
+];
+function buildYoy(totals, lyTotals) {
+  const codes = Object.keys(totals).filter(c => lyTotals[c]);
+  if (!codes.length) return null;
+  const sum = (src, key) => codes.reduce((acc, c) => acc + (historyTotalsToReportShape(src[c])[key] || 0), 0);
+  const metrics = {};
+  YOY_METRICS.forEach(m => { metrics[m.key] = { cur: sum(totals, m.key), ly: sum(lyTotals, m.key) }; });
+  return { metrics, storeCount: codes.length };
+}
+function yoyTile(metric, { cur, ly }) {
+  const diff = cur - ly;
+  const color = diff > 0 ? BRAND.green : diff < 0 ? BRAND.red : BRAND.inkSoft;
+  const arrow = diff > 0 ? '&#9650;' : diff < 0 ? '&#9660;' : '';
+  const sign = diff > 0 ? '+' : diff < 0 ? '&#8722;' : '';
+  const pct = ly ? `${sign}${Math.abs((diff / ly) * 100).toFixed(1)}%` : '';
+  return `
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${BRAND.card};border:1px solid ${BRAND.line};border-top:4px solid ${color};border-radius:6px;">
+      <tr><td style="padding:12px 14px;font-family:${FONT};text-align:center;">
+        <div style="font-size:11px;font-weight:700;letter-spacing:0.6px;color:${BRAND.inkSoft};text-transform:uppercase;">${metric.label}</div>
+        <div style="font-size:24px;font-weight:700;color:${BRAND.navy};margin-top:4px;">${metric.fmt(cur)}</div>
+        <div style="font-size:12px;color:${BRAND.inkSoft};margin-top:2px;">Last year: ${metric.fmt(ly)}</div>
+        <div style="font-size:14px;font-weight:700;color:${color};margin-top:8px;">${arrow} ${pct}${pct ? ' &middot; ' : ''}${sign}${metric.fmt(Math.abs(diff))}</div>
+      </td></tr>
+    </table>`;
+}
+function yoySection(yoy, lyRange) {
+  if (!yoy) return '';
+  const tiles = YOY_METRICS.map((m, i) => `<td valign="top" width="50%" style="${i ? 'padding-left:8px;' : 'padding-right:8px;'}">${yoyTile(m, yoy.metrics[m.key])}</td>`).join('');
+  return `
+    ${sectionBand(`${EMOJI.chart} This Week vs Last Year`, BRAND.navy)}
+    <tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>${tiles}</tr></table></td></tr>
+    <tr><td style="padding:8px 2px 0;font-family:${FONT};font-size:11.5px;color:${BRAND.inkSoft};text-align:center;">Compared with ${fmtDateLong(lyRange.start)} &ndash; ${fmtDateLong(lyRange.end)}, counting only the ${yoy.storeCount} store${yoy.storeCount === 1 ? '' : 's'} with data in both years.</td></tr>`;
+}
+
 // One entry per metric this email covers — add another here (matching a key
 // historyTotalsToReportShape produces) to include it in a future round.
 const METRICS = [
@@ -238,7 +280,7 @@ function rankTable(rows, metric, title, tone) {
     </table>`;
 }
 
-function buildEmail(storeRows, range, news, events, todayISO, siteUrl) {
+function buildEmail(storeRows, range, news, events, todayISO, siteUrl, yoy = null, lyRange = null) {
   const subject = `Supercuts Weekly Recap — Retail, Color, SS (${range.start} to ${range.end})`;
   const visitButton = siteUrl ? `
     <table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px auto 0;">
@@ -276,6 +318,7 @@ function buildEmail(storeRows, range, news, events, todayISO, siteUrl) {
         <tr>
           <td style="padding:20px 24px 24px;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+              ${yoySection(yoy, lyRange)}
               ${newsSection(news, range)}
               ${eventsSection(events, todayISO)}
               ${leaderboardSections}
@@ -297,7 +340,7 @@ function buildEmail(storeRows, range, news, events, todayISO, siteUrl) {
 // there's no way to render a real send in this sandboxed environment (no
 // local Supabase credentials), so this is the seam that makes "does the
 // email actually look right" checkable at all without a live send.
-export { buildEmail };
+export { buildEmail, buildYoy };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -336,7 +379,9 @@ export default async function handler(req, res) {
     // *.vercel.app, whichever the site is actually running on).
     const proto = (req.headers['x-forwarded-proto'] || 'https').split(',')[0];
     const siteUrl = req.headers.host ? `${proto}://${req.headers.host}` : null;
-    const { subject, html } = buildEmail(storeRows, range, news, events, todayISO, siteUrl);
+    const lyRange = { start: shiftYearISO(range.start, -1), end: shiftYearISO(range.end, -1) };
+    const yoy = buildYoy(totals, getRangeTotals(history, weeklyHistory, lyRange.start, lyRange.end));
+    const { subject, html } = buildEmail(storeRows, range, news, events, todayISO, siteUrl, yoy, lyRange);
     res.status(200).json({ ok: true, subject, html, storeCount: storeRows.length });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
