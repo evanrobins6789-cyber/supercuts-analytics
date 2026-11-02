@@ -28,6 +28,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { STORE_CODE_TO_NAME } from '../src/storeDirectory.js';
+import { LEADER_ROSTER_SECTIONS } from '../src/leaderRoster.js';
 import { getRangeTotals, historyTotalsToReportShape, getLastFullWeekRange, sortByMetric, shiftYearISO } from '../src/metrics.js';
 
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || '';
@@ -207,43 +208,112 @@ function eventsSection(events, todayISO) {
 // Last week vs the same dates last year (shiftYearISO, same as the Overview
 // tiles' YOY line). Like-for-like stores only: a store with no data in one
 // of the two weeks is left out of both sides, so a new or not-yet-imported
-// store can't inflate the change. Up is green, down is red. `yoy` is null
-// when no store has data in both years, and the section is left out.
+// store can't inflate a total. Up is green, down is red. `buildYoy` returns
+// null when no store has data in both years, and the section is left out.
+//
+// The section comes in three versions; the Apps Script in Setup > Email
+// Reports picks one per recipient:
+//   - company totals only (`html`, the default),
+//   - company totals plus every DL/AS's store list (`allHtml`, the owner),
+//   - one leader's own stores only (`byLeader[name]`, LEADER_ROSTER_SECTIONS).
 const YOY_METRICS = [
   { key: 'haircuts', label: 'Cuts', fmt: fmtInt },
   { key: 'sales', label: 'Sales', fmt: fmt$ },
 ];
-function buildYoy(totals, lyTotals) {
-  const codes = Object.keys(totals).filter(c => lyTotals[c]);
+const metricOf = (t, key) => (t ? historyTotalsToReportShape(t)[key] || 0 : 0);
+function buildYoy(totals, lyTotals, onlyCodes = null) {
+  const codes = (onlyCodes || Object.keys(totals)).filter(c => totals[c] && lyTotals[c]);
   if (!codes.length) return null;
-  const sum = (src, key) => codes.reduce((acc, c) => acc + (historyTotalsToReportShape(src[c])[key] || 0), 0);
+  const sum = (src, key) => codes.reduce((acc, c) => acc + metricOf(src[c], key), 0);
   const metrics = {};
   YOY_METRICS.forEach(m => { metrics[m.key] = { cur: sum(totals, m.key), ly: sum(lyTotals, m.key) }; });
   return { metrics, storeCount: codes.length };
 }
-function yoyTile(metric, { cur, ly }) {
+function yoyChange(metric, cur, ly) {
   const diff = cur - ly;
   const color = diff > 0 ? BRAND.green : diff < 0 ? BRAND.red : BRAND.inkSoft;
   const arrow = diff > 0 ? '&#9650;' : diff < 0 ? '&#9660;' : '';
   const sign = diff > 0 ? '+' : diff < 0 ? '&#8722;' : '';
   const pct = ly ? `${sign}${Math.abs((diff / ly) * 100).toFixed(1)}%` : '';
+  return { color, text: `${arrow} ${pct}${pct ? ' &middot; ' : ''}${sign}${metric.fmt(Math.abs(diff))}` };
+}
+function yoyTile(metric, { cur, ly }) {
+  const ch = yoyChange(metric, cur, ly);
   return `
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${BRAND.card};border:1px solid ${BRAND.line};border-top:4px solid ${color};border-radius:6px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${BRAND.card};border:1px solid ${BRAND.line};border-top:4px solid ${ch.color};border-radius:6px;">
       <tr><td style="padding:12px 14px;font-family:${FONT};text-align:center;">
         <div style="font-size:11px;font-weight:700;letter-spacing:0.6px;color:${BRAND.inkSoft};text-transform:uppercase;">${metric.label}</div>
         <div style="font-size:24px;font-weight:700;color:${BRAND.navy};margin-top:4px;">${metric.fmt(cur)}</div>
         <div style="font-size:12px;color:${BRAND.inkSoft};margin-top:2px;">Last year: ${metric.fmt(ly)}</div>
-        <div style="font-size:14px;font-weight:700;color:${color};margin-top:8px;">${arrow} ${pct}${pct ? ' &middot; ' : ''}${sign}${metric.fmt(Math.abs(diff))}</div>
+        <div style="font-size:14px;font-weight:700;color:${ch.color};margin-top:8px;">${ch.text}</div>
       </td></tr>
     </table>`;
 }
-function yoySection(yoy, lyRange) {
-  if (!yoy) return '';
+function yoyTiles(yoy) {
   const tiles = YOY_METRICS.map((m, i) => `<td valign="top" width="50%" style="${i ? 'padding-left:8px;' : 'padding-right:8px;'}">${yoyTile(m, yoy.metrics[m.key])}</td>`).join('');
+  return `<tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>${tiles}</tr></table></td></tr>`;
+}
+function yoyNote(text) {
+  return `<tr><td style="padding:8px 2px 0;font-family:${FONT};font-size:11.5px;color:${BRAND.inkSoft};text-align:center;">${text}</td></tr>`;
+}
+
+// One table cell: the number, the colored change, and last year's number.
+// A store missing either week gets a gray note instead of a change, and is
+// left out of its group's Total row.
+function yoyCell(metric, cur, ly) {
+  const ch = yoyChange(metric, cur, ly);
+  return `<div style="font-weight:700;color:${BRAND.navy};">${metric.fmt(cur)}</div><div style="font-weight:700;color:${ch.color};font-size:11.5px;">${ch.text}</div><div style="color:${BRAND.inkSoft};font-size:11px;">LY ${metric.fmt(ly)}</div>`;
+}
+function storeYoyCell(metric, cur, ly) {
+  if (!cur) return `<span style="color:${BRAND.inkSoft};font-size:11.5px;">No data this week</span>`;
+  if (!ly) return `<div style="font-weight:700;color:${BRAND.navy};">${metric.fmt(metricOf(cur, metric.key))}</div><div style="color:${BRAND.inkSoft};font-size:11px;">No data last year</div>`;
+  return yoyCell(metric, metricOf(cur, metric.key), metricOf(ly, metric.key));
+}
+function storeYoyTable(title, codes, totals, lyTotals) {
+  const td = `padding:7px 8px;font-family:${FONT};font-size:12.5px;vertical-align:top;`;
+  const th = `padding:8px 10px;font-family:${FONT};font-size:12px;font-weight:700;color:#fff;`;
+  const storeName = code => STORE_CODE_TO_NAME[code] || `Store ${code}`;
+  const rows = [...codes].sort((a, b) => storeName(a).localeCompare(storeName(b))).map((code, i) => `
+    <tr style="background:${i % 2 ? BRAND.paper : BRAND.card};">
+      <td style="${td}color:${BRAND.navy};">${escapeHtml(storeName(code))}</td>
+      ${YOY_METRICS.map(m => `<td style="${td}text-align:right;">${storeYoyCell(m, totals[code], lyTotals[code])}</td>`).join('')}
+    </tr>`).join('');
+  const yoy = buildYoy(totals, lyTotals, codes);
+  const totalRow = yoy ? `
+    <tr style="background:${BRAND.line};">
+      <td style="${td}font-weight:700;color:${BRAND.navy};">Total${yoy.storeCount < codes.length ? ` (${yoy.storeCount} of ${codes.length})` : ''}</td>
+      ${YOY_METRICS.map(m => `<td style="${td}text-align:right;">${yoyCell(m, yoy.metrics[m.key].cur, yoy.metrics[m.key].ly)}</td>`).join('')}
+    </tr>` : '';
   return `
-    ${sectionBand(`${EMOJI.chart} This Week vs Last Year`, BRAND.navy)}
-    <tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>${tiles}</tr></table></td></tr>
-    <tr><td style="padding:8px 2px 0;font-family:${FONT};font-size:11.5px;color:${BRAND.inkSoft};text-align:center;">Compared with ${fmtDateLong(lyRange.start)} &ndash; ${fmtDateLong(lyRange.end)}, counting only the ${yoy.storeCount} store${yoy.storeCount === 1 ? '' : 's'} with data in both years.</td></tr>`;
+    <tr><td style="padding:12px 0 0;">
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;border:1px solid ${BRAND.line};">
+        <tr style="background:${BRAND.navy2};">
+          <td style="${th}">${escapeHtml(title)}</td>
+          ${YOY_METRICS.map(m => `<td style="${th}text-align:right;">${m.label}</td>`).join('')}
+        </tr>
+        ${rows}${totalRow}
+      </table>
+    </td></tr>`;
+}
+
+// leaders: [{ name, storeCodes }], each listed store by store under its own
+// header. showCompany puts the company-wide tiles on top (default and owner
+// versions); without it, one leader's own group totals go there instead.
+function yoySection({ totals, lyTotals, lyRange, leaders = [], showCompany = true }) {
+  const companyYoy = buildYoy(totals, lyTotals);
+  if (!companyYoy) return '';
+  const lyDates = `${fmtDateLong(lyRange.start)} &ndash; ${fmtDateLong(lyRange.end)}`;
+  const parts = [sectionBand(`${EMOJI.chart} This Week vs Last Year`, BRAND.navy)];
+  if (showCompany) {
+    parts.push(yoyTiles(companyYoy));
+    parts.push(yoyNote(`Compared with ${lyDates}, counting only the ${companyYoy.storeCount} store${companyYoy.storeCount === 1 ? '' : 's'} with data in both years.`));
+  } else {
+    const own = buildYoy(totals, lyTotals, leaders.flatMap(l => l.storeCodes));
+    if (own) parts.push(yoyTiles(own));
+    parts.push(yoyNote(`Your stores, compared with ${lyDates}. Totals count only stores with data in both years.`));
+  }
+  leaders.forEach(l => parts.push(storeYoyTable(showCompany ? l.name : 'Your Stores', l.storeCodes, totals, lyTotals)));
+  return parts.join('');
 }
 
 // One entry per metric this email covers — add another here (matching a key
@@ -280,7 +350,7 @@ function rankTable(rows, metric, title, tone) {
     </table>`;
 }
 
-function buildEmail(storeRows, range, news, events, todayISO, siteUrl, yoy = null, lyRange = null) {
+function buildEmail(storeRows, range, news, events, todayISO, siteUrl, yoyHtml = '') {
   const subject = `Supercuts Weekly Recap — Retail, Color, SS (${range.start} to ${range.end})`;
   const visitButton = siteUrl ? `
     <table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px auto 0;">
@@ -318,7 +388,7 @@ function buildEmail(storeRows, range, news, events, todayISO, siteUrl, yoy = nul
         <tr>
           <td style="padding:20px 24px 24px;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-              ${yoySection(yoy, lyRange)}
+              ${yoyHtml}
               ${newsSection(news, range)}
               ${eventsSection(events, todayISO)}
               ${leaderboardSections}
@@ -340,7 +410,7 @@ function buildEmail(storeRows, range, news, events, todayISO, siteUrl, yoy = nul
 // there's no way to render a real send in this sandboxed environment (no
 // local Supabase credentials), so this is the seam that makes "does the
 // email actually look right" checkable at all without a live send.
-export { buildEmail, buildYoy };
+export { buildEmail, buildYoy, yoySection };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -380,9 +450,17 @@ export default async function handler(req, res) {
     const proto = (req.headers['x-forwarded-proto'] || 'https').split(',')[0];
     const siteUrl = req.headers.host ? `${proto}://${req.headers.host}` : null;
     const lyRange = { start: shiftYearISO(range.start, -1), end: shiftYearISO(range.end, -1) };
-    const yoy = buildYoy(totals, getRangeTotals(history, weeklyHistory, lyRange.start, lyRange.end));
-    const { subject, html } = buildEmail(storeRows, range, news, events, todayISO, siteUrl, yoy, lyRange);
-    res.status(200).json({ ok: true, subject, html, storeCount: storeRows.length });
+    const yoyBase = { totals, lyTotals: getRangeTotals(history, weeklyHistory, lyRange.start, lyRange.end), lyRange };
+    const leaders = LEADER_ROSTER_SECTIONS.flatMap(sec => sec.leaders);
+    // Stores no DL/AS covers still get listed in the owner's copy.
+    const assigned = new Set(leaders.flatMap(l => l.storeCodes));
+    const unassigned = Object.keys(totals).filter(c => !assigned.has(c));
+    const allGroups = unassigned.length ? [...leaders, { name: 'Other Stores', storeCodes: unassigned }] : leaders;
+    const render = yoyHtml => buildEmail(storeRows, range, news, events, todayISO, siteUrl, yoyHtml).html;
+    const { subject, html } = buildEmail(storeRows, range, news, events, todayISO, siteUrl, yoySection(yoyBase));
+    const allHtml = render(yoySection({ ...yoyBase, leaders: allGroups }));
+    const byLeader = Object.fromEntries(leaders.map(l => [l.name, render(yoySection({ ...yoyBase, leaders: [l], showCompany: false }))]));
+    res.status(200).json({ ok: true, subject, html, allHtml, byLeader, storeCount: storeRows.length });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }

@@ -7560,7 +7560,15 @@ function EmailReportsSetupTab() {
 
 const ENDPOINT_URL = '${leaderboardUrl}';
 const SHARED_SECRET = 'PASTE_YOUR_SECRET_HERE'; // must exactly match LEADERBOARD_EMAIL_SECRET in Vercel
-const RECIPIENTS = ['someone@example.com', 'someoneelse@example.com']; // add everyone who should get this email
+// Everyone who gets this email, and which version of the "This Week vs Last
+// Year" section they see:
+//   ''              company totals only
+//   'ALL'           company totals plus every DL/AS's stores, store by store
+//   'Lisa Hair'     only that leader's stores (spelled exactly as on the DL tab)
+const RECIPIENTS = {
+  'owner@example.com': 'ALL',
+  'lisa@example.com': 'Lisa Hair',
+};
 
 function sendWeeklyLeaderboard() {
   const response = UrlFetchApp.fetch(ENDPOINT_URL, {
@@ -7575,7 +7583,18 @@ function sendWeeklyLeaderboard() {
     return;
   }
   const data = JSON.parse(response.getContentText());
-  GmailApp.sendEmail(RECIPIENTS.join(','), data.subject, 'This email requires HTML support to view.', { htmlBody: data.html });
+  // An older script's plain list of addresses still works: everyone gets the company version.
+  const list = Array.isArray(RECIPIENTS) ? RECIPIENTS.map(email => [email, '']) : Object.entries(RECIPIENTS);
+  const skipped = [];
+  list.forEach(([email, who]) => {
+    const html = !who ? data.html : who === 'ALL' ? data.allHtml : (data.byLeader || {})[who];
+    if (!html) { skipped.push(email + ' (no leader named "' + who + '")'); return; }
+    GmailApp.sendEmail(email, data.subject, 'This email requires HTML support to view.', { htmlBody: html });
+  });
+  if (skipped.length) {
+    MailApp.sendEmail(Session.getActiveUser().getEmail(), 'Weekly Leaderboard: some recipients were skipped',
+      skipped.join('\\n') + '\\n\\nLeader names it knows: ' + Object.keys(data.byLeader || {}).join(', '));
+  }
 }`;
   const script = `// Google Apps Script — forwards labeled Gmail reports to the site so
 // weekly reports upload themselves. Paste this whole file in at
