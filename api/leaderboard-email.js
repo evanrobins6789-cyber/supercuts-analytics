@@ -29,7 +29,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { STORE_CODE_TO_NAME } from '../src/storeDirectory.js';
 import { LEADER_ROSTER_SECTIONS } from '../src/leaderRoster.js';
-import { getRangeTotals, historyTotalsToReportShape, getLastFullWeekRange, sortByMetric, shiftYearISO } from '../src/metrics.js';
+import { getRangeTotals, historyTotalsToReportShape, getLastFullWeekRange, sortByMetric, shiftYearISO, addDaysISO } from '../src/metrics.js';
 
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY || '';
@@ -57,10 +57,24 @@ async function loadChunked(prefix) {
   return rows.map(r => ({ key: r.report_id, payload: r.payload }));
 }
 
-async function loadHistory() {
+// Only the months the email's date ranges touch (plus the month before each
+// range start, since a weekly chunk is keyed by its week's start date).
+// Loading every month in one query hit Supabase's statement timeout once
+// 2025 history was imported (2026-11-02).
+function monthsFor(ranges) {
+  const months = new Set();
+  ranges.forEach(({ start, end }) => {
+    for (let d = addDaysISO(start, -7); d <= end; d = addDaysISO(d, 1)) months.add(d.slice(0, 7));
+  });
+  return [...months];
+}
+
+async function loadHistory(ranges) {
+  const months = monthsFor(ranges);
+  const chunksFor = async prefix => (await Promise.all(months.map(m => loadChunked(`${prefix}${m}`)))).flat();
   const [legacyDaily, legacyWeekly, dailyChunks, weeklyChunks] = await Promise.all([
     loadRow('daily_history'), loadRow('weekly_history'),
-    loadChunked('daily_history_'), loadChunked('weekly_history_'),
+    chunksFor('daily_history_'), chunksFor('weekly_history_'),
   ]);
   const daySplitPriority = key => (key.includes('__') ? 1 : 0);
   const mergedDaily = {};
@@ -457,10 +471,11 @@ export default async function handler(req, res) {
   }
 
   try {
-    const [{ history, weeklyHistory }, news, events] = await Promise.all([
-      loadHistory(), loadRow('homepage_news'), loadRow('homepage_events'),
-    ]);
     const range = getLastFullWeekRange();
+    const lyRange = { start: shiftYearISO(range.start, -1), end: shiftYearISO(range.end, -1) };
+    const [{ history, weeklyHistory }, news, events] = await Promise.all([
+      loadHistory([range, lyRange]), loadRow('homepage_news'), loadRow('homepage_events'),
+    ]);
     const todayISO = new Date().toISOString().slice(0, 10);
     const totals = getRangeTotals(history, weeklyHistory, range.start, range.end);
     const storeRows = Object.entries(totals).map(([code, t]) => ({
@@ -472,7 +487,6 @@ export default async function handler(req, res) {
     // *.vercel.app, whichever the site is actually running on).
     const proto = (req.headers['x-forwarded-proto'] || 'https').split(',')[0];
     const siteUrl = req.headers.host ? `${proto}://${req.headers.host}` : null;
-    const lyRange = { start: shiftYearISO(range.start, -1), end: shiftYearISO(range.end, -1) };
     const yoyBase = { totals, lyTotals: getRangeTotals(history, weeklyHistory, lyRange.start, lyRange.end), range, lyRange };
     const leaders = LEADER_ROSTER_SECTIONS.flatMap(sec => sec.leaders);
     // Stores no DL/AS covers still get listed in the owner's copy.
