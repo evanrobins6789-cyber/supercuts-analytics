@@ -3314,22 +3314,28 @@ function FocusStylistTab({ focusStylists, history, weeklyHistory, onSaveFocus, i
   const entries = useMemo(() => focusEntriesList(focusStylists), [focusStylists]);
   // The current month is always offered (even before anyone is picked), plus every month that has a list.
   const monthOptions = useMemo(() => [...new Set([thisMonth, ...entries.map(e => e.month).filter(Boolean)])].sort().reverse(), [entries, thisMonth]);
-  // Actuals for the whole selected month (month-to-date for the current one).
-  const range = useMemo(() => {
+  // Actuals for the whole selected month (month-to-date for the current
+  // one), plus the whole month before it for the comparison columns.
+  const prevMonth = useMemo(() => {
     const [y, m] = month.split('-').map(Number);
+    return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+  }, [month]);
+  const monthRange = mk => {
+    const [y, m] = mk.split('-').map(Number);
     const lastDay = new Date(y, m, 0).getDate();
-    return { start: `${month}-01`, end: month === thisMonth ? getCurrentMonthRange().end : `${month}-${String(lastDay).padStart(2, '0')}` };
-  }, [month, thisMonth]);
-
-  // { [storeCode]: Map(focusKey → employee row) } for the actual TSTH/CPH.
-  const employeesByStore = useMemo(() => {
+    return { start: `${mk}-01`, end: mk === thisMonth ? getCurrentMonthRange().end : `${mk}-${String(lastDay).padStart(2, '0')}` };
+  };
+  // { [storeCode]: Map(focusKey → employee row) } for one month's TSTH/CPH.
+  const employeesFor = mk => {
+    const { start, end } = monthRange(mk);
     const out = {};
-    const totals = getRangeTotals(history, weeklyHistory, range.start, range.end);
-    Object.entries(totals).forEach(([code, t]) => {
+    Object.entries(getRangeTotals(history, weeklyHistory, start, end)).forEach(([code, t]) => {
       out[code] = new Map((historyTotalsToReportShape(t).employees || []).map(e => [focusKey(e.name), e]));
     });
     return out;
-  }, [history, weeklyHistory, range.start, range.end]);
+  };
+  const employeesByStore = useMemo(() => employeesFor(month), [history, weeklyHistory, month, thisMonth]);
+  const prevEmployeesByStore = useMemo(() => employeesFor(prevMonth), [history, weeklyHistory, prevMonth, thisMonth]);
 
   const groups = useMemo(() => {
     const leaderOrder = leaderSections().flatMap(sec => sec.leaders.map(l => l.name));
@@ -3339,19 +3345,33 @@ function FocusStylistTab({ focusStylists, history, weeklyHistory, onSaveFocus, i
       const groupName = leader?.leaderName || 'No DL assigned';
       if (!byLeader[groupName]) byLeader[groupName] = { name: groupName, role: leader?.role || '', rows: [] };
       const actual = employeesByStore[entry.code]?.get(focusKey(entry.name)) || null;
-      byLeader[groupName].rows.push({ ...entry, storeName: STORE_CODE_TO_NAME[entry.code] || `Store ${entry.code}`, actual });
+      const prev = prevEmployeesByStore[entry.code]?.get(focusKey(entry.name)) || null;
+      byLeader[groupName].rows.push({ ...entry, storeName: STORE_CODE_TO_NAME[entry.code] || `Store ${entry.code}`, actual, prev });
     });
     const rank = name => { const i = leaderOrder.indexOf(name); return i === -1 ? leaderOrder.length : i; };
     return Object.values(byLeader)
       .sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name))
       .map(g => ({ ...g, rows: g.rows.sort((a, b) => a.storeName.localeCompare(b.storeName) || a.name.localeCompare(b.name)) }));
-  }, [entries, month, employeesByStore]);
+  }, [entries, month, employeesByStore, prevEmployeesByStore]);
 
   const total = groups.reduce((n, g) => n + g.rows.length, 0);
-  const vsGoal = (actual, goal, fmt) => {
+  const shortMonth = mk => MONTH_NAMES[Number(mk.split('-')[1]) - 1].slice(0, 3);
+  // This month's number, green/red vs goal, with the change from last month under it.
+  const vsGoal = (actual, goal, prev, fmt) => {
     if (actual == null) return <span className="focus-none">no data</span>;
-    return <span className={actual >= goal ? 'focus-hit' : 'focus-miss'}>{fmt(actual)}</span>;
+    const diff = prev != null ? actual - prev : null;
+    return (
+      <>
+        <span className={actual >= goal ? 'focus-hit' : 'focus-miss'}>{fmt(actual)}</span>
+        {diff != null && (
+          <span className={`focus-change ${diff > 0 ? 'focus-change--up' : diff < 0 ? 'focus-change--down' : ''}`}>
+            {diff > 0 ? '▲ +' : diff < 0 ? '▼ −' : ''}{fmt(Math.abs(diff))} vs {shortMonth(prevMonth)}
+          </span>
+        )}
+      </>
+    );
   };
+  const prevCell = (value, fmt) => (value == null ? <span className="focus-none">no data</span> : <span className="focus-prev">{fmt(value)}</span>);
 
   return (
     <div className="tab-content">
@@ -3362,14 +3382,14 @@ function FocusStylistTab({ focusStylists, history, weeklyHistory, onSaveFocus, i
         </select>
       </div>
       <p className="section-hint">
-        {isOwner ? 'Every focus stylist, grouped by DL.' : 'Your focus stylists.'} A focus lasts for the month. Actual TSTH and CPH are {month === thisMonth ? 'month-to-date' : `for all of ${fmtMonthLong(month)}`}: green means at or above goal, red means below.{month === thisMonth ? ' Add stylists with the FOCUS button next to their name on the Overview tab.' : ''}
+        {isOwner ? 'Every focus stylist, grouped by DL.' : 'Your focus stylists.'} A focus lasts for the month. {fmtMonthLong(month)} TSTH and CPH are {month === thisMonth ? 'month-to-date' : 'for the whole month'}: green means at or above goal, red means below, and the line under it is the change from {fmtMonthLong(prevMonth)}.{month === thisMonth ? ' Add stylists with the FOCUS button next to their name on the Overview tab.' : ''}
       </p>
       {!total && (
         <div className="empty-state">
           <p className="empty-title">No focus stylists for {fmtMonthLong(month)}</p>
           {month === thisMonth && <p>Open a store on the Overview tab and click FOCUS next to a stylist's name.</p>}
         </div>
-      )}}
+      )}
       <div className="dl-list">
         {groups.map(g => (
           <div key={g.name} className="dl-card">
@@ -3387,9 +3407,11 @@ function FocusStylistTab({ focusStylists, history, weeklyHistory, onSaveFocus, i
                     <th className="ledger-name-col">Stylist</th>
                     <th className="ledger-text-col">Store</th>
                     <th>TSTH Goal</th>
-                    <th>TSTH Actual</th>
+                    <th>TSTH {shortMonth(prevMonth)}</th>
+                    <th>TSTH {shortMonth(month)}</th>
                     <th>CPH Goal</th>
-                    <th>CPH Actual</th>
+                    <th>CPH {shortMonth(prevMonth)}</th>
+                    <th>CPH {shortMonth(month)}</th>
                     <th className="ledger-text-col">Added</th>
                     <th></th>
                   </tr>
@@ -3400,10 +3422,12 @@ function FocusStylistTab({ focusStylists, history, weeklyHistory, onSaveFocus, i
                       <td className="ledger-name-col">{r.name}</td>
                       <td className="ledger-text-col">{r.storeName}</td>
                       <td>{fmtRate(r.tsthGoal)}</td>
-                      <td>{vsGoal(r.actual?.tsth, r.tsthGoal, fmtRate)}</td>
+                      <td>{prevCell(r.prev?.tsth, fmtRate)}</td>
+                      <td>{vsGoal(r.actual?.tsth, r.tsthGoal, r.prev?.tsth, fmtRate)}</td>
                       <td>{fmtNum(r.cphGoal, 2)}</td>
-                      <td>{vsGoal(r.actual?.cph, r.cphGoal, n => fmtNum(n, 2))}</td>
-                      <td className="ledger-text-col focus-added">{r.addedAt ? fmtDateShort(r.addedAt) : ''}{r.addedBy ? ` · ${r.addedBy}` : ''}</td>
+                      <td>{prevCell(r.prev?.cph, n => fmtNum(n, 2))}</td>
+                      <td>{vsGoal(r.actual?.cph, r.cphGoal, r.prev?.cph, n => fmtNum(n, 2))}</td>
+                      <td className="ledger-text-col focus-added">{r.addedAt ? `${shortMonth(r.addedAt.slice(0, 7))} ${Number(r.addedAt.slice(8, 10))}` : ''}{r.addedBy ? ` · ${r.addedBy}` : ''}</td>
                       <td><button type="button" className="focus-btn focus-btn--on" onClick={() => setEditTarget({ code: r.code, storeName: r.storeName, name: r.name, tsth: r.actual?.tsth, cph: r.actual?.cph, entryKey: r.entryKey, month: r.month })}>Edit</button></td>
                     </tr>
                   ))}
@@ -10375,3 +10399,4 @@ export default function App() {
     </div>
   );
 }
+

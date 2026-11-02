@@ -493,6 +493,10 @@
 .focus-miss { color: var(--red); font-weight: 700; }
 .focus-none { color: var(--ink-soft); font-size: 11px; }
 .focus-added { font-size: 11px; color: var(--ink-soft); white-space: nowrap; }
+.focus-prev { color: var(--ink-soft); }
+.focus-change { display: block; font-size: 10px; font-weight: 600; color: var(--ink-soft); white-space: nowrap; }
+.focus-change--up { color: var(--green); }
+.focus-change--down { color: var(--red); }
 .focus-month-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .focus-month-bar label { font-size: 12px; font-weight: 600; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.04em; }
 .focus-month-select { width: auto; min-width: 220px; margin-bottom: 0; background: var(--card); }
