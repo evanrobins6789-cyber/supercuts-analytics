@@ -156,6 +156,12 @@ export default async function handler(req, res) {
         res.status(400).json({ error: `"${key}" does not support scoped patch writes.` });
         return;
       }
+      // Milestone goals stay put until leadership changes them (Setup >
+      // Milestone Goals, and the Milestone column on the Goals tab).
+      if (key === 'milestone_goals' && employee.role !== 'owner') {
+        res.status(403).json({ error: 'Only leadership can change milestone goals.' });
+        return;
+      }
       if (key === 'focus_stylists' && !FOCUS_ROLES.has(employee.role)) {
         res.status(403).json({ error: 'Only District Leaders and leadership can set focus stylists.' });
         return;

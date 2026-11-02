@@ -502,6 +502,9 @@
 .monthly-goals-table .mg-goal-col { background: #FFF8F8; }
 .monthly-goals-table tr.mg-dl-row td { background: var(--paper); font-family: 'Barlow Condensed', sans-serif; font-size: 14px; font-weight: 600; color: var(--navy); padding-top: 8px; padding-bottom: 6px; }
 .standing-goals-title { margin: 6px 0 2px; }
+.monthly-goals-table th.mg-milestone-group { background: var(--gold); vertical-align: middle; }
+.mg-milestone-sub { display: block; font-size: 9.5px; font-weight: 500; opacity: 0.9; text-transform: none; }
+.monthly-goals-table .mg-milestone-col { background: #FBF6E6; border-left: 2px solid var(--line); }
 .mg-breakdown { display: block; font-size: 10px; color: var(--ink-soft); white-space: nowrap; margin-top: 3px; }
 .mg-readonly { font-weight: 600; color: var(--navy); }
 .mg-bump-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 6px 0 4px; }

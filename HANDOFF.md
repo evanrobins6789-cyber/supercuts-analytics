@@ -60,6 +60,13 @@
 - Confirm the Signature Service tab now shows 1016/$12,142.36 for Aug 1–9 (already corrected directly in Supabase, not just in code) — and if you have a cleaner source for the 1017/$12,154.36 figure you originally gave me, worth checking where that extra unit/$12 comes from.
 - None of the 2026-08-13 changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
 
+Last updated: 2026-11-02 (end of night). **Sales goals round to $500; Milestone column on Monthly Goals.** Pushed to `main`.
+- **Rounding**: the +$1k/2k/3k buttons now set `roundToNearest500(lastMonthSales + X)`. Hand-typed Sales goals are kept as typed.
+- **Existing November goals are not rounded**: all 59 `salesGoal:2026-11` values were saved by a button click before this change (e.g. 8150 = 40501). They get rounded when leadership clicks the same + button again. Store 8961 = 22000 may have been typed by hand, and a re-click would overwrite it.
+- **Milestone column**: this is the **existing** `milestone_goals[code].milestone` (the standing stretch goal from Setup › Milestone Goals that feeds the DL/Homepage thermometers; 59 stores already have values), shown as a gold "Milestone · every month" column. It's editable by the owner via `onSaveMilestoneGoal` and read-only for DLs. It's the same value as Setup, so there's no second copy. The `goal` half of milestone_goals isn't shown here.
+- **Server**: `milestone_goals` writes are now **owner-only** (403 for anyone else). Before, a DL could patch their own stores at the API level, though the only UI for it was owner-only Setup.
+- **Verified**: build clean. jsdom with real October data: +$1,000 gives Bensalem 15,500 and East Windsor 46,500. Milestone shows as an input for the owner (save → `['80147','milestone',50000]`) and as read-only text for a DL. Server mock: owner edits, DL 403 with the value unchanged, DL can still read. Earlier goal (6) and focus (13) checks still pass.
+
 Last updated: 2026-11-02 (latest). **Tabs now compare actuals against the Monthly Goals.** Pushed to `main`.
 - **`goalForRange(goals, code, field, start, end)`** (next to `monthlyGoalKey`): when every month the viewed range touches has a `<field>:YYYY-MM` goal, it returns those goals **scaled to the days shown** (`{ value, monthly: true }`). A week of October = 7/31 of October's goal, and month-to-date = days so far ÷ days in month. Otherwise it falls back to the standing `goals[code][field]`, unscaled, as before. `goalSourceNote()` prints a hint line on each tab when monthly goals are in use.
 - **Overview**: the store-card Sales Goal / vs Goal use `goalForRange(…'salesGoal')`.
