@@ -5083,7 +5083,7 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
   };
   const refCells = (ref, code) => MONTHLY_REF_METRICS.map((m, i) => {
     const v = ref[code]?.[m.key];
-    return <td key={m.key} className={i === 0 ? 'mg-first' : ''}>{v == null ? '—' : m.fmt(v)}</td>;
+    return <td key={m.key} className={`mg-ref${i === 0 ? ' mg-first' : ''}`}>{v == null ? '—' : m.fmt(v)}</td>;
   });
 
   // Leadership's +$ buttons: every store's Sales goal for the picked month
@@ -5173,7 +5173,9 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
       <p className="section-hint">
         Goals for {fmtMonthLong(month)}, next to the same month last year ({fmtMonthLong(lyMonth)}) and last month ({fmtMonthLong(prevMonth)}{prevIsPartial ? ', so far' : ''}). {isOwner ? 'Sales goals are set by leadership: the buttons above round to the nearest $500, or type any store by hand.' : 'Sales goals are set by leadership.'} Milestone stays the same every month until leadership changes it (same as Setup › Milestone Goals). Each Sales goal shows what it works out to per day and per week ({fmtMonthLong(month)} has {new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()} days). Daily Avg is sales ÷ days the store was open; Weekly Avg is sales ÷ weeks in the month. The % goals are whole percents (type 15 for 15%). Goals save when you click out of the box.
       </p>
-      <div className="ledger-scroll">
+      {/* Scrolls inside its own box (both ways) so the two header rows can
+          stay pinned at the top while you scroll down through the stores. */}
+      <div className="ledger-scroll mg-scroll">
         <table className="ledger-table monthly-goals-table">
           <thead>
             <tr>
@@ -5184,8 +5186,8 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
               <th rowSpan={2} className="mg-group mg-milestone-group">Milestone<span className="mg-milestone-sub">every month</span></th>
             </tr>
             <tr>
-              {MONTHLY_REF_METRICS.map((m, i) => <th key={`ly-${m.key}`} className={i === 0 ? 'mg-first' : ''}>{m.label}</th>)}
-              {MONTHLY_REF_METRICS.map((m, i) => <th key={`pm-${m.key}`} className={i === 0 ? 'mg-first' : ''}>{m.label}</th>)}
+              {MONTHLY_REF_METRICS.map((m, i) => <th key={`ly-${m.key}`} className={`mg-ref${i === 0 ? ' mg-first' : ''}`}>{m.label}</th>)}
+              {MONTHLY_REF_METRICS.map((m, i) => <th key={`pm-${m.key}`} className={`mg-ref${i === 0 ? ' mg-first' : ''}`}>{m.label}</th>)}
               {fields.map((f, i) => <th key={f.key} className={`mg-goal-col ${i === 0 ? 'mg-first' : ''}`}>{f.label}</th>)}
             </tr>
           </thead>

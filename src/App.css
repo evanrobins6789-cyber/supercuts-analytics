@@ -501,7 +501,18 @@
 .monthly-goals-table .mg-first { border-left: 2px solid var(--line); }
 .monthly-goals-table .mg-goal-col { background: #FFF8F8; }
 .monthly-goals-table tr.mg-dl-row td { background: var(--paper); font-family: 'Barlow Condensed', sans-serif; font-size: 14px; font-weight: 600; color: var(--navy); padding-top: 8px; padding-bottom: 6px; }
-.standing-goals-title { margin: 6px 0 2px; }
+/* Last-year / last-month comparison numbers: a bit bigger, bolder and
+   packed closer together so they read as one block. */
+.monthly-goals-table td.mg-ref { font-size: 13.5px; font-weight: 600; color: var(--navy); padding: 7px 7px; }
+.monthly-goals-table th.mg-ref { padding-left: 7px; padding-right: 7px; }
+/* Pinned header: the table scrolls inside this box, so both header rows
+   stick to its top. Row 1 has a fixed height so row 2 knows where to sit. */
+.mg-scroll { max-height: calc(100vh - 120px); overflow: auto; }
+.monthly-goals-table thead th { position: sticky; z-index: 3; background: var(--card); color: var(--navy); font-size: 11.5px; box-shadow: inset 0 -1px 0 var(--line); }
+.monthly-goals-table thead tr:first-child th { top: 0; height: 32px; padding-top: 6px; padding-bottom: 6px; box-sizing: border-box; }
+.monthly-goals-table thead tr:nth-child(2) th { top: 32px; }
+.monthly-goals-table thead th.ledger-name-col { top: 0; left: 0; z-index: 5; }
+.monthly-goals-table thead th.mg-goal-col { background: #FFF8F8; }
 .monthly-goals-table th.mg-milestone-group { background: var(--gold); vertical-align: middle; }
 .mg-milestone-sub { display: block; font-size: 9.5px; font-weight: 500; opacity: 0.9; text-transform: none; }
 .monthly-goals-table .mg-milestone-col { background: #FBF6E6; border-left: 2px solid var(--line); }
