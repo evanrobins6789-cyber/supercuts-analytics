@@ -502,6 +502,14 @@
 .monthly-goals-table .mg-goal-col { background: #FFF8F8; }
 .monthly-goals-table tr.mg-dl-row td { background: var(--paper); font-family: 'Barlow Condensed', sans-serif; font-size: 14px; font-weight: 600; color: var(--navy); padding-top: 8px; padding-bottom: 6px; }
 .standing-goals-title { margin: 6px 0 2px; }
+.mg-breakdown { display: block; font-size: 10px; color: var(--ink-soft); white-space: nowrap; margin-top: 3px; }
+.mg-readonly { font-weight: 600; color: var(--navy); }
+.mg-bump-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 6px 0 4px; }
+.mg-bump-label { font-size: 12.5px; font-weight: 600; color: var(--navy); }
+.mg-bump-btn { padding: 6px 14px; border: none; border-radius: 16px; background: var(--green); color: #fff; font-weight: 700; font-size: 13px; cursor: pointer; }
+.mg-bump-btn:hover { background: #24663F; }
+.mg-bump-btn:disabled { background: var(--silver); cursor: not-allowed; }
+.mg-bump-note { font-size: 11.5px; color: var(--ink-soft); }
 .focus-prev { color: var(--ink-soft); }
 .focus-change { display: block; font-size: 10px; font-weight: 600; color: var(--ink-soft); white-space: nowrap; }
 .focus-change--up { color: var(--green); }

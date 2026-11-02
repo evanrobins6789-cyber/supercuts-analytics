@@ -19,6 +19,8 @@ const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_', 'gift_card_hist
 // gift_card_history_* back at all, and giftCardGoal is stripped out of the
 // store_goals they do see (and refused if a non-owner tries to write it).
 const OWNER_ONLY_GOAL_FIELDS = ['giftCardGoal'];
+// Goal fields any role may read but only the owner may write.
+const OWNER_ONLY_GOAL_WRITE_PREFIXES = ['salesGoal:'];
 
 // Subset of SENSITIVE_KEYS that are a flat { [storeCode]: {...fields} }
 // object and support scoped PATCH writes below — a merge-in for just the
@@ -167,6 +169,12 @@ export default async function handler(req, res) {
         }
         if (key === 'store_goals' && Object.values(patch).some(v => v && typeof v === 'object' && OWNER_ONLY_GOAL_FIELDS.some(f => f in v))) {
           res.status(403).json({ error: 'Only the owner can set gift card goals.' });
+          return;
+        }
+        // Monthly Sales goals (`salesGoal:YYYY-MM`, Goals tab) are set by
+        // leadership only. DLs still read them; only writes are refused.
+        if (key === 'store_goals' && Object.values(patch).some(v => v && typeof v === 'object' && Object.keys(v).some(f => OWNER_ONLY_GOAL_WRITE_PREFIXES.some(p => f.startsWith(p))))) {
+          res.status(403).json({ error: 'Only leadership can set monthly Sales goals.' });
           return;
         }
         const allowed = new Set(employee.store_codes || []);
