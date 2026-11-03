@@ -1494,6 +1494,59 @@ function CoreValuesWidget({ bitmojiImg, bitmojiActive }) {
   );
 }
 
+// "Tips & Tricks" widget (below Core Values): short explanations of the
+// site's features, filtered to what the logged-in role can actually use.
+// roles: which roles see the tip (omit = everyone).
+const LEADERS = ['owner', 'district_leader', 'manager'];
+const SITE_TIPS = [
+  { icon: '📊', title: 'My Numbers', body: 'Open the My Numbers tab to see your own hours, sales, TSTH and tips, split by each store you worked at, plus your base pay, bonus and what you’re making per hour. Only you can see your numbers.' },
+  { icon: '🎯', title: 'How the bonus works', body: 'TSTH is your total sales (services, color and product) divided by your hours. Beat the goal (2 × the haircut price: $56 in PA, $60 in NJ/DE) and you earn 25% of everything above it on every hour you work.' },
+  { icon: '📈', title: 'Raise your TSTH', body: 'My Numbers compares you with the other stylists at your store and tells you exactly what would help, like "sell 1 more product (~$25)", and how much more bonus that would earn you.' },
+  { icon: '🛍️', title: 'Best sellers', body: 'At the bottom of My Numbers you’ll find your store’s best-selling products and most popular extra services (beard trims, waxing, blowdries). Great ones to suggest to your guests.' },
+  { icon: '📅', title: 'Pay period shortcuts', body: 'Pay periods run the 1st–15th and the 16th–end of the month. On My Numbers, tap "This pay period" or "Last pay period" instead of picking dates.' },
+  { icon: '💬', title: 'Ask Tilly', body: 'Tap the chat bubble in the corner and ask Tilly things like "How am I doing this pay period?" or "What should I sell more of?" She knows your numbers.' },
+  { icon: '📣', title: 'News & Events', body: 'The News tab has every update and event. Posts marked "New" are from the last 10 days. Tap any post to read the whole thing and open its attachments.' },
+  { icon: '🎓', title: 'HSA classes', body: 'Sign up for upcoming HSA and SuperColor classes on the HSA tab. You can edit or remove your own sign-up there too.' },
+  { icon: '🏆', title: "Tillie's Nest", body: "Earn points and spend them on rewards in Tillie's Nest." },
+  { icon: '🥅', title: 'Setting goals', body: 'On the Goals tab, set your stores’ monthly Retail $, Color $, Bottles, Signature Service and % goals. Sales and Milestone goals are set by leadership. Goals save when you click out of the box.', roles: LEADERS },
+  { icon: '🗓️', title: 'Goals by the month', body: 'Every tab compares sales with the full monthly goal, so a week into the month "vs Goal" shows progress toward the whole month.', roles: LEADERS },
+  { icon: '✂️', title: 'Shear Check', body: 'Use Shear Check during a salon visit: pick the store, answer each item Yes / No / N/A, add notes, and email it to that store’s DL. Scores are tracked over time.', roles: ['owner', 'district_leader'] },
+  { icon: '⭐', title: 'Focus Stylist', body: 'Pick a stylist to coach each month on the Focus Stylist tab and track their TSTH and cuts-per-hour goals.', roles: ['owner', 'district_leader'] },
+  { icon: '🎁', title: 'Gift Cards', body: 'The Gift Cards tab shows gift card sales and progress toward the gift card goal for your stores. Tap a store to see who sold them.', roles: ['owner', 'district_leader'] },
+  { icon: '👀', title: 'Pick who’s on the pay card', body: 'On the Homepage pay card or the My Numbers tab, use the "Showing" menu to look at any employee. It starts on the top-TSTH person.', roles: ['owner'] },
+  { icon: '📥', title: 'Keep the numbers fresh', body: 'Setup › Historical Import takes Sales-Accrual, Attendance, Tips and Pay Rates files. Re-uploading the same dates is safe; those days are replaced, not doubled.', roles: ['owner'] },
+  { icon: '🔗', title: 'Different POS names', body: 'If someone’s name in the POS differs from their login ("Sammy" vs "Samantha"), type the POS spelling in Setup › Employee Access › "Also in sales as" so their numbers and pay rate line up.', roles: ['owner'] },
+  { icon: '✉️', title: 'Finalize goals', body: 'On the Goals tab, "Finalize & email DLs" sends each DL their Sales goals and leadership a roll-up of everyone. Send yourself a test first.', roles: ['owner'] },
+  { icon: '🎭', title: 'Presenter mode', body: 'Showing the site in a meeting? Turn on Presenter Mode in Setup and every name and number is made up. Nothing saves while it’s on.', roles: ['owner'] },
+];
+function SiteTipsWidget({ role }) {
+  const tips = useMemo(() => SITE_TIPS.filter(t => !t.roles || t.roles.includes(role)), [role]);
+  const [index, setIndex] = useCarousel(tips.length, 15000);
+  const t = tips[index] || tips[0];
+  if (!t) return null;
+  return (
+    <div className="homepage-widget site-tips-widget">
+      <div className="homepage-widget-head">
+        <p className="homepage-widget-title">💡 Tips &amp; Tricks</p>
+        <span className="homepage-spotlight-count">{index + 1} / {tips.length}</span>
+      </div>
+      <div key={t.title} className="homepage-corevalue-card">
+        <p className="homepage-corevalue-title"><span className="homepage-hero-icon">{t.icon}</span>{t.title}</p>
+        <div className="homepage-corevalue-body-wrap"><p className="homepage-corevalue-body">{t.body}</p></div>
+      </div>
+      <div className="site-tips-nav">
+        <button type="button" className="site-tips-arrow" onClick={() => setIndex((index - 1 + tips.length) % tips.length)} aria-label="Previous tip">‹</button>
+        <div className="homepage-hero-dots">
+          {tips.map((tip, i) => (
+            <button key={tip.title} type="button" className={`homepage-hero-dot homepage-hero-dot--dark ${i === index ? 'active' : ''}`} onClick={() => setIndex(i)} aria-label={`Show tip: ${tip.title}`} />
+          ))}
+        </div>
+        <button type="button" className="site-tips-arrow" onClick={() => setIndex((index + 1) % tips.length)} aria-label="Next tip">›</button>
+      </div>
+    </div>
+  );
+}
+
 // Keyword tags for celebrating WHY a 5-star review is great, matched against
 // the salon's core operating principles — separate from REVIEW_CATEGORIES
 // above, which uses complaint-shaped keywords to bucket NEGATIVE reviews.
@@ -1798,7 +1851,7 @@ function PayExplainer({ pay, coaching, leaderName = null, stores = [], peers = n
 // Leadership (owner) instead sees the TOP-TSTH person for the dates picked
 // (min MIN_HOURS_FOR_TOP hours), worked out locally from the full history the
 // owner already has, in the same by-store layout.
-function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = false, history = null, weeklyHistory = null, tipsHistory = null, payRates = [], nameAliases = {} }) {
+function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = false, history = null, weeklyHistory = null, tipsHistory = null, payRates = [], nameAliases = {}, payFocusName = null, onPayPick = null }) {
   const today = localTodayISO();
   const cur = payPeriodFor(today);
   const [range, setRange] = useState({ start: cur.start, end: today < cur.end ? today : cur.end });
@@ -1815,15 +1868,17 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
   const leaderTop = useMemo(() => {
     if (!isOwner || presenting || !range.start || !range.end) return null;
     const rateFor = payRates.length ? buildRateLookup(payRates, nameAliases) : null;
-    const top = topTsthRow(buildPayRows({ history, weeklyHistory, tipsHistory, start: range.start, end: range.end, rateFor }));
-    if (!top) return { top: null };
+    const rows = buildPayRows({ history, weeklyHistory, tipsHistory, start: range.start, end: range.end, rateFor });
+    const chosen = payFocusName ? rows.find(r => normalizePersonName(r.name) === normalizePersonName(payFocusName)) : null;
+    const top = chosen || topTsthRow(rows);
+    if (!top) return { top: null, rows };
     const names = new Set([normalizePersonName(top.name)]);
     const picked = pickOwnRecords({ dailyRows: [{ payload: history }], weeklyRows: [{ payload: weeklyHistory }], tipRows: [{ payload: tipsHistory }], names, start: range.start, end: range.end });
     const result = buildMyNumbers({ ...picked, start: range.start, end: range.end });
     const peers = buildPeerStats({ history, weeklyHistory, names, codes: result.stores.map(st => st.code), start: range.start, end: range.end });
     const lastDate = Object.values(picked.history).map(h => h.date).sort().pop() || null;
-    return { top, result, peers, lastDate };
-  }, [isOwner, presenting, history, weeklyHistory, tipsHistory, payRates, nameAliases, range.start, range.end]);
+    return { top, result, peers, lastDate, rows, picked: !!chosen };
+  }, [isOwner, presenting, history, weeklyHistory, tipsHistory, payRates, nameAliases, payFocusName, range.start, range.end]);
   const result = useMemo(() => {
     if (isOwner) return leaderTop?.result || (leaderTop ? { stores: [], total: null } : null);
     return state.data
@@ -1881,7 +1936,14 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
   return (
     <div className="tab-content">
       {isOwner ? (
-        <p className="section-hint">Leadership view: the top-TSTH person for these dates (at least {MIN_HOURS_FOR_TOP} hours){leaderTop?.top ? <>: <b>{leaderTop.top.name}</b> ({leaderTop.top.store}, TSTH ${leaderTop.top.tsth.toFixed(2)})</> : ''}. Everyone else sees only their own numbers here. TSTH is total sales (service, color and retail) ÷ hours.</p>
+        <>
+          <div className="my-numbers-picker-row">
+            <span className="my-numbers-picker-label">Showing:</span>
+            <EmployeePicker rows={leaderTop?.rows} value={payFocusName} onChange={onPayPick} />
+          </div>
+          <p className="section-hint">Leadership view: {leaderTop?.picked ? 'the employee you picked' : `the top-TSTH person for these dates (at least ${MIN_HOURS_FOR_TOP} hours)`}{leaderTop?.top ? <>: <b>{leaderTop.top.name}</b> ({leaderTop.top.store}, TSTH ${leaderTop.top.tsth.toFixed(2)})</> : ''}. Pick anyone above; the Homepage card follows the same pick. Everyone else sees only their own numbers here. TSTH is total sales (service, color and retail) ÷ hours.</p>
+          {payFocusName && !leaderTop?.picked && <p className="empty-note">{payFocusName} has no hours in these dates, so the top-TSTH person is shown.</p>}
+        </>
       ) : (
         <p className="section-hint">Your own numbers{userName ? `, ${userName}` : ''}, by the store where you did the work (as the POS recorded it). TSTH is total sales (service, color and retail) ÷ hours. Only you can see this.</p>
       )}
@@ -1915,21 +1977,34 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
 // Pay-period earnings tracker (Homepage hero). Leadership preview for now:
 // shows the highest-TSTH employee this pay period (see src/payTracker.js for
 // the pay rules). Each employee will later see their own.
-function PayTrackerCard({ data }) {
+// Leadership picker: anyone with hours in the dates shown, or the top-TSTH
+// person (the default).
+function EmployeePicker({ rows, value, onChange, dark = false }) {
+  const options = [...(rows || [])].filter(r => r.hours > 0).sort((a, b) => a.name.localeCompare(b.name));
+  return (
+    <select className={`employee-picker ${dark ? 'employee-picker--dark' : ''}`} value={value || ''} onChange={e => onChange(e.target.value || null)} aria-label="Show employee">
+      <option value="">⭐ Top TSTH (auto)</option>
+      {options.map(r => <option key={r.name + r.code} value={r.name}>{r.name} · {r.store}</option>)}
+    </select>
+  );
+}
+
+function PayTrackerCard({ data, onPick = null, pickedName = null }) {
   if (!data) return null;
   const { period, through, top } = data;
+  const picker = onPick ? <EmployeePicker rows={data.rows} value={pickedName} onChange={onPick} dark /> : null;
   const periodLabel = `${fmtPayDate(period.start)} – ${fmtPayDate(period.end)}`;
   if (!top) {
     return (
       <div className="pay-tracker">
-        <p className="pay-tracker-eyebrow">Pay period {periodLabel} · Top TSTH</p>
+        <div className="pay-tracker-head"><p className="pay-tracker-eyebrow">Pay period {periodLabel} · Top TSTH</p>{picker}</div>
         <p className="pay-tracker-empty">No one has {MIN_HOURS_FOR_TOP}+ hours with sales on file yet this pay period. Upload Sales-Accrual and Attendance to fill this in.</p>
       </div>
     );
   }
   return (
     <div className="pay-tracker">
-      <p className="pay-tracker-eyebrow">Pay period {periodLabel} · Top TSTH{through ? ` · through ${fmtPayDate(through)}` : ''}</p>
+      <div className="pay-tracker-head"><p className="pay-tracker-eyebrow">Pay period {periodLabel} · {data.picked ? 'Selected employee' : 'Top TSTH'}{through ? ` · through ${fmtPayDate(through)}` : ''}</p>{picker}</div>
       <p className="pay-tracker-name">{top.name} <span>{top.store} ({top.state}) · {top.manager ? 'Manager, 30%' : 'Stylist, 25%'}</span></p>
       <TsthBar tsth={top.tsth} goal={top.goal} />
       <div className="pay-tracker-stats">
@@ -1968,7 +2043,7 @@ function PayTrackerCard({ data }) {
   );
 }
 
-function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore, news, events, reviews, onOpenNews, canPost, onAddNews, onAddEvent, newsGroups, onImageError, rankToken, rankRole, payTracker = null }) {
+function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore, news, events, reviews, onOpenNews, canPost, onAddNews, onAddEvent, newsGroups, onImageError, rankToken, rankRole, payTracker = null, onPayPick = null, payFocusName = null }) {
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
   const reportUsable = report && !isReportStale(report);
@@ -2067,7 +2142,7 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
               )}
               <p className="homepage-hero-blurb homepage-hero-blurb--left">Catch up on the latest news, see what's coming up, and find out who's leading the pack. Let's make it a great day! ✂️</p>
             </div>
-            <PayTrackerCard data={payTracker} />
+            <PayTrackerCard data={payTracker} onPick={onPayPick} pickedName={payFocusName} />
           </>
         ) : (
           <>
@@ -2149,6 +2224,7 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
         <div className="homepage-sidebar">
           <ReviewSpotlightWidget report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} reviews={reviews} bitmojiImg={bitmojiImg} bitmojiActive={bitmojiKey === 'spotlight'} />
           <CoreValuesWidget bitmojiImg={bitmojiImg} bitmojiActive={bitmojiKey === 'corevalues'} />
+          <SiteTipsWidget role={rankRole} />
         </div>
       </div>
 
@@ -11260,6 +11336,14 @@ export default function App() {
     });
   }, [currentUser, presenting]);
 
+  // Who leadership is looking at on the Homepage card and My Numbers (null
+  // = the top-TSTH person). Per-viewer convenience, kept in localStorage.
+  const [payFocusName, setPayFocusNameState] = useState(() => { try { return window.localStorage.getItem('payFocusName') || null; } catch { return null; } });
+  const setPayFocusName = useCallback(name => {
+    setPayFocusNameState(name || null);
+    try { if (name) window.localStorage.setItem('payFocusName', name); else window.localStorage.removeItem('payFocusName'); } catch { /* storage blocked */ }
+  }, []);
+
   // Homepage pay tracker: leadership preview only (owner, never while
   // presenting, since it shows a real name and pay). Current pay period
   // (1–15 / 16–end) through today; `through` is the last day with Sales-
@@ -11274,8 +11358,10 @@ export default function App() {
     const rows = buildPayRows({ history, weeklyHistory, tipsHistory, start: period.start, end, rateFor });
     const days = Object.values(history || {}).filter(r => r.date >= period.start && r.date <= end && r.employees && Object.keys(r.employees).length).map(r => r.date).sort();
     const noRate = rateFor ? rows.filter(r => !r.rateMatched).map(r => `${r.name} (${r.store})`).sort() : [];
-    return { period, through: days[days.length - 1] || null, top: topTsthRow(rows), rows, ratesLoaded: !!rateFor, noRate };
-  }, [currentUser, presenting, history, weeklyHistory, tipsHistory, payRates, nameAliases]);
+    // Leadership can pick anyone to show instead of the top TSTH person.
+    const picked = payFocusName ? rows.find(r => normalizePersonName(r.name) === normalizePersonName(payFocusName)) : null;
+    return { period, through: days[days.length - 1] || null, top: picked || topTsthRow(rows), picked: !!picked, rows, ratesLoaded: !!rateFor, noRate };
+  }, [currentUser, presenting, history, weeklyHistory, tipsHistory, payRates, nameAliases, payFocusName]);
 
   const handleTogglePresenter = on => {
     if (!currentUser || currentUser.role !== 'owner') return;
@@ -11342,10 +11428,10 @@ export default function App() {
             canPost={currentUser.role === 'owner' && !presenting} onAddNews={handleAddNews} onAddEvent={handleAddEvent}
             newsGroups={newsGroups} onImageError={msg => showToast(msg, 'error')}
             rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} rankRole={currentUser.role}
-            payTracker={payTracker}
+            payTracker={payTracker} onPayPick={setPayFocusName} payFocusName={payFocusName}
           />
         )}
-        {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={currentUser.name} userRole={currentUser.role} presenting={presenting} isOwner={currentUser.role === 'owner'} history={history} weeklyHistory={weeklyHistory} tipsHistory={tipsHistory} payRates={payRates} nameAliases={nameAliases} />}
+        {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={currentUser.name} userRole={currentUser.role} presenting={presenting} isOwner={currentUser.role === 'owner'} history={history} weeklyHistory={weeklyHistory} tipsHistory={tipsHistory} payRates={payRates} nameAliases={nameAliases} payFocusName={payFocusName} onPayPick={setPayFocusName} />}
         {tab === 'News' && (
           <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={currentUser} newsReads={d.newsReads} onSignOff={handleSignOffNews} />
         )}

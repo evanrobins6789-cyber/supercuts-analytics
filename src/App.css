@@ -1409,3 +1409,18 @@
 .best-sellers-list li { margin: 3px 0; }
 .best-sellers-list li span { font-weight: 600; }
 .best-sellers-list li em { font-style: normal; color: #666; margin-left: 6px; font-size: 12px; }
+
+/* ─── Leadership employee picker (pay card + My Numbers) ─────────────────── */
+.employee-picker { font-size: 12.5px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: #fff; color: var(--navy); max-width: 100%; }
+.employee-picker--dark { background: rgba(255,255,255,0.12); color: #fff; border-color: rgba(255,255,255,0.3); }
+.employee-picker--dark option { color: #13294B; }
+.pay-tracker-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.my-numbers-picker-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.my-numbers-picker-label { font-weight: 700; color: var(--navy); font-size: 13px; }
+
+/* ─── Tips & Tricks widget (Homepage, under Core Values) ─────────────────── */
+.site-tips-widget { margin-top: 12px; }
+.site-tips-nav { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 10px; }
+.site-tips-nav .homepage-hero-dots { margin-top: 0; flex-wrap: wrap; justify-content: center; }
+.site-tips-arrow { border: 1px solid var(--line); background: #fff; color: var(--navy); border-radius: 999px; width: 26px; height: 26px; font-size: 16px; line-height: 1; cursor: pointer; }
+.site-tips-arrow:hover { background: #E8EEF6; }
