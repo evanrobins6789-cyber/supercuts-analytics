@@ -5140,10 +5140,13 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
     return (
       <td key={f.key} className={cls}>
         {editable ? (
+          // Money goals show "$40,500" as you type (same as Milestone); the
+          // draft and saved value stay a plain number, so storage is unchanged.
           <input
-            type="number" className="goal-input" placeholder={f.money ? '$0' : f.pct ? '0%' : '0'}
-            value={value}
-            onChange={e => { const k = monthlyGoalKey(f.key, month); const v = e.target.value; setDrafts(prev => ({ ...prev, [code]: { ...prev[code], [k]: v } })); }}
+            type={f.money ? 'text' : 'number'} inputMode={f.money ? 'decimal' : undefined}
+            className="goal-input" placeholder={f.money ? '$0' : f.pct ? '0%' : '0'}
+            value={f.money ? moneyDisplay(value) : value}
+            onChange={e => { const k = monthlyGoalKey(f.key, month); const v = f.money ? moneyDigits(e.target.value) : e.target.value; setDrafts(prev => ({ ...prev, [code]: { ...prev[code], [k]: v } })); }}
             onBlur={() => handleBlur(code, f.key)}
           />
         ) : (
@@ -5867,17 +5870,17 @@ function MilestoneGoalsTab({ report, milestoneGoals, onSaveMilestoneGoal, onImpo
                 <td className="ledger-name-col">{s.name}</td>
                 <td>
                   <input
-                    type="number" className="goal-input" placeholder="$0"
-                    value={getVal(s.code, 'goal')}
-                    onChange={e => handleChange(s.code, 'goal', e.target.value)}
+                    type="text" inputMode="decimal" className="goal-input" placeholder="$0"
+                    value={moneyDisplay(getVal(s.code, 'goal'))}
+                    onChange={e => handleChange(s.code, 'goal', moneyDigits(e.target.value))}
                     onBlur={() => handleBlur(s.code, 'goal')}
                   />
                 </td>
                 <td>
                   <input
-                    type="number" className="goal-input" placeholder="$0"
-                    value={getVal(s.code, 'milestone')}
-                    onChange={e => handleChange(s.code, 'milestone', e.target.value)}
+                    type="text" inputMode="decimal" className="goal-input" placeholder="$0"
+                    value={moneyDisplay(getVal(s.code, 'milestone'))}
+                    onChange={e => handleChange(s.code, 'milestone', moneyDigits(e.target.value))}
                     onBlur={() => handleBlur(s.code, 'milestone')}
                   />
                 </td>
