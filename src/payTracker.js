@@ -12,8 +12,9 @@
 //   Pay periods = the 1st–15th and the 16th–end of each month.
 //   Made so far = hours × hourly rate + hours × bonus/hr + tips.
 //
-// Hourly rates aren't uploaded yet (the user will provide a report), so
-// base pay is null until a rate is known and "made so far" says so.
+// Hourly rates come from the Employee Pay Rate Report (locked pay_rates
+// table, owner only). Base pay is null for anyone whose name doesn't match a
+// rate, and "made so far" says so.
 
 import { getRangeTotals } from './metrics.js';
 import { normalizeName } from './parser.js';
@@ -65,11 +66,45 @@ export function tipsByName(tipsHistory, start, end) {
   return out;
 }
 
+// Matches a name from sales (the POS spelling) to an hourly rate from the
+// Employee Pay Rate Report. In order: a POS spelling leadership linked to
+// that Emp ID (Setup › Employee Access "Also in sales as"), the full name,
+// then first + last name ignoring middle names — only when exactly one
+// person on the report fits, so two people sharing a short form never get
+// each other's rate. Returns name → { rate, empNumber, rateName } | null.
+const rateKey = s => String(s || '').replace(/[.'’]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+export function buildRateLookup(rateRows = [], aliases = {}) {
+  const byEmp = {};
+  const exact = {};
+  const short = {};
+  rateRows.forEach(r => {
+    const emp = String(r.emp_number ?? r.empNumber ?? '');
+    const entry = { rate: r.rate == null ? null : Number(r.rate), empNumber: emp, rateName: r.name };
+    byEmp[emp] = entry;
+    const parts = rateKey(r.name).split(' ').filter(Boolean);
+    if (!parts.length) return;
+    (exact[parts.join(' ')] ||= []).push(entry);
+    if (parts.length > 2) (short[`${parts[0]} ${parts[parts.length - 1]}`] ||= []).push(entry);
+  });
+  const aliasMap = {};
+  Object.entries(aliases || {}).forEach(([emp, names]) => (names || []).forEach(n => { if (byEmp[emp]) aliasMap[rateKey(n)] = byEmp[emp]; }));
+  return name => {
+    const k = rateKey(name);
+    if (aliasMap[k]) return aliasMap[k];
+    if (exact[k]?.length === 1) return exact[k][0];
+    const parts = k.split(' ').filter(Boolean);
+    const sk = parts.length > 1 ? `${parts[0]} ${parts[parts.length - 1]}` : k;
+    const hits = [...(exact[sk] || []), ...(short[sk] || [])];
+    const unique = [...new Set(hits)];
+    return unique.length === 1 ? unique[0] : null;
+  };
+}
+
 // One row per employee for [start, end], summed across every store they
 // worked. The haircut price (and so the goal) comes from the store where
-// they worked the most hours. `rates` is an optional { [normalizedName]:
-// hourly $ } map for base pay.
-export function buildPayRows({ history, weeklyHistory, tipsHistory, start, end, rates = {} }) {
+// they worked the most hours. `rateFor` (from buildRateLookup) gives base
+// pay; without it, or with no match, base pay is null.
+export function buildPayRows({ history, weeklyHistory, tipsHistory, start, end, rateFor = null }) {
   const totals = getRangeTotals(history, weeklyHistory, start, end);
   const tips = tipsByName(tipsHistory, start, end);
   const people = {};
@@ -93,12 +128,13 @@ export function buildPayRows({ history, weeklyHistory, tipsHistory, start, end, 
     const bonusPerHour = tsth > goal ? (tsth - goal) * rate : 0;
     const bonus = bonusPerHour * p.hours;
     const tipTotal = tips[k]?.tips || 0;
-    const hourly = rates[k] ?? null;
+    const match = rateFor ? rateFor(p.name) : null;
+    const hourly = match?.rate ?? null;
     const basePay = hourly != null ? hourly * p.hours : null;
     return {
       name: p.name, code: homeCode, store: STORE_CODE_TO_NAME[homeCode] || `Store ${homeCode}`, state: storeState(homeCode),
       hours: p.hours, sales: p.sales, tsth, price, goal, manager, rate, bonusPerHour, bonus,
-      tips: tipTotal, hourly, basePay,
+      tips: tipTotal, hourly, basePay, empNumber: match?.empNumber || null, rateMatched: !!match,
       madeSoFar: (basePay || 0) + bonus + tipTotal,
     };
   });

@@ -4,7 +4,7 @@ import { Bar } from 'react-chartjs-2';
 import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDataByPrefix, supabase } from './db';
 import {
   parseStylistReport, parseEmployeeStartDates, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
-  parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory, parseGiftCardFile, mergeGiftCardsIntoHistory, parseTipsFile, mergeTipsIntoHistory,
+  parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory, parseGiftCardFile, mergeGiftCardsIntoHistory, parseTipsFile, mergeTipsIntoHistory, parsePayRateFile,
   buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile, parseMasterSalonListFile, parseHsaScheduleFile,
 } from './parser';
 import {
@@ -12,7 +12,7 @@ import {
   loadScoped, loadScopedByPrefix, saveScoped, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
   pointsBalance, pointsAllBalances, pointsTransactions, pointsDeleteTransaction, finalizeGoals,
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled,
-  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank, lpLoad, lpSave, emailSalonCheck, myNumbers,
+  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank, lpLoad, lpSave, emailSalonCheck, myNumbers, payRatesLoad, payRatesUpload,
 } from './auth';
 import { SALON_CHECK_SECTIONS, SALON_CHECK_ITEMS, scoreSalonCheck, salonCheckList } from './salonCheck';
 import { LP_RULES, parseLpSalesFile, parseLpAttendanceFile, parseLpRegisterFile, mergeLpDays, lpMonthPayload, analyzeLp, lpDefaultRange } from './lossPrevention';
@@ -28,7 +28,7 @@ import {
   shiftMonthKey, salesGoalBreakdown, monthlyReference as sharedMonthlyReference, openDaysInRange, closedDaysInMonth,
 } from './metrics';
 import { BITMOJI_POOLS } from './bitmoji';
-import { buildPayRows, topTsthRow, payPeriodFor, MIN_HOURS_FOR_TOP } from './payTracker';
+import { buildPayRows, topTsthRow, payPeriodFor, MIN_HOURS_FOR_TOP, buildRateLookup } from './payTracker';
 import { buildMyNumbers, pickOwnRecords, normalizePersonName } from './myNumbers';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
 import supercutsWordmarkBlue from './assets/branding/supercuts-wordmark-blue.png';
@@ -1793,7 +1793,7 @@ function PayTrackerCard({ data }) {
         <div><span>Bonus / hr</span><strong>${top.bonusPerHour.toFixed(2)}</strong></div>
         <div><span>Bonus</span><strong>{fmt$(top.bonus)}</strong></div>
         <div><span>Tips</span><strong>{fmt$(top.tips)}</strong></div>
-        <div className="pay-tracker-total"><span>Made so far</span><strong>{fmt$(top.madeSoFar)}</strong><em>{top.basePay != null ? `incl. ${fmt$(top.basePay)} base` : '+ base pay (rates not uploaded)'}</em></div>
+        <div className="pay-tracker-total"><span>Made so far</span><strong>{fmt$(top.madeSoFar)}</strong><em>{top.basePay != null ? `incl. ${fmt$(top.basePay)} base ($${top.hourly.toFixed(2)}/hr)` : data.ratesLoaded ? '+ base pay (no rate matched)' : '+ base pay (rates not uploaded)'}</em></div>
       </div>
     </div>
   );
@@ -6931,8 +6931,9 @@ function LossPreventionTab({ lpData, lpStatus, onImportRegister, onGoToHistoryIm
 }
 const fmtDateShortLp = iso => { const [, m, dd] = iso.split('-').map(Number); return `${MONTH_NAMES[m - 1].slice(0, 3)} ${dd}`; };
 
-function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBatch, onClearHistory, reviews, onImportReviewsBatch, giftCardHistory, onImportGiftCardBatch, tipsHistory, onImportTipsBatch }) {
+function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBatch, onClearHistory, reviews, onImportReviewsBatch, giftCardHistory, onImportGiftCardBatch, tipsHistory, onImportTipsBatch, onImportPayRates, payRatesInfo }) {
   const [processingSales, setProcessingSales] = useState(false);
+  const [processingRates, setProcessingRates] = useState(false);
   const [processingTips, setProcessingTips] = useState(false);
   const [processingGiftCards, setProcessingGiftCards] = useState(false);
   const [processingAttendance, setProcessingAttendance] = useState(false);
@@ -7003,6 +7004,17 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
     }
   };
   const tipsDates = Object.values(tipsHistory || {}).map(r => r.date).sort();
+  const handlePayRateFile = async file => {
+    setProcessingRates(true);
+    try {
+      const lines = await onImportPayRates(file);
+      setLog(prev => [...lines, ...prev]);
+    } catch (err) {
+      setLog(prev => [`✗ Unexpected error: ${err.message}`, ...prev]);
+    } finally {
+      setProcessingRates(false);
+    }
+  };
 
   const reviewDates = reviews?.reviews?.length ? reviews.reviews.map(r => r.postedAt).filter(Boolean).sort() : [];
 
@@ -7086,8 +7098,32 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
             </div>
           </label>
         )}
+
+        {onImportPayRates && (
+          <label className={`upload-slot history-upload-slot ${processingRates ? 'upload-slot--filled' : ''}`}>
+            <input
+              type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }}
+              onChange={e => { const f = e.target.files[0]; if (f) handlePayRateFile(f); e.target.value = ''; }}
+            />
+            <div className="upload-slot-icon">{processingRates ? <span className="spinner small" /> : '🔒'}</div>
+            <div className="upload-slot-body">
+              <p className="upload-slot-title">Pay Rates File</p>
+              <p className="upload-slot-hint">The "Employee Pay Rate Report". Saved in a locked table only you can read. Each upload replaces the whole list.</p>
+            </div>
+          </label>
+        )}
       </div>
 
+      {payRatesInfo && (payRatesInfo.error ? (
+        <p className="password-error">Pay rates: {payRatesInfo.error}</p>
+      ) : payRatesInfo.count > 0 && (
+        <div className="section-hint">
+          Pay rates on file: {payRatesInfo.count} employees.
+          {payRatesInfo.noRate?.length > 0 && (
+            <details><summary>{payRatesInfo.noRate.length} people with hours this pay period have no rate matched (their name in sales differs from the pay rate report). Link their sales name in Setup › Employee Access › "Also in sales as".</summary><p>{payRatesInfo.noRate.join(', ')}</p></details>
+          )}
+        </div>
+      ))}
       {onImportTipsBatch && tipsDates.length > 0 && (
         <p className="section-hint">Tips on file: {fmtDateLong(tipsDates[0])} → {fmtDateLong(tipsDates[tipsDates.length - 1])}.</p>
       )}
@@ -8076,8 +8112,9 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   if (payTracker && payTracker.rows?.length) {
     const { period, through, rows } = payTracker;
     lines.push('');
-    lines.push(`PAY TRACKER, pay period ${period.start} to ${period.end} (data through ${through || 'n/a'}). Rules: TSTH = (net service + retail incl. color) ÷ hours; TSTH goal = 2 × haircut price (PA $28, NJ/DE $30); bonus/hr = (TSTH − goal) × 25% stylists / 30% managers when above goal, paid on every hour; no other commission; made so far = base (hourly rate × hours; rates are NOT uploaded yet, so base is unknown) + bonus + tips. Top 25 by TSTH (min ${MIN_HOURS_FOR_TOP} hours):`);
-    rows.filter(r => r.hours >= MIN_HOURS_FOR_TOP).sort((x, y) => y.tsth - x.tsth).slice(0, 25).forEach(r => lines.push(`  ${r.name} @ ${r.store} (${r.state}${r.manager ? ', manager' : ''}): ${r.hours.toFixed(1)} hrs, TSTH $${r.tsth.toFixed(2)} vs goal $${r.goal}, bonus/hr $${r.bonusPerHour.toFixed(2)}, bonus $${Math.round(r.bonus)}, tips $${Math.round(r.tips)}, made so far excl. base $${Math.round(r.madeSoFar)}`));
+    lines.push(`PAY TRACKER, pay period ${period.start} to ${period.end} (data through ${through || 'n/a'}). Rules: TSTH = (net service + retail incl. color) ÷ hours; TSTH goal = 2 × haircut price (PA $28, NJ/DE $30); bonus/hr = (TSTH − goal) × 25% stylists / 30% managers when above goal, paid on every hour; no other commission; made so far = base (hourly rate × hours, from the Employee Pay Rate Report) + bonus + tips${payTracker.ratesLoaded ? '' : '; pay rates are NOT uploaded yet, so base is unknown'}. Top 25 by TSTH (min ${MIN_HOURS_FOR_TOP} hours):`);
+    rows.filter(r => r.hours >= MIN_HOURS_FOR_TOP).sort((x, y) => y.tsth - x.tsth).slice(0, 25).forEach(r => lines.push(`  ${r.name} @ ${r.store} (${r.state}${r.manager ? ', manager' : ''}): ${r.hours.toFixed(1)} hrs, TSTH $${r.tsth.toFixed(2)} vs goal $${r.goal}, bonus/hr $${r.bonusPerHour.toFixed(2)}, bonus $${Math.round(r.bonus)}, tips $${Math.round(r.tips)}, ${r.basePay != null ? `base $${Math.round(r.basePay)} ($${r.hourly.toFixed(2)}/hr), made so far $${Math.round(r.madeSoFar)}` : `no pay rate matched, made so far excl. base $${Math.round(r.madeSoFar)}`}`));
+    if (payTracker.noRate?.length) lines.push(`  ${payTracker.noRate.length} people with hours this pay period have no pay rate matched (name differs from the pay rate report; leadership can link it in Setup › Employee Access "Also in sales as"): ${payTracker.noRate.slice(0, 40).join(', ')}`);
   }
 
   return lines.join('\n');
@@ -10990,6 +11027,30 @@ export default function App() {
     [presenterData]
   );
 
+  // Hourly pay rates (owner only, locked pay_rates table) and the POS-name
+  // links from Setup › Employee Access, for base pay in the pay tracker.
+  const [payRates, setPayRates] = useState([]);
+  const [nameAliases, setNameAliases] = useState({});
+  const [payRatesError, setPayRatesError] = useState(null);
+  const refreshPayRates = useCallback(() => {
+    if (!currentUser || currentUser.role !== 'owner') { setPayRates([]); setNameAliases({}); return; }
+    payRatesLoad(currentUser.token).then(r => { if (r.ok) { setPayRates(r.rows || []); setPayRatesError(null); } else setPayRatesError(r.error); });
+    loadScoped('employee_name_aliases', currentUser.token).then(r => { if (!r.error) setNameAliases(r.data || {}); });
+  }, [currentUser]);
+  useEffect(() => { refreshPayRates(); }, [refreshPayRates]);
+  const handleImportPayRates = useCallback(async file => {
+    try {
+      const parsed = await parsePayRateFile(file);
+      const r = await payRatesUpload(currentUser.token, parsed.rows);
+      if (!r.ok) return [`✗ ${file.name}: ${r.error}`];
+      refreshPayRates();
+      const noRate = parsed.rows.filter(x => x.rate == null).length;
+      return [`✓ ${file.name}: ${r.count} pay rates saved${r.removed ? `, ${r.removed} no longer on the list removed` : ''}${noRate ? ` (${noRate} with no rate)` : ''}.`];
+    } catch (err) {
+      return [`✗ ${file.name}: ${err.message}`];
+    }
+  }, [currentUser, refreshPayRates]);
+
   // My Numbers for the current pay period, loaded once per login so Tilly
   // can answer "how am I doing" (the tab itself fetches its own ranges).
   const [myNumbersSummary, setMyNumbersSummary] = useState(null);
@@ -11014,10 +11075,12 @@ export default function App() {
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     const period = payPeriodFor(today);
     const end = today < period.end ? today : period.end;
-    const rows = buildPayRows({ history, weeklyHistory, tipsHistory, start: period.start, end });
+    const rateFor = payRates.length ? buildRateLookup(payRates, nameAliases) : null;
+    const rows = buildPayRows({ history, weeklyHistory, tipsHistory, start: period.start, end, rateFor });
     const days = Object.values(history || {}).filter(r => r.date >= period.start && r.date <= end && r.employees && Object.keys(r.employees).length).map(r => r.date).sort();
-    return { period, through: days[days.length - 1] || null, top: topTsthRow(rows), rows };
-  }, [currentUser, presenting, history, weeklyHistory, tipsHistory]);
+    const noRate = rateFor ? rows.filter(r => !r.rateMatched).map(r => `${r.name} (${r.store})`).sort() : [];
+    return { period, through: days[days.length - 1] || null, top: topTsthRow(rows), rows, ratesLoaded: !!rateFor, noRate };
+  }, [currentUser, presenting, history, weeklyHistory, tipsHistory, payRates, nameAliases]);
 
   const handleTogglePresenter = on => {
     if (!currentUser || currentUser.role !== 'owner') return;
@@ -11205,7 +11268,7 @@ export default function App() {
               onReorderNewsGroup: handleReorderNewsGroup, onSetNewsGroupColor: handleSetNewsGroupColor,
               onImageError: msg => showToast(msg, 'error'),
             }}
-            historyProps={{ history: d.history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory, reviews: d.reviews, onImportReviewsBatch: handleImportReviewsBatch, giftCardHistory: d.giftCardHistory, onImportGiftCardBatch: handleImportGiftCardBatch, tipsHistory, onImportTipsBatch: handleImportTipsBatch }}
+            historyProps={{ history: d.history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory, reviews: d.reviews, onImportReviewsBatch: handleImportReviewsBatch, giftCardHistory: d.giftCardHistory, onImportGiftCardBatch: handleImportGiftCardBatch, tipsHistory, onImportTipsBatch: handleImportTipsBatch, onImportPayRates: handleImportPayRates, payRatesInfo: { count: payRates.length, error: payRatesError, noRate: payTracker?.noRate || [] } }}
             uploadProps={{
               report: d.report, uploading, onFile: handleFile, onClear: handleClearAll,
               employeeRoster: d.employeeRoster, uploadingRoster, onRosterFile: handleRosterFile, onClearRoster: handleClearRoster,

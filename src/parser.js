@@ -1409,6 +1409,39 @@ export async function parseTipsFile(file) {
 // Same replace-the-file's-whole-range rule as gift cards.
 export const mergeTipsIntoHistory = mergeGiftCardsIntoHistory;
 
+// ─── Employee Pay Rate Report ───────────────────────────────────────────────
+// Employee Number | Employee Name ("Allen, Samantha K.") | Hourly Rate
+// ("$13.0000"). Employee Number = the Master Salon List Emp ID. The name is
+// turned into "First Last" (trailing middle initial dropped), the same form
+// the Master Salon List import uses.
+export const lastFirstToFirstLast = raw => {
+  const s = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (!s.includes(',')) return s;
+  const [last, ...rest] = s.split(',');
+  const first = rest.join(',').trim().replace(/\s+[A-Za-z]\.?$/, '');
+  return `${first} ${last.trim()}`.trim();
+};
+export async function parsePayRateFile(file) {
+  const grid = await readWorkbookGrid(file);
+  const hdrRowIdx = grid.findIndex(row => row.some(c => cellText(c).toLowerCase() === 'hourly rate'));
+  if (hdrRowIdx === -1) throw new Error('Could not find an "Hourly Rate" column. Is this the Employee Pay Rate Report?');
+  const headerRow = grid[hdrRowIdx];
+  const col = { num: findCol(headerRow, 'Employee Number'), name: findCol(headerRow, 'Employee Name'), rate: findCol(headerRow, 'Hourly Rate') };
+  if (col.num === -1 || col.name === -1) throw new Error('This file needs "Employee Number" and "Employee Name" columns.');
+  const rows = [];
+  for (let r = hdrRowIdx + 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (!rowHasData(row)) continue;
+    const empNumber = cellText(row[col.num]).trim();
+    const rawName = cellText(row[col.name]).trim();
+    if (!empNumber || !rawName) continue;
+    const rate = numOf(row[col.rate]);
+    rows.push({ empNumber, rawName, name: lastFirstToFirstLast(rawName), rate: rate > 0 ? rate : null });
+  }
+  if (!rows.length) throw new Error('No employees found in this file.');
+  return { rows, fileName: file.name };
+}
+
 // ─── Weekly snapshot (fed by the regular Stylist Report upload) ────────────
 // Turns an already-parsed Stylist Report into one record per store for that
 // exact week (keyed by its real start/end dates), so every normal Monday

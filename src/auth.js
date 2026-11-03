@@ -180,6 +180,14 @@ export function myNumbers(token, start, end) {
   return postJson('/api/scoped-data', { action: 'my-numbers', token, start, end });
 }
 
+// Owner-only hourly pay rates (api/_pay-rates.js, locked pay_rates table).
+export function payRatesLoad(token) {
+  return postJson('/api/scoped-data', { action: 'pay-rates-load', token });
+}
+export function payRatesUpload(token, rows) {
+  return postWrite('/api/scoped-data', { action: 'pay-rates-upload', token, rows });
+}
+
 export function finalizeGoals(token, month, test) {
   return postWrite('/api/scoped-data', { action: 'finalize-goals', token, month, test: !!test });
 }

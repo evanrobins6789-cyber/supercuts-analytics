@@ -14,6 +14,7 @@ import { getCodeForStoreName } from '../src/storeDirectory.js';
 import { handleFinalizeGoals } from './_finalize-goals.js';
 import { handleSalonCheckEmail, cleanSalonCheckPatch } from './_salon-check.js';
 import { handleMyNumbers } from './_my-numbers.js';
+import { handlePayRates } from './_pay-rates.js';
 
 const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases', 'focus_stylists', 'salon_checks', 'employee_name_aliases']);
 const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_', 'gift_card_history_', 'tips_history_'];
@@ -150,6 +151,11 @@ export default async function handler(req, res) {
   // own owner-session check); see api/_finalize-goals.js for why.
   if (req.body?.action === 'finalize-goals') {
     await handleFinalizeGoals(req, res);
+    return;
+  }
+  // Pay rates (owner only, locked pay_rates table): api/_pay-rates.js.
+  if (req.body?.action === 'pay-rates-load' || req.body?.action === 'pay-rates-upload') {
+    await handlePayRates(req, res);
     return;
   }
   // "My Numbers": the caller's own lines only, any role (api/_my-numbers.js).
