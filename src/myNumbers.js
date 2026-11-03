@@ -5,7 +5,7 @@
 import { getRangeTotals } from './metrics.js';
 import { STORE_CODE_TO_NAME } from './storeDirectory.js';
 
-const EMPTY = () => ({ sales: 0, retail: 0, colorSales: 0, haircuts: 0, hours: 0, tips: 0 });
+const EMPTY = () => ({ sales: 0, retail: 0, colorSales: 0, haircuts: 0, hours: 0, tips: 0, otherServices: 0 });
 const finish = r => ({
   ...r,
   service: r.sales - r.retail,
@@ -25,6 +25,7 @@ export function buildMyNumbers({ history, weeklyHistory, tips, start, end }) {
       r.colorSales += e.colorSales || 0;
       r.haircuts += e.haircuts || 0;
       r.hours += e.totalHours || 0;
+      r.otherServices += e.otherServices || 0;
     });
   });
   Object.values(tips || {}).forEach(rec => {
@@ -47,7 +48,10 @@ export function buildMyNumbers({ history, weeklyHistory, tips, start, end }) {
 // the totals of everyone ELSE who worked there in [start, end], plus the same
 // company-wide. Aggregates only, never names. `people` counts others with
 // hours; `withRetail`/`withColor` count how many of them sold any.
-const EMPTY_PEERS = () => ({ people: 0, withRetail: 0, withColor: 0, hours: 0, sales: 0, retail: 0, colorSales: 0, haircuts: 0 });
+// Also store-wide price averages (everyone incl. the caller, for turning $
+// into "N products"): productQty/productAmount from the item-level product
+// lines, colorTickets/colorAmount from color-ticket counts.
+const EMPTY_PEERS = () => ({ people: 0, withRetail: 0, withColor: 0, hours: 0, sales: 0, retail: 0, colorSales: 0, haircuts: 0, otherServices: 0, productQty: 0, productAmount: 0, colorTickets: 0, colorAmount: 0 });
 export function buildPeerStats({ history, weeklyHistory, names, codes, start, end }) {
   const totals = getRangeTotals(history, weeklyHistory, start, end);
   const stores = {};
@@ -61,8 +65,16 @@ export function buildPeerStats({ history, weeklyHistory, names, codes, start, en
     agg.retail += e.retail || 0;
     agg.colorSales += e.colorSales || 0;
     agg.haircuts += e.haircuts || 0;
+    agg.otherServices += e.otherServices || 0;
+  };
+  const addPrices = (agg, t) => {
+    Object.values(t.products || {}).forEach(pr => { agg.productQty += pr.qty || 0; agg.productAmount += pr.amount || 0; });
+    agg.colorTickets += t.colorTicketCount || 0;
+    agg.colorAmount += t.color || 0;
   };
   Object.entries(totals).forEach(([code, t]) => {
+    addPrices(company, t);
+    if (codes.includes(code)) addPrices(stores[code] ||= EMPTY_PEERS(), t);
     (t.employees || []).forEach(e => {
       if (!(e.totalHours > 0) || names.has(normalizePersonName(e.name))) return;
       add(company, e);

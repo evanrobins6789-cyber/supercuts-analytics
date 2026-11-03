@@ -1744,19 +1744,12 @@ function PayExplainer({ pay, coaching, leaderName = null }) {
       {coaching?.length > 0 && (
         <>
           <p className="section-label">📈 Ways to raise {leaderName ? `${leaderName}'s` : 'your'} TSTH</p>
-          <p className="section-hint">Compared with others at the same store over the same dates (or company-wide when fewer than 3 others worked there). Each idea is on its own, not added together.</p>
+          <p className="section-hint">Compared with the other stylists at the same store over the same dates (or company-wide when fewer than 3 others worked there). Each idea is on its own; doing more than one adds up.</p>
           <div className="coach-list">
             {coaching.map(c => (
               <div key={c.key} className={`coach-card coach-card--${c.kind}`}>
                 <p className="coach-title">{c.title}</p>
                 <p className="coach-detail">{c.detail}</p>
-                {c.kind === 'idea' && (
-                  <p className="coach-impact">
-                    +{fmt$(c.extraSales)} in sales → TSTH +{money2(c.tsthUp)} ({money2(c.newTsth)})
-                    {c.bonusUp > 0.5 ? <> → <b>+{fmt$(c.bonusUp)} bonus</b> ({money2(c.bonusUp / pay.hours)}/hr more)</> : null}
-                    {c.reachesGoal ? <> · <b>reaches the bonus goal</b></> : (c.bonusUp <= 0.5 && pay.tsth < pay.goal ? <> · gets {leaderName ? 'them' : 'you'} {money2(c.tsthUp)}/hr closer to the goal</> : null)}
-                  </p>
-                )}
               </div>
             ))}
           </div>
@@ -1796,7 +1789,8 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
     const picked = pickOwnRecords({ dailyRows: [{ payload: history }], weeklyRows: [{ payload: weeklyHistory }], tipRows: [{ payload: tipsHistory }], names, start: range.start, end: range.end });
     const result = buildMyNumbers({ ...picked, start: range.start, end: range.end });
     const peers = buildPeerStats({ history, weeklyHistory, names, codes: result.stores.map(st => st.code), start: range.start, end: range.end });
-    return { top, result, peers };
+    const lastDate = Object.values(picked.history).map(h => h.date).sort().pop() || null;
+    return { top, result, peers, lastDate };
   }, [isOwner, presenting, history, weeklyHistory, tipsHistory, payRates, nameAliases, range.start, range.end]);
   const result = useMemo(() => {
     if (isOwner) return leaderTop?.result || (leaderTop ? { stores: [], total: null } : null);
@@ -1816,8 +1810,15 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
       ? buildPayBreakdown({ stores: result.stores, total: result.total, payRate: leaderTop?.top?.hourly ?? null, manager: !!leaderTop?.top?.manager })
       : buildPayBreakdown({ stores: result.stores, total: result.total, payRate: state.data?.payRate ?? null, manager: userRole === 'manager' || managerFromTips });
     const peers = isOwner ? leaderTop?.peers : state.data?.peers;
-    return { pay: p, coaching: buildCoaching({ stores: result.stores, pay: p, peers }) };
-  }, [result, isOwner, leaderTop, state.data, userRole]);
+    // Scale so-far bonus to the whole pay period at the same pace, when the
+    // dates shown are the start of a pay period that isn't over yet.
+    const lastDate = isOwner ? leaderTop?.lastDate : Object.values(state.data?.history || {}).map(h => h.date).sort().pop();
+    const per = payPeriodFor(range.start);
+    const dayCount = (a, b) => Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000) + 1;
+    const periodFactor = range.start === per.start && range.end <= per.end && lastDate && lastDate < per.end
+      ? dayCount(per.start, per.end) / dayCount(per.start, lastDate) : 1;
+    return { pay: p, coaching: buildCoaching({ stores: result.stores, pay: p, peers, periodFactor }) };
+  }, [result, isOwner, leaderTop, state.data, userRole, range.start, range.end]);
 
   if (presenting) return <div className="empty-state"><p className="empty-title">My Numbers is off in presenter mode</p><p>It shows a real person's numbers.</p></div>;
 
