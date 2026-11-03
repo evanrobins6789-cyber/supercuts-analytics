@@ -60,6 +60,8 @@
 - Confirm the Signature Service tab now shows 1016/$12,142.36 for Aug 1–9 (already corrected directly in Supabase, not just in code) — and if you have a cleaner source for the 1017/$12,154.36 figure you originally gave me, worth checking where that extra unit/$12 comes from.
 - None of the 2026-08-13 changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
 
+Last updated: 2026-11-02 (end). **Goals tab Milestone box shows "$" and commas as you type.** `moneyDigits`/`moneyDisplay` (next to `roundToNearest500`) render it as text (`inputMode="decimal"`) while the draft and the saved value stay plain numbers, so nothing stored changed. Unit-checked 6 cases, build clean. The other money goal boxes (Sales $, Retail $, Color $, Gift Cards $) are still plain number inputs; the user asked only about Milestone.
+
 Last updated: 2026-11-02 (latest). **Site-wide "bold & consolidated" look.** Pushed to `main`. **CSS only.** It's one block appended at the end of `src/App.css` (marked "Site-wide bold & consolidated look"); delete that block to revert. No JS, data, saving or loading changed; the user explicitly asked that nothing get deleted.
 - **What changed**:
   - Navy header rows on every `.ledger-table`. Bold navy numbers via `:where(.ledger-table) td`; the `:where()` is deliberate, so green/red classes like `ledger-margin-pos/neg` and TSTH colors still win.
