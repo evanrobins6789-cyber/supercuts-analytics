@@ -60,6 +60,13 @@
 - Confirm the Signature Service tab now shows 1016/$12,142.36 for Aug 1–9 (already corrected directly in Supabase, not just in code) — and if you have a cleaner source for the 1017/$12,154.36 figure you originally gave me, worth checking where that extra unit/$12 comes from.
 - None of the 2026-08-13 changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
 
+Last updated: 2026-11-02 (latest). **Site-wide "bold & consolidated" look.** Pushed to `main`. **CSS only.** It's one block appended at the end of `src/App.css` (marked "Site-wide bold & consolidated look"); delete that block to revert. No JS, data, saving or loading changed; the user explicitly asked that nothing get deleted.
+- **What changed**:
+  - Navy header rows on every `.ledger-table`. Bold navy numbers via `:where(.ledger-table) td`; the `:where()` is deliberate, so green/red classes like `ledger-margin-pos/neg` and TSTH colors still win.
+  - Tighter table rows (6px 9px), smaller gap between blocks on each tab (22 → 14px), and tighter metric tiles, leaderboards and DL cards. DL cards get a 4px navy left edge. Bolder section labels and tile labels.
+  - The Monthly Goals second header row is re-set to white so its own colors stay.
+- **Verified**: build clean. Before/after screenshots of Overview and Retail rendered with real October 2026 history (read-only GET to Supabase, temp jest harness deleted), plus a sample ledger table and the Monthly Goals mock. **Not verified**: every other tab live (Employees, DL, Budgets, Reviews, Leases, Setup tables share these classes, so they'll pick it up).
+
 Last updated: 2026-11-02 (late night). **Shear Check checklist made compact** (user: "consolidate the checklist, make yes/no/na closer to the question"). All sections now sit in one card (`.sc-checklist`) with slim navy section bars and "Mark rest Yes" in each bar. Each `.sc-row` is a grid: Yes/No/N/A buttons, then the question, then the note on the same line. On phones (<=640px) the note is hidden until the item is No, has text, or ✎ is tapped (`openNotes` state, `.sc-row-note-open`). Screenshot-checked at desktop and 520px; build clean.
 
 Last updated: 2026-11-02 (night). **New "Shear Check" tab: salon visit checklist, emailed to the store's DL, with score tracking.** Pushed to `main`.

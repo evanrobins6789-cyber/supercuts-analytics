@@ -1283,3 +1283,59 @@
   .sc-row-note-open .sc-note { display: block; }
   .sc-footer { bottom: 4px; }
 }
+
+/* ═══ Site-wide "bold & consolidated" look (2026-11-02) ═════════════════
+   Matches the Shear Check checklist: navy header rows, bolder navy numbers,
+   tighter rows and less empty space between blocks. Styling only; nothing
+   here changes what's saved or loaded. To undo the whole look, delete this
+   block (everything from this comment to the end of the file). */
+
+/* Less space between blocks on every tab. */
+.tab-content { gap: 14px; }
+.dl-list { gap: 8px; margin-bottom: 14px; }
+.lease-card-list { gap: 8px; }
+
+/* Section headings. */
+.section-label { font-weight: 700; font-size: 18px; letter-spacing: 0.02em; }
+.lease-card-title, .leaderboard-title, .dl-card-name { font-weight: 700; }
+.chart-title { font-weight: 700; margin-bottom: 8px; }
+
+/* Data tables: navy header row, bold navy numbers, tighter rows. */
+.ledger-table { font-size: 13px; }
+.ledger-table th, .ledger-table td { padding: 6px 9px; }
+/* :where() keeps this at the lowest priority, so any cell that already has
+   its own color (green/red vs Goal, YOY arrows, etc.) keeps it. */
+:where(.ledger-table) td { font-weight: 600; color: var(--navy); }
+.ledger-table thead th { background: var(--navy); color: #fff; font-weight: 700; font-size: 11.5px; border-bottom: none; }
+.ledger-table thead th.ledger-name-col { background: var(--navy); box-shadow: 2px 0 5px rgba(20,42,74,0.25); }
+.ledger-name-col { font-weight: 700; color: var(--navy); }
+.ledger-avg-row td { padding-top: 7px; padding-bottom: 7px; font-weight: 700; }
+/* Tables that already color their own header cells keep them. */
+.monthly-goals-table thead tr:nth-child(2) th { background: var(--card); color: var(--navy); }
+.monthly-goals-table thead tr:nth-child(2) th.mg-goal-col { background: #FFF8F8; }
+.monthly-goals-table thead th.ledger-name-col { background: var(--navy); color: #fff; }
+
+/* Metric tiles (Overview): tighter, bolder value. */
+.summary-grid { gap: 10px; }
+.summary-tile { padding: 10px 14px; }
+.summary-tile-label { font-weight: 700; color: var(--navy); }
+.summary-tile--active .summary-tile-label { color: #C9D4E3; }
+.summary-tile-value { font-size: 23px; font-weight: 700; margin-top: 2px; }
+
+/* Top/Bottom 10 leaderboards. */
+.leaderboard-grid { gap: 12px; }
+.leaderboard { padding: 12px 14px; }
+.leaderboard-title { margin-bottom: 6px; }
+.leaderboard-row { padding: 3px 0; }
+.leaderboard-name { font-weight: 600; font-size: 13.5px; }
+.leaderboard-value { font-weight: 700; font-size: 13px; }
+
+/* DL / store cards: slimmer header, bolder stats, navy accent edge. */
+.dl-card { border-left: 4px solid var(--navy); }
+.dl-card-head { padding: 9px 14px; gap: 6px; }
+.dl-stat-label { font-size: 10px; font-weight: 700; }
+.dl-stat-value { font-size: 14.5px; font-weight: 700; }
+
+/* General cards. */
+.lease-card { padding: 11px 14px; gap: 8px; }
+.monthly-goals { padding: 12px 14px; }
