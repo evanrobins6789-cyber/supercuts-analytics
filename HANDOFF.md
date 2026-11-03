@@ -1,11 +1,24 @@
 # Handoff — Supercuts Analytics
 
-**To work on (the user's list, added 2026-10-28, nothing built yet).** Only the topics are decided. Ask the user for the details (formulas, data sources, who sees what) before building, and don't invent pay or bonus rules:
-1. **Employee bonus amount plus tips, shown as an hourly figure.** Show each employee's bonus and tips, and what they work out to per hour. Still to ask: how the bonus is calculated, and where tips come from (no current upload carries tips; the Sales-Accrual "Payment Type" column may or may not help).
-2. **Store and employee rankings within their DL group.** Rank each store against the other stores in its DL group, and each employee against the other employees in that group (today's ranks are company-wide: the manager rank window, Top 10s). Still to ask: which metrics, and who sees it (manager, employee, DL).
-3. **Inventory ordering setup.** Still to ask: how ordering works today, what the order sheet looks like, and who places and approves orders.
-4. **Open shifts and the ability to fill them.** Post open shifts and let staff claim them. Still to ask: who posts, who can claim, whether a claim needs approval, and whether it ties into the Attendance schedule.
-5. **A "My Ticket" / "My Money" tab (name to be decided)** that houses items 1, 2 and 4 for the logged-in employee: their bonus, tips, hourly figure, group rank, and open shifts. Inventory stays out of it.
+## Where things stand (updated 2026-11-03, end of session)
+
+**The user's 2026-10-28 list:**
+1. ~~Bonus + tips as an hourly figure~~ **Built 2026-11-03.** The rules came from the user (see the TSTH/bonus entries below). Tips come from the new Tips report upload. Base pay comes from the Employee Pay Rate Report (locked `pay_rates` table).
+2. **Store and employee rankings within their DL group.** Not built. Still to ask: which metrics, and who sees it.
+3. **Inventory ordering setup.** Not built. Still to ask: how ordering works today, the order sheet, and who places and approves orders.
+4. **Open shifts and filling them.** Not built. Still to ask: who posts, who can claim, whether a claim needs approval, and whether it ties into Attendance.
+5. ~~"My Ticket / My Money" tab~~ **Built as the "My Numbers" tab** (every role, own numbers only; leadership sees the top-TSTH person or anyone they pick). Group rank (item 2) and open shifts (item 4) aren't in it yet.
+
+**Waiting on the user, as of the end of 2026-11-03 (all code is pushed, through `f8bcb8e`):**
+- **Re-upload this pay period's Sales-Accrual files** (at least `Sales-Accrual(475).xlsx`) via Setup → Historical Import, so the "Top extra services" list in My Numbers fills in (extras by name only exist in uploads from 2026-11-03 on).
+- **Upload `Tips(1).xlsx`** under Historical Import → Tips Files, if not done yet. Expect 1,639 tips, $13,415.80, Nov 1–2.
+- **Type "Sammy Allen"** in Samantha Allen's (Emp 1978) "Also in sales as" box in Setup → Employee Access. Then link the other ~27 people whose POS name doesn't match the pay rate report (listed under Pay Rates in Historical Import).
+- **Pay rates**: the user said they uploaded them on 2026-11-03. Not independently confirmed from here, since the anon key is (correctly) locked out of `pay_rates`.
+- **Leadership roll-up email**: the user pasted the new Apps Script `doPost`. Their first test still hit the old code (needs Deploy → Manage deployments → edit → **New version**). Not confirmed fixed.
+- **Open questions**: do DLs get the 30% management bonus rate? (Today 30% = role `manager` or the Tips report Job "Manager".) Should Possible pay project the whole pay period instead of "so far"? (Offered; coaching already projects to the end of the period.)
+- **Nothing from 2026-11-03 has been clicked through in a real browser or with an employee login.** Checks were builds, temp jest tests on real data, and headless screenshots of mocks.
+
+**Pushing from Claude Code in this repo**: commit with `git commit -m '…'` (single quotes), then a bare `git push origin main` as its own command. Pay/payroll-related pushes are sometimes still denied by auto mode's classifier. Then give the user `! git push origin main` to paste. Never chain the push with `cd`/pipes, or it won't match the allow rule.
 
 **Correction (user, 2026-11-03): TSTH = (net service + retail) ÷ hours, so it includes color and retail.** The 2026-09-02 and 2026-09-10 entries below that say "service revenue only, excluding retail and color" are wrong. The app's `tsth` already uses total sales incl. retail.
 
