@@ -2989,7 +2989,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
   const usingDefaultRange = isReportStale(report) && !(dateRange.start && dateRange.end);
   const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const isHistorical = !!(effectiveRange.start && effectiveRange.end);
-  // Monthly Sales goal scaled to the dates shown, else the standing goal.
+  // The full Monthly Sales goal for the month(s) shown (goalForRange).
   const goalStart = isHistorical ? effectiveRange.start : report?.startDateISO;
   const goalEnd = isHistorical ? effectiveRange.end : report?.endDateISO;
   const getSalesGoal = code => goalForRange(goals, code, 'salesGoal', goalStart, goalEnd).value;
@@ -4794,7 +4794,7 @@ function GiftCardsTab({ giftCardHistory, goals, query, onQuery, dateRange, onDat
   const usingDefaultRange = !(dateRange?.start && dateRange?.end);
   const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const hasAnyData = Object.keys(giftCardHistory || {}).length > 0;
-  // Monthly Gift Cards $ goal (Goals tab, owner only), scaled to the dates shown.
+  // Monthly Gift Cards $ goal (Goals tab, owner only), the full month (goalForRange).
   const getGoal = code => goalForRange(goals, code, 'giftCardGoal', effectiveRange.start, effectiveRange.end).value;
 
   // Every store with a sale in range OR a goal set, so a store with a goal
@@ -4986,11 +4986,12 @@ const fmtGoalValue = (f, v) => (v === '' || v == null ? '—' : f.money ? fmt$(v
 const monthlyGoalKey = (field, month) => `${field}:${month}`;
 const isoDayDiff = (a, b) => Math.round((new Date(`${b}T00:00:00`) - new Date(`${a}T00:00:00`)) / 86400000);
 // A store's goal for the dates being viewed. When every month the range
-// touches has a Monthly Goal for `field`, it's those goals scaled to the
-// days shown (a week of November = 7/30 of November's goal; month-to-date
-// = the days so far). With { rate: true } (a % goal) it's instead the
-// day-weighted average of those months' goals, unscaled. If any month in
-// the range has no Monthly Goal, there's no goal (null), never the old
+// touches has a Monthly Goal for `field`, it's the FULL monthly goal of
+// each month touched, never scaled down to the days shown (the user's rule,
+// 2026-11-03: a week of November shows November's whole goal; a range
+// across Oct–Nov shows both months' goals added). With { rate: true } (a %
+// goal) it's the day-weighted average of those months' goals. If any month
+// in the range has no Monthly Goal, there's no goal (null), never the old
 // standing goal. Returns { value, monthly }.
 function goalForRange(goals, code, field, start, end, { rate = false } = {}) {
   const g = goals?.[code];
@@ -5006,11 +5007,7 @@ function goalForRange(goals, code, field, start, end, { rate = false } = {}) {
     const s = start > `${mk}-01` ? start : `${mk}-01`;
     const e = end < monthEnd ? end : monthEnd;
     const n = isoDayDiff(s, e) + 1;
-    // $ and count goals are spread over the days stores are open, so a
-    // holiday (Thanksgiving etc., see closedHolidays in metrics.js) carries
-    // none of the goal.
-    const monthOpen = openDaysInRange(`${mk}-01`, monthEnd);
-    total += rate ? Number(v) * n : Number(v) * (monthOpen ? openDaysInRange(s, e) / monthOpen : 0);
+    total += rate ? Number(v) * n : Number(v);
     days += n;
   }
   return { value: rate ? total / days : total, monthly: true };
@@ -5022,8 +5019,8 @@ function goalSourceNote(start, end, usesMonthly) {
   const months = [];
   for (let mk = start.slice(0, 7); mk <= end.slice(0, 7); mk = shiftMonthKey(mk, 1)) months.push(fmtMonthLong(mk));
   if (!usesMonthly) return `No Monthly Goals are set for ${months.join(' / ')} yet (Goals tab), so goal columns show —.`;
-  const open = openDaysInRange(start, end);
-  return `Goals are the ${months.join(' / ')} Monthly Goals (Goals tab), scaled to the ${open} open day${open === 1 ? '' : 's'} shown${open < days ? ' (holidays carry no goal)' : ''}. A store with no goal for every month shown has no goal here.`;
+  const partial = start.slice(8) !== '01' || end !== `${end.slice(0, 7)}-${String(new Date(Number(end.slice(0, 4)), Number(end.slice(5, 7)), 0).getDate()).padStart(2, '0')}`;
+  return `Goals are the full ${months.join(' + ')} Monthly Goal${months.length === 1 ? '' : 's'} (Goals tab), not scaled to the ${days} day${days === 1 ? '' : 's'} shown${partial ? ', so vs Goal is progress toward the whole month' : ''}. A store with no goal for every month shown has no goal here.`;
 }
 const MONTHLY_REF_METRICS = [
   { key: 'cuts', label: 'Cuts', fmt: fmtInt },
@@ -7588,7 +7585,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       const ly = monthlyReference(history, weeklyHistory, shiftMonthKey(mk, -12));
       const pm = monthlyReference(history, weeklyHistory, shiftMonthKey(mk, -1));
       const refStr = r => (r ? `Cuts ${r.cuts}, CPD ${r.cpd != null ? r.cpd.toFixed(1) : 'n/a'}, Sales $${Math.round(r.sales)}, Daily Avg ${r.daily != null ? `$${Math.round(r.daily)}` : 'n/a'}, Weekly Avg ${r.weekly != null ? `$${Math.round(r.weekly)}` : 'n/a'}` : 'no data');
-      lines.push(`MONTHLY GOALS for ${fmtMonthLong(mk)} (for this month only, set on the Goals tab: Sales $ by leadership, broken into per-day (over the days stores are open; every store closes New Year's Day, Easter, Thanksgiving and Christmas) and per-week (monthly goal ÷ 4, so 4 weeks add up to the goal); the reference Weekly Avg is sales ÷ 4 (a month still in progress: sales ÷ open weeks so far); Retail $, Color $, Bottles (unit count), Signature Service (count of services, NOT dollars), Retail Attach % (share of color tickets that also have a retail item), Bottle-to-Color % and Bottle-to-SS % (bottles per color service / per Signature Service; goal-only, no actual is computed) by DLs; Gift Cards $ by the owner only. The app's tabs compare actuals against these goals scaled to the dates being viewed (% goals are not scaled). A store with no goal for a month has no goal at all; there are no standing goals any more; reference = same month last year (${fmtMonthLong(shiftMonthKey(mk, -12))}) and the month before (${fmtMonthLong(shiftMonthKey(mk, -1))})):`);
+      lines.push(`MONTHLY GOALS for ${fmtMonthLong(mk)} (for this month only, set on the Goals tab: Sales $ by leadership, broken into per-day (over the days stores are open; every store closes New Year's Day, Easter, Thanksgiving and Christmas) and per-week (monthly goal ÷ 4, so 4 weeks add up to the goal); the reference Weekly Avg is sales ÷ 4 (a month still in progress: sales ÷ open weeks so far); Retail $, Color $, Bottles (unit count), Signature Service (count of services, NOT dollars), Retail Attach % (share of color tickets that also have a retail item), Bottle-to-Color % and Bottle-to-SS % (bottles per color service / per Signature Service; goal-only, no actual is computed) by DLs; Gift Cards $ by the owner only. The app's tabs show the FULL monthly goal for the month(s) being viewed, not scaled to the dates (so a week view compares a week of sales against the whole month's goal; vs Goal there is progress toward the month). A store with no goal for a month has no goal at all; there are no standing goals any more; reference = same month last year (${fmtMonthLong(shiftMonthKey(mk, -12))}) and the month before (${fmtMonthLong(shiftMonthKey(mk, -1))})):`);
       rows.forEach(([code, g]) => {
         const v = f => g[monthlyGoalKey(f, mk)];
         const money = n => `$${Math.round(n)}`;
