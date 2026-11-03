@@ -60,6 +60,12 @@
 - Confirm the Signature Service tab now shows 1016/$12,142.36 for Aug 1–9 (already corrected directly in Supabase, not just in code) — and if you have a cleaner source for the 1017/$12,154.36 figure you originally gave me, worth checking where that extra unit/$12 comes from.
 - None of the 2026-08-13 changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
 
+Last updated: 2026-11-03 (gift cards). **DLs can see the Gift Cards tab, for their own stores only.** User: "make the gift card tab visible to the DLs".
+- **Server**: `filterPayload` (`api/scoped-data.js`) returns `gift_card_history_*` filtered to the DL's `store_codes` (`filterDailyHistory`, same record shape). Managers and employees still get `{}`.
+- **Client**: the gift card load, the tab list and the tab render now allow `district_leader`. `GiftCardsTab` takes `isOwner`. For a DL the Goal / vs Goal columns, DL-card Goal/Progress, the vs Goal sort and the upload button are hidden. **The gift card goal stays owner-only**, as the user decided earlier (`ownerVisible`). I kept it that way since they didn't ask to change it; offered to show it.
+- **Unchanged**: the Overview gift card tile and Tilly's gift card section are still owner-only.
+- **Verified**: build clean only. **Not verified** with a real DL login. Check that Katie and Allie's Employee Access store codes are updated (see the DL roster item above), or they'll miss their newer stores here too.
+
 Last updated: 2026-11-03 (final, rounding). **Weekly is now exactly the shown daily × 7.** User: "the weekly goal is still not a true x7, off by a dollar or two." The weekly came from the unrounded daily ($40,500 → $1,396.55 × 7 = $9,775.86, shown $9,776 next to a shown $1,397/day). `salesGoalBreakdown` now rounds daily to whole dollars first, and weekly = that × 7 ($1,397 → $9,779). Tested 15 goal/month combos, build clean.
 
 Last updated: 2026-11-03 (final). **Weekly Sales goal back to daily × 7.** User: "change the weekly goal to be the daily times 7 not the monthly divided by 4". This reverses the ÷ 4 entry below. `salesGoalBreakdown` weekly = (goal ÷ open days) × 7 again ($29,000 Nov → $1,000/day, $7,000/wk). `monthlyReference` Weekly Avg is back to sales ÷ (open days ÷ 7) to match, and `WEEKS_PER_MONTH` is gone. The Goals tab hint and Tilly's note were updated. **4 × weekly no longer adds up to the monthly goal, and the user chose that. Don't "fix" it again without asking.** Temp jest test passed, build clean.

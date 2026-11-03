@@ -114,7 +114,10 @@ function filterPayload(key, payload, employee) {
   if (key === 'store_managers' || key === 'milestone_goals') return filterCodeKeyedObject(payload, allowed);
   if (key === 'focus_stylists') return employee.role === 'district_leader' ? filterCodeKeyedObject(payload, allowed) : {};
   if (key === 'salon_checks') return employee.role === 'district_leader' ? filterCodeKeyedObject(payload, allowed) : {};
-  if (key.startsWith('gift_card_history_')) return {};
+  // Gift card sales: a DL gets their own stores' days (Gift Cards tab, the
+  // user's call 2026-11-03); managers/employees get nothing. Same
+  // { key: { code, date, ... } } shape as daily_history, so same filter.
+  if (key.startsWith('gift_card_history_')) return employee.role === 'district_leader' ? filterDailyHistory(payload, allowed) : {};
   // Leases (rent/landlord/critical-date data) are owner-only, full stop —
   // unlike store_goals/store_managers/milestone_goals, no other role has a
   // legitimate reason to see even their own store's entry, so this isn't a

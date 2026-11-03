@@ -4786,7 +4786,7 @@ function getGiftCardRangeTotals(giftCardHistory, startISO, endISO) {
   return byStore;
 }
 
-function GiftCardsTab({ giftCardHistory, goals, query, onQuery, dateRange, onDateRangeChange, onGoToUpload }) {
+function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery, dateRange, onDateRangeChange, onGoToUpload }) {
   const [sortBy, setSortBy] = useState('giftCards');
   const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
   const [expanded, setExpanded] = useState({});
@@ -4795,7 +4795,9 @@ function GiftCardsTab({ giftCardHistory, goals, query, onQuery, dateRange, onDat
   const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const hasAnyData = Object.keys(giftCardHistory || {}).length > 0;
   // Monthly Gift Cards $ goal (Goals tab, owner only), the full month (goalForRange).
-  const getGoal = code => goalForRange(goals, code, 'giftCardGoal', effectiveRange.start, effectiveRange.end).value;
+  // A DL sees the tab (their own stores) but never the goal: the server strips
+  // giftCardGoal for them anyway, and every goal column is hidden below.
+  const getGoal = code => !isOwner ? null : goalForRange(goals, code, 'giftCardGoal', effectiveRange.start, effectiveRange.end).value;
 
   // Every store with a sale in range OR a goal set, so a store with a goal
   // and no sales yet still shows up (as behind goal) instead of vanishing.
@@ -4827,7 +4829,7 @@ function GiftCardsTab({ giftCardHistory, goals, query, onQuery, dateRange, onDat
   const goalSum = list => list.reduce((s, r) => s + (r.goal ?? 0), 0);
   const diffCell = diff => <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${fmt$(diff)}` : '—'}</td>;
   const totalStoresShown = viewMode === 'dl' ? groups.reduce((n, g) => n + g.stores.length, 0) : sortedFlat.length;
-  const colCount = 5;
+  const colCount = isOwner ? 5 : 3;
 
   const storeRow = s => {
     const isOpen = !!expanded[s.code];
@@ -4838,8 +4840,8 @@ function GiftCardsTab({ giftCardHistory, goals, query, onQuery, dateRange, onDat
           <td className="ledger-name-col">{hasSellers && <span className={`mini-chevron ${isOpen ? 'mini-chevron--open' : ''}`}>▸</span>} {s.name}</td>
           <td>{fmt$(s.giftCards)}</td>
           <td>{fmtInt(s.giftCardCount)}</td>
-          <td>{s.goal != null ? fmt$(s.goal) : '—'}</td>
-          {diffCell(s.vsGoal)}
+          {isOwner && <td>{s.goal != null ? fmt$(s.goal) : '—'}</td>}
+          {isOwner && diffCell(s.vsGoal)}
         </tr>
         {isOpen && hasSellers && (
           <tr className="store-expand-row">
@@ -4860,7 +4862,7 @@ function GiftCardsTab({ giftCardHistory, goals, query, onQuery, dateRange, onDat
       </React.Fragment>
     );
   };
-  const tableHead = <thead><tr><th className="ledger-name-col">Store</th><th>Gift Card $</th><th># Sold</th><th>Goal</th><th>vs Goal</th></tr></thead>;
+  const tableHead = <thead><tr><th className="ledger-name-col">Store</th><th>Gift Card $</th><th># Sold</th>{isOwner && <th>Goal</th>}{isOwner && <th>vs Goal</th>}</tr></thead>;
   const totalsRow = (label, list) => {
     const goalTotal = goalSum(list);
     return (
@@ -4868,8 +4870,8 @@ function GiftCardsTab({ giftCardHistory, goals, query, onQuery, dateRange, onDat
         <td className="ledger-name-col">{label}</td>
         <td>{fmt$(sumOf(list, 'giftCards'))}</td>
         <td>{fmtInt(sumOf(list, 'giftCardCount'))}</td>
-        <td>{goalTotal > 0 ? fmt$(goalTotal) : '—'}</td>
-        {diffCell(goalTotal > 0 ? sumOf(list, 'giftCards') - goalTotal : null)}
+        {isOwner && <td>{goalTotal > 0 ? fmt$(goalTotal) : '—'}</td>}
+        {isOwner && diffCell(goalTotal > 0 ? sumOf(list, 'giftCards') - goalTotal : null)}
       </tr>
     );
   };
@@ -4878,8 +4880,14 @@ function GiftCardsTab({ giftCardHistory, goals, query, onQuery, dateRange, onDat
     return (
       <div className="empty-state">
         <p className="empty-title">No gift card sales yet</p>
-        <p>Run the "Gift Cards" report with Sale Date included, then upload it under Setup → Historical Import → Gift Cards Files.</p>
-        <button className="btn-primary" onClick={onGoToUpload}>Go to upload</button>
+        {isOwner ? (
+          <>
+            <p>Run the "Gift Cards" report with Sale Date included, then upload it under Setup → Historical Import → Gift Cards Files.</p>
+            <button className="btn-primary" onClick={onGoToUpload}>Go to upload</button>
+          </>
+        ) : (
+          <p>None of your stores have gift card sales uploaded yet.</p>
+        )}
       </div>
     );
   }
@@ -4887,7 +4895,7 @@ function GiftCardsTab({ giftCardHistory, goals, query, onQuery, dateRange, onDat
   return (
     <div className="tab-content">
       <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
-      {usingDefaultRange && <p className="section-hint">Showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}). Gift card sales only, not redemptions. Only you can see this tab.</p>}
+      {usingDefaultRange && <p className="section-hint">Showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}). Gift card sales only, not redemptions. {isOwner ? 'Only you and the DLs (their own stores) can see this tab; only you see the goals.' : 'Your stores only.'}</p>}
       <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
 
       <div className="view-toggle">
@@ -4900,7 +4908,7 @@ function GiftCardsTab({ giftCardHistory, goals, query, onQuery, dateRange, onDat
         <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
           <option value="giftCards">Sort: Gift Card $</option>
           <option value="giftCardCount">Sort: # Sold</option>
-          <option value="vsGoal">Sort: vs Goal</option>
+          {isOwner && <option value="vsGoal">Sort: vs Goal</option>}
           <option value="name">Sort: Name (A–Z)</option>
         </select>
       </div>
@@ -4922,8 +4930,8 @@ function GiftCardsTab({ giftCardHistory, goals, query, onQuery, dateRange, onDat
                   <div className="dl-card-stats">
                     <div className="dl-stat"><span className="dl-stat-label">Gift Card $</span><span className="dl-stat-value">{fmt$(amount)}</span></div>
                     <div className="dl-stat"><span className="dl-stat-label"># Sold</span><span className="dl-stat-value">{fmtInt(sumOf(g.stores, 'giftCardCount'))}</span></div>
-                    <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{goalTotal > 0 ? fmt$(goalTotal) : '—'}</span></div>
-                    <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={amount} milestone={goalTotal} /></div>
+                    {isOwner && <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{goalTotal > 0 ? fmt$(goalTotal) : '—'}</span></div>}
+                    {isOwner && <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={amount} milestone={goalTotal} /></div>}
                   </div>
                 </button>
                 {isLeaderOpen && (
@@ -9488,10 +9496,10 @@ export default function App() {
     }).catch(() => setLoading(false));
   }, [currentUser]);
 
-  // Owner-only: the server returns nothing for other roles anyway, so don't
-  // even ask.
+  // Owner gets every store; a DL gets only their own stores (filtered
+  // server-side). Other roles get nothing from the server, so don't ask.
   useEffect(() => {
-    if (!currentUser || currentUser.role !== 'owner') { setGiftCardHistory({}); return; }
+    if (!currentUser || (currentUser.role !== 'owner' && currentUser.role !== 'district_leader')) { setGiftCardHistory({}); return; }
     loadScopedByPrefix('gift_card_history_', currentUser.token).then(res => {
       const merged = {};
       (res.data || []).forEach(chunk => Object.assign(merged, chunk.payload));
@@ -10728,7 +10736,7 @@ export default function App() {
   const canFocus = currentUser.role === 'owner' || currentUser.role === 'district_leader';
   // Shear Check: same roles as Focus Stylist.
   const canSalonCheck = canFocus;
-  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner') && (t !== 'Gift Cards' || currentUser.role === 'owner') && (t !== 'Loss Prevention' || currentUser.role === 'owner') && (t !== 'Focus Stylist' || canFocus) && (t !== 'Shear Check' || canSalonCheck));
+  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner') && (t !== 'Gift Cards' || currentUser.role === 'owner' || currentUser.role === 'district_leader') && (t !== 'Loss Prevention' || currentUser.role === 'owner') && (t !== 'Focus Stylist' || canFocus) && (t !== 'Shear Check' || canSalonCheck));
   // A live weekly Stylist Report upload is no longer the only way to power
   // these tabs — Sales-Accrual + Attendance historical imports feed the
   // exact same tables via each tab's own current-month fallback (see
@@ -10827,9 +10835,9 @@ export default function App() {
             managers={d.managers} isOwner={currentUser.role === 'owner'}
           />
         )}
-        {tab === 'Gift Cards' && currentUser.role === 'owner' && (
+        {tab === 'Gift Cards' && (currentUser.role === 'owner' || currentUser.role === 'district_leader') && (
           <GiftCardsTab
-            giftCardHistory={d.giftCardHistory} goals={d.goals}
+            giftCardHistory={d.giftCardHistory} goals={d.goals} isOwner={currentUser.role === 'owner'}
             query={queries['Gift Cards']} onQuery={v => setQuery('Gift Cards', v)}
             dateRange={dateRange} onDateRangeChange={setDateRange}
             onGoToUpload={() => { setTab('Setup'); setSetupSection('history'); }}
