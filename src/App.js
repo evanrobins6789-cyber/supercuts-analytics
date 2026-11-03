@@ -29,7 +29,8 @@ import {
 } from './metrics';
 import { BITMOJI_POOLS } from './bitmoji';
 import { buildPayRows, topTsthRow, payPeriodFor, MIN_HOURS_FOR_TOP, buildRateLookup } from './payTracker';
-import { buildMyNumbers, pickOwnRecords, normalizePersonName } from './myNumbers';
+import { buildMyNumbers, pickOwnRecords, normalizePersonName, buildPeerStats } from './myNumbers';
+import { buildPayBreakdown, buildCoaching } from './payCoach';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
 import supercutsWordmarkBlue from './assets/branding/supercuts-wordmark-blue.png';
 import gcRobinBadge from './assets/branding/gc-robin-badge.png';
@@ -1669,6 +1670,102 @@ const previousPayPeriod = iso => {
   return payPeriodFor(`${py}-${String(pm).padStart(2, '0')}-16`);
 };
 
+// TSTH progress bar with the goal line labeled and the bonus zone marked.
+// Scale runs to 1.5× the goal (further if their TSTH is past that).
+function TsthBar({ tsth, goal, dark = true }) {
+  const max = Math.max(goal * 1.5, (tsth || 0) * 1.08);
+  const pct = Math.max(0, Math.min(100, ((tsth || 0) / max) * 100));
+  const goalPct = (goal / max) * 100;
+  const over = tsth >= goal;
+  return (
+    <div className={`tsth-bar ${dark ? 'tsth-bar--dark' : ''}`}>
+      <div className="tsth-bar-track" title={`TSTH $${(tsth || 0).toFixed(2)} vs goal $${goal}`}>
+        <div className="tsth-bar-bonus-zone" style={{ left: `${goalPct}%` }} />
+        <div className={`tsth-bar-fill ${over ? 'tsth-bar-fill--over' : ''}`} style={{ width: `${pct}%` }} />
+        <div className="tsth-bar-goal" style={{ left: `${goalPct}%` }} />
+      </div>
+      <div className="tsth-bar-labels">
+        <span className="tsth-bar-label-goal" style={{ left: `${goalPct}%` }}>TSTH goal ${goal}</span>
+        <span className="tsth-bar-label-bonus" style={{ left: `${goalPct + (100 - goalPct) / 2}%` }}>BONUS ▸</span>
+      </div>
+    </div>
+  );
+}
+
+// "How your pay works" + "Ways to raise your TSTH" (My Numbers).
+function PayExplainer({ pay, coaching, leaderName = null }) {
+  if (!pay) return null;
+  const you = leaderName ? `${leaderName}'s` : 'Your';
+  const money2 = v => `$${(v || 0).toFixed(2)}`;
+  const perHour = [
+    { label: 'Base rate', v: pay.payRate },
+    { label: 'Tips', v: pay.tipsPerHour },
+    { label: 'Bonus', v: pay.bonusPerHour, note: 'if you finish the pay period' },
+  ];
+  return (
+    <div className="pay-explainer">
+      <p className="section-label">💵 How {leaderName ? `${leaderName}'s` : 'your'} pay works</p>
+      <div className="pay-explainer-card">
+        <ol className="pay-explainer-steps">
+          <li><b>TSTH</b> = total sales (service + color + product) ÷ hours worked. {you} TSTH: <b>{fmt$(pay.sales)} ÷ {pay.hours.toFixed(1)} hrs = {money2(pay.tsth)}</b>.</li>
+          <li><b>TSTH goal</b> = 2 × the haircut price at {leaderName ? 'their' : 'your'} main store ({pay.homeStore}, {pay.state} ${pay.price}) = <b>${pay.goal}</b>.</li>
+          <li><b>Bonus</b> = everything above the goal × {Math.round(pay.bonusRate * 100)}%{pay.manager ? ' (management rate)' : ''}, paid on every hour worked, if {leaderName ? 'they finish' : 'you finish'} the pay period.{' '}
+            {pay.tsth > pay.goal
+              ? <>({money2(pay.tsth)} − ${pay.goal}) × {Math.round(pay.bonusRate * 100)}% = <b>{money2(pay.bonusPerHour)}/hr</b> × {pay.hours.toFixed(1)} hrs = <b>{fmt$(pay.bonus)}</b>.</>
+              : <>{you} TSTH is under the goal, so no bonus yet.</>}
+          </li>
+          <li><b>Guaranteed pay</b> = base pay + tips. <b>Possible pay</b> = guaranteed + bonus.</li>
+        </ol>
+        <TsthBar tsth={pay.tsth} goal={pay.goal} dark={false} />
+        <div className="ledger-scroll">
+          <table className="ledger-table pay-explainer-table">
+            <thead><tr><th className="ledger-name-col">Per hour</th>{perHour.map(p => <th key={p.label}>{p.label}</th>)}<th>Guaranteed / hr</th><th>Possible / hr</th></tr></thead>
+            <tbody>
+              <tr>
+                <td className="ledger-name-col">$ per hour</td>
+                {perHour.map(p => <td key={p.label}>{p.v == null ? '—' : money2(p.v)}</td>)}
+                <td>{pay.guaranteedPerHour == null ? '—' : money2(pay.guaranteedPerHour)}</td>
+                <td><b>{pay.possiblePerHour == null ? '—' : money2(pay.possiblePerHour)}</b></td>
+              </tr>
+              <tr>
+                <td className="ledger-name-col">Total so far</td>
+                <td>{pay.base == null ? '—' : fmt$(pay.base)}</td>
+                <td>{fmt$(pay.tips)}</td>
+                <td>{fmt$(pay.bonus)}</td>
+                <td>{pay.guaranteed == null ? '—' : fmt$(pay.guaranteed)}</td>
+                <td><b>{pay.possible == null ? '—' : fmt$(pay.possible)}</b></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        {pay.payRate == null && <p className="empty-note">Base pay isn't shown because no hourly rate is on file for {leaderName ? 'this name' : 'you'} yet.</p>}
+      </div>
+
+      {coaching?.length > 0 && (
+        <>
+          <p className="section-label">📈 Ways to raise {leaderName ? `${leaderName}'s` : 'your'} TSTH</p>
+          <p className="section-hint">Compared with others at the same store over the same dates (or company-wide when fewer than 3 others worked there). Each idea is on its own, not added together.</p>
+          <div className="coach-list">
+            {coaching.map(c => (
+              <div key={c.key} className={`coach-card coach-card--${c.kind}`}>
+                <p className="coach-title">{c.title}</p>
+                <p className="coach-detail">{c.detail}</p>
+                {c.kind === 'idea' && (
+                  <p className="coach-impact">
+                    +{fmt$(c.extraSales)} in sales → TSTH +{money2(c.tsthUp)} ({money2(c.newTsth)})
+                    {c.bonusUp > 0.5 ? <> → <b>+{fmt$(c.bonusUp)} bonus</b> ({money2(c.bonusUp / pay.hours)}/hr more)</> : null}
+                    {c.reachesGoal ? <> · <b>reaches the bonus goal</b></> : (c.bonusUp <= 0.5 && pay.tsth < pay.goal ? <> · gets {leaderName ? 'them' : 'you'} {money2(c.tsthUp)}/hr closer to the goal</> : null)}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── My Numbers tab (every role) ───────────────────────────────────────────
 // The logged-in person's own numbers, one row per store where the POS
 // recorded them doing the work, plus a combined total when there's more than
@@ -1676,7 +1773,7 @@ const previousPayPeriod = iso => {
 // Leadership (owner) instead sees the TOP-TSTH person for the dates picked
 // (min MIN_HOURS_FOR_TOP hours), worked out locally from the full history the
 // owner already has, in the same by-store layout.
-function MyNumbersTab({ token, userName, presenting, isOwner = false, history = null, weeklyHistory = null, tipsHistory = null }) {
+function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = false, history = null, weeklyHistory = null, tipsHistory = null, payRates = [], nameAliases = {} }) {
   const today = localTodayISO();
   const cur = payPeriodFor(today);
   const [range, setRange] = useState({ start: cur.start, end: today < cur.end ? today : cur.end });
@@ -1692,11 +1789,15 @@ function MyNumbersTab({ token, userName, presenting, isOwner = false, history = 
   }, [token, range.start, range.end, presenting, isOwner]);
   const leaderTop = useMemo(() => {
     if (!isOwner || presenting || !range.start || !range.end) return null;
-    const top = topTsthRow(buildPayRows({ history, weeklyHistory, tipsHistory, start: range.start, end: range.end }));
+    const rateFor = payRates.length ? buildRateLookup(payRates, nameAliases) : null;
+    const top = topTsthRow(buildPayRows({ history, weeklyHistory, tipsHistory, start: range.start, end: range.end, rateFor }));
     if (!top) return { top: null };
-    const picked = pickOwnRecords({ dailyRows: [{ payload: history }], weeklyRows: [{ payload: weeklyHistory }], tipRows: [{ payload: tipsHistory }], names: new Set([normalizePersonName(top.name)]), start: range.start, end: range.end });
-    return { top, result: buildMyNumbers({ ...picked, start: range.start, end: range.end }) };
-  }, [isOwner, presenting, history, weeklyHistory, tipsHistory, range.start, range.end]);
+    const names = new Set([normalizePersonName(top.name)]);
+    const picked = pickOwnRecords({ dailyRows: [{ payload: history }], weeklyRows: [{ payload: weeklyHistory }], tipRows: [{ payload: tipsHistory }], names, start: range.start, end: range.end });
+    const result = buildMyNumbers({ ...picked, start: range.start, end: range.end });
+    const peers = buildPeerStats({ history, weeklyHistory, names, codes: result.stores.map(st => st.code), start: range.start, end: range.end });
+    return { top, result, peers };
+  }, [isOwner, presenting, history, weeklyHistory, tipsHistory, payRates, nameAliases, range.start, range.end]);
   const result = useMemo(() => {
     if (isOwner) return leaderTop?.result || (leaderTop ? { stores: [], total: null } : null);
     return state.data
@@ -1704,6 +1805,19 @@ function MyNumbersTab({ token, userName, presenting, isOwner = false, history = 
       : null;
   }, [isOwner, leaderTop, state.data, range.start, range.end]);
   const loading = isOwner ? false : state.loading;
+  // Pay breakdown + coaching. Employees: their own rate and store-peer
+  // averages come from the server. Leadership: worked out locally for the
+  // top-TSTH person.
+  const { pay, coaching } = useMemo(() => {
+    if (!result?.stores?.length) return { pay: null, coaching: [] };
+    const tipsSrc = isOwner ? null : state.data?.tips;
+    const managerFromTips = Object.values(tipsSrc || {}).some(rec => Object.values(rec.employees || {}).some(v => /manager/i.test(v.job || '')));
+    const p = isOwner
+      ? buildPayBreakdown({ stores: result.stores, total: result.total, payRate: leaderTop?.top?.hourly ?? null, manager: !!leaderTop?.top?.manager })
+      : buildPayBreakdown({ stores: result.stores, total: result.total, payRate: state.data?.payRate ?? null, manager: userRole === 'manager' || managerFromTips });
+    const peers = isOwner ? leaderTop?.peers : state.data?.peers;
+    return { pay: p, coaching: buildCoaching({ stores: result.stores, pay: p, peers }) };
+  }, [result, isOwner, leaderTop, state.data, userRole]);
 
   if (presenting) return <div className="empty-state"><p className="empty-title">My Numbers is off in presenter mode</p><p>It shows a real person's numbers.</p></div>;
 
@@ -1747,13 +1861,16 @@ function MyNumbersTab({ token, userName, presenting, isOwner = false, history = 
       {loading && <span className="spinner small" />}
       {!isOwner && state.error && <p className="password-error">Couldn't load your numbers: {state.error}</p>}
       {!loading && result && (result.stores.length ? (
-        <div className="ledger-scroll">
-          <table className="ledger-table">
-            <thead><tr><th className="ledger-name-col">Store</th>{cols.map(c => <th key={c.key}>{c.label}</th>)}</tr></thead>
-            <tbody>{result.stores.map(s => row(s.name, s))}</tbody>
-            {result.stores.length > 1 && <tfoot>{row('All stores', result.total, 'ledger-avg-row')}</tfoot>}
-          </table>
-        </div>
+        <>
+          <div className="ledger-scroll">
+            <table className="ledger-table">
+              <thead><tr><th className="ledger-name-col">Store</th>{cols.map(c => <th key={c.key}>{c.label}</th>)}</tr></thead>
+              <tbody>{result.stores.map(s => row(s.name, s))}</tbody>
+              {result.stores.length > 1 && <tfoot>{row('All stores', result.total, 'ledger-avg-row')}</tfoot>}
+            </table>
+          </div>
+          <PayExplainer pay={pay} coaching={coaching} leaderName={isOwner ? leaderTop?.top?.name : null} />
+        </>
       ) : isOwner ? (
         <p className="empty-note">No one has {MIN_HOURS_FOR_TOP}+ hours with sales on file for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}.</p>
       ) : (
@@ -1777,16 +1894,11 @@ function PayTrackerCard({ data }) {
       </div>
     );
   }
-  const pct = top.goal > 0 ? Math.min(100, (top.tsth / (top.goal * 1.5)) * 100) : 0;
-  const goalMark = (1 / 1.5) * 100;
   return (
     <div className="pay-tracker">
       <p className="pay-tracker-eyebrow">Pay period {periodLabel} · Top TSTH{through ? ` · through ${fmtPayDate(through)}` : ''}</p>
       <p className="pay-tracker-name">{top.name} <span>{top.store} ({top.state}) · {top.manager ? 'Manager, 30%' : 'Stylist, 25%'}</span></p>
-      <div className="pay-tracker-bar" title={`TSTH ${fmt$(top.tsth)} vs goal ${fmt$(top.goal)}`}>
-        <div className={`pay-tracker-fill ${top.tsth >= top.goal ? 'pay-tracker-fill--over' : ''}`} style={{ width: `${pct}%` }} />
-        <div className="pay-tracker-goal" style={{ left: `${goalMark}%` }} />
-      </div>
+      <TsthBar tsth={top.tsth} goal={top.goal} />
       <div className="pay-tracker-stats">
         <div><span>Hours worked</span><strong>{fmtNum(top.hours, 1)}</strong></div>
         <div><span>Production</span><strong>{fmt$(top.sales)}</strong></div>
@@ -11194,7 +11306,7 @@ export default function App() {
             payTracker={payTracker}
           />
         )}
-        {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={currentUser.name} presenting={presenting} isOwner={currentUser.role === 'owner'} history={history} weeklyHistory={weeklyHistory} tipsHistory={tipsHistory} />}
+        {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={currentUser.name} userRole={currentUser.role} presenting={presenting} isOwner={currentUser.role === 'owner'} history={history} weeklyHistory={weeklyHistory} tipsHistory={tipsHistory} payRates={payRates} nameAliases={nameAliases} />}
         {tab === 'News' && (
           <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={currentUser} newsReads={d.newsReads} onSignOff={handleSignOffNews} />
         )}

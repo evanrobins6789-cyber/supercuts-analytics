@@ -14,7 +14,7 @@
 // Logins and PINs are untouched by any of this.
 
 import { createServiceClient, requireSession } from '../src/serverAuth.js';
-import { normalizePersonName, pickOwnRecords } from '../src/myNumbers.js';
+import { normalizePersonName, pickOwnRecords, buildPeerStats } from '../src/myNumbers.js';
 
 const MAX_DAYS = 400;
 
@@ -64,7 +64,25 @@ export async function handleMyNumbers(req, res) {
       Promise.all(months.map(mk => loadPrefix(supabase, `tips_history_${mk}`))).then(r => r.flat()),
     ]);
     const picked = pickOwnRecords({ dailyRows, weeklyRows, tipRows, names, start, end });
-    res.status(200).json({ ok: true, name: employee.name, matchedNames: [...names], ...picked });
+    // Coaching: averages of everyone else at the stores they worked (and
+    // company-wide). Totals only, no names. The client only shows a store's
+    // averages when 3+ others worked there, so one coworker's numbers can't
+    // be read off them.
+    const fullHistory = {};
+    dailyRows.forEach(row => Object.assign(fullHistory, row.payload || {}));
+    const fullWeekly = {};
+    weeklyRows.forEach(row => Object.assign(fullWeekly, row.payload || {}));
+    const codes = [...new Set(Object.values(picked.history).map(r => r.code))];
+    Object.values(picked.weeklyHistory).forEach(w => Object.entries(w.stores || {}).forEach(([c, s]) => { if (s.employees?.length) codes.push(c); }));
+    const peers = buildPeerStats({ history: fullHistory, weeklyHistory: fullWeekly, names, codes: [...new Set(codes)], start, end });
+    // Their own hourly rate from the locked pay_rates table (Emp ID =
+    // employee_code). Missing table or no row → null, never an error.
+    let payRate = null;
+    try {
+      const { data: rateRow } = await supabase.from('pay_rates').select('rate').eq('emp_number', employee.employee_code).maybeSingle();
+      if (rateRow && rateRow.rate != null) payRate = Number(rateRow.rate);
+    } catch { /* table not set up: no base pay */ }
+    res.status(200).json({ ok: true, name: employee.name, role: employee.role, matchedNames: [...names], ...picked, peers, payRate });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }

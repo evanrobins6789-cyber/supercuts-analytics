@@ -43,6 +43,35 @@ export function buildMyNumbers({ history, weeklyHistory, tips, start, end }) {
   return { stores, total: finish(total) };
 }
 
+// Store-peer averages for coaching (2026-11-03): for each store in `codes`,
+// the totals of everyone ELSE who worked there in [start, end], plus the same
+// company-wide. Aggregates only, never names. `people` counts others with
+// hours; `withRetail`/`withColor` count how many of them sold any.
+const EMPTY_PEERS = () => ({ people: 0, withRetail: 0, withColor: 0, hours: 0, sales: 0, retail: 0, colorSales: 0, haircuts: 0 });
+export function buildPeerStats({ history, weeklyHistory, names, codes, start, end }) {
+  const totals = getRangeTotals(history, weeklyHistory, start, end);
+  const stores = {};
+  const company = EMPTY_PEERS();
+  const add = (agg, e) => {
+    agg.people += 1;
+    if ((e.retail || 0) > 0) agg.withRetail += 1;
+    if ((e.colorSales || 0) > 0) agg.withColor += 1;
+    agg.hours += e.totalHours || 0;
+    agg.sales += e.sales || 0;
+    agg.retail += e.retail || 0;
+    agg.colorSales += e.colorSales || 0;
+    agg.haircuts += e.haircuts || 0;
+  };
+  Object.entries(totals).forEach(([code, t]) => {
+    (t.employees || []).forEach(e => {
+      if (!(e.totalHours > 0) || names.has(normalizePersonName(e.name))) return;
+      add(company, e);
+      if (codes.includes(code)) add(stores[code] ||= EMPTY_PEERS(), e);
+    });
+  });
+  return { stores, company };
+}
+
 // Shared with api/_my-numbers.js (server) and the leadership view of the tab.
 export const normalizePersonName = raw => String(raw || '').replace(/\./g, '').replace(/\s+/g, ' ').trim().toLowerCase();
 

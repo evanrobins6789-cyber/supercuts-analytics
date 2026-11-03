@@ -1371,3 +1371,34 @@
 .homepage-hero-left { flex: 0 1 340px; display: flex; flex-direction: column; gap: 6px; }
 .homepage-hero-left .homepage-hero-actions { margin-top: 6px; }
 .homepage-hero-blurb--left { text-align: left; margin: 4px 0 0; max-width: 340px; flex: none; }
+
+/* ─── TSTH bar: goal line labeled, bonus zone shaded (pay tracker + My Numbers) ── */
+.tsth-bar { margin: 10px 0 18px; }
+.tsth-bar-track { position: relative; height: 10px; border-radius: 999px; background: #E3E8EF; overflow: visible; }
+.tsth-bar-bonus-zone { position: absolute; top: 0; bottom: 0; right: 0; border-radius: 0 999px 999px 0; background: repeating-linear-gradient(135deg, rgba(91,201,138,0.22) 0 6px, rgba(91,201,138,0.10) 6px 12px); }
+.tsth-bar-fill { position: absolute; top: 0; left: 0; bottom: 0; border-radius: 999px; background: #E9B949; }
+.tsth-bar-fill--over { background: #3FAE6E; }
+.tsth-bar-goal { position: absolute; top: -4px; width: 2px; height: 18px; margin-left: -1px; background: var(--navy); border-radius: 1px; }
+.tsth-bar-labels { position: relative; height: 14px; margin-top: 4px; }
+.tsth-bar-labels span { position: absolute; transform: translateX(-50%); white-space: nowrap; font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em; color: var(--navy); }
+.tsth-bar-label-bonus { color: #2E8B57 !important; }
+.tsth-bar--dark .tsth-bar-track { background: rgba(255,255,255,0.18); }
+.tsth-bar--dark .tsth-bar-bonus-zone { background: repeating-linear-gradient(135deg, rgba(155,227,184,0.30) 0 6px, rgba(155,227,184,0.12) 6px 12px); }
+.tsth-bar--dark .tsth-bar-fill--over { background: #5BC98A; }
+.tsth-bar--dark .tsth-bar-goal { background: #fff; }
+.tsth-bar--dark .tsth-bar-labels span { color: #fff; }
+.tsth-bar--dark .tsth-bar-label-bonus { color: #9BE3B8 !important; }
+
+/* ─── My Numbers: how pay works + coaching ───────────────────────────────── */
+.pay-explainer { margin-top: 18px; display: flex; flex-direction: column; gap: 10px; }
+.pay-explainer-card { background: var(--card, #fff); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.pay-explainer-steps { margin: 0 0 4px; padding-left: 20px; font-size: 13.5px; line-height: 1.55; color: #333; }
+.pay-explainer-steps li { margin: 3px 0; }
+.pay-explainer-table td, .pay-explainer-table th { text-align: right; }
+.coach-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+.coach-card { border: 1px solid var(--line); border-left: 4px solid #E9B949; border-radius: 10px; padding: 10px 12px; background: var(--card, #fff); }
+.coach-card--good { border-left-color: #3FAE6E; }
+.coach-card--goal { border-left-color: var(--red, #C8102E); }
+.coach-title { font-weight: 700; color: var(--navy); font-size: 14px; margin: 0 0 4px; }
+.coach-detail { font-size: 13px; color: #444; line-height: 1.45; margin: 0; }
+.coach-impact { font-size: 12.5px; color: #2E6B47; margin: 6px 0 0; font-weight: 600; }
