@@ -1343,7 +1343,7 @@
 /* ─── Homepage pay tracker (hero, next to "Welcome back") ─────────────────
    Leadership preview of the pay-period earnings tracker (src/payTracker.js). */
 .pay-tracker {
-  flex: 1 1 420px; max-width: 660px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16);
+  flex: 1 1 520px; max-width: none; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16);
   border-radius: 12px; padding: 10px 14px; position: relative; z-index: 1;
 }
 .pay-tracker-eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #B9C6D6; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -1361,3 +1361,9 @@
 .pay-tracker-stats em { font-style: normal; font-size: 10.5px; color: #C7D3E3; }
 .pay-tracker-total { grid-column: span 2; }
 .pay-tracker-total strong { color: #FFE08A; font-size: 18px; }
+
+/* Hero left column when the pay tracker is shown: welcome, date, post
+   buttons, then the blurb underneath them. */
+.homepage-hero-left { flex: 0 1 340px; display: flex; flex-direction: column; gap: 6px; }
+.homepage-hero-left .homepage-hero-actions { margin-top: 6px; }
+.homepage-hero-blurb--left { text-align: left; margin: 4px 0 0; max-width: 340px; flex: none; }

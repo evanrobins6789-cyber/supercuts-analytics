@@ -1896,17 +1896,37 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
         />
       )}
       <div className="homepage-hero">
-        <div>
-          <p className="homepage-hero-title">Welcome back 👋</p>
-          <p className="homepage-hero-eyebrow">{fmtDateLong(todayISO)}</p>
-        </div>
-        <PayTrackerCard data={payTracker} />
-        <p className="homepage-hero-blurb">Catch up on the latest news, see what's coming up, and find out who's leading the pack. Let's make it a great day! ✂️</p>
-        {canPost && (
-          <div className="homepage-hero-actions">
-            <button type="button" className="homepage-hero-action" onClick={() => setQuickPost('news')}>📣 Post Update</button>
-            <button type="button" className="homepage-hero-action" onClick={() => setQuickPost('event')}>📅 Post Event</button>
-          </div>
+        {payTracker ? (
+          // With the pay tracker: welcome, date, post buttons and blurb stack
+          // on the left, and the tracker card stretches across the rest.
+          <>
+            <div className="homepage-hero-left">
+              <p className="homepage-hero-title">Welcome back 👋</p>
+              <p className="homepage-hero-eyebrow">{fmtDateLong(todayISO)}</p>
+              {canPost && (
+                <div className="homepage-hero-actions">
+                  <button type="button" className="homepage-hero-action" onClick={() => setQuickPost('news')}>📣 Post Update</button>
+                  <button type="button" className="homepage-hero-action" onClick={() => setQuickPost('event')}>📅 Post Event</button>
+                </div>
+              )}
+              <p className="homepage-hero-blurb homepage-hero-blurb--left">Catch up on the latest news, see what's coming up, and find out who's leading the pack. Let's make it a great day! ✂️</p>
+            </div>
+            <PayTrackerCard data={payTracker} />
+          </>
+        ) : (
+          <>
+            <div>
+              <p className="homepage-hero-title">Welcome back 👋</p>
+              <p className="homepage-hero-eyebrow">{fmtDateLong(todayISO)}</p>
+            </div>
+            <p className="homepage-hero-blurb">Catch up on the latest news, see what's coming up, and find out who's leading the pack. Let's make it a great day! ✂️</p>
+            {canPost && (
+              <div className="homepage-hero-actions">
+                <button type="button" className="homepage-hero-action" onClick={() => setQuickPost('news')}>📣 Post Update</button>
+                <button type="button" className="homepage-hero-action" onClick={() => setQuickPost('event')}>📅 Post Event</button>
+              </div>
+            )}
+          </>
         )}
         <BitmojiPeek img={bitmojiImg} active={bitmojiKey === 'hero'} corner="bottom-right" />
       </div>
