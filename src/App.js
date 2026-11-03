@@ -29,7 +29,7 @@ import {
 } from './metrics';
 import { BITMOJI_POOLS } from './bitmoji';
 import { buildPayRows, topTsthRow, payPeriodFor, MIN_HOURS_FOR_TOP } from './payTracker';
-import { buildMyNumbers } from './myNumbers';
+import { buildMyNumbers, pickOwnRecords, normalizePersonName } from './myNumbers';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
 import supercutsWordmarkBlue from './assets/branding/supercuts-wordmark-blue.png';
 import gcRobinBadge from './assets/branding/gc-robin-badge.png';
@@ -1673,23 +1673,37 @@ const previousPayPeriod = iso => {
 // The logged-in person's own numbers, one row per store where the POS
 // recorded them doing the work, plus a combined total when there's more than
 // one store. The server sends only their own lines (api/_my-numbers.js).
-function MyNumbersTab({ token, userName, presenting }) {
+// Leadership (owner) instead sees the TOP-TSTH person for the dates picked
+// (min MIN_HOURS_FOR_TOP hours), worked out locally from the full history the
+// owner already has, in the same by-store layout.
+function MyNumbersTab({ token, userName, presenting, isOwner = false, history = null, weeklyHistory = null, tipsHistory = null }) {
   const today = localTodayISO();
   const cur = payPeriodFor(today);
   const [range, setRange] = useState({ start: cur.start, end: today < cur.end ? today : cur.end });
   const [state, setState] = useState({ loading: true, data: null, error: null });
   useEffect(() => {
-    if (presenting || !range.start || !range.end) return undefined;
+    if (presenting || isOwner || !range.start || !range.end) return undefined;
     let cancelled = false;
     setState(s => ({ ...s, loading: true, error: null }));
     myNumbers(token, range.start, range.end).then(r => {
       if (!cancelled) setState({ loading: false, data: r.ok ? r : null, error: r.ok ? null : r.error });
     });
     return () => { cancelled = true; };
-  }, [token, range.start, range.end, presenting]);
-  const result = useMemo(() => (state.data
-    ? buildMyNumbers({ history: state.data.history, weeklyHistory: state.data.weeklyHistory, tips: state.data.tips, start: range.start, end: range.end })
-    : null), [state.data, range.start, range.end]);
+  }, [token, range.start, range.end, presenting, isOwner]);
+  const leaderTop = useMemo(() => {
+    if (!isOwner || presenting || !range.start || !range.end) return null;
+    const top = topTsthRow(buildPayRows({ history, weeklyHistory, tipsHistory, start: range.start, end: range.end }));
+    if (!top) return { top: null };
+    const picked = pickOwnRecords({ dailyRows: [{ payload: history }], weeklyRows: [{ payload: weeklyHistory }], tipRows: [{ payload: tipsHistory }], names: new Set([normalizePersonName(top.name)]), start: range.start, end: range.end });
+    return { top, result: buildMyNumbers({ ...picked, start: range.start, end: range.end }) };
+  }, [isOwner, presenting, history, weeklyHistory, tipsHistory, range.start, range.end]);
+  const result = useMemo(() => {
+    if (isOwner) return leaderTop?.result || (leaderTop ? { stores: [], total: null } : null);
+    return state.data
+      ? buildMyNumbers({ history: state.data.history, weeklyHistory: state.data.weeklyHistory, tips: state.data.tips, start: range.start, end: range.end })
+      : null;
+  }, [isOwner, leaderTop, state.data, range.start, range.end]);
+  const loading = isOwner ? false : state.loading;
 
   if (presenting) return <div className="empty-state"><p className="empty-title">My Numbers is off in presenter mode</p><p>It shows a real person's numbers.</p></div>;
 
@@ -1719,16 +1733,20 @@ function MyNumbersTab({ token, userName, presenting }) {
 
   return (
     <div className="tab-content">
-      <p className="section-hint">Your own numbers{userName ? `, ${userName}` : ''}, by the store where you did the work (as the POS recorded it). TSTH is total sales (service, color and retail) ÷ hours. Only you can see this.</p>
+      {isOwner ? (
+        <p className="section-hint">Leadership view: the top-TSTH person for these dates (at least {MIN_HOURS_FOR_TOP} hours){leaderTop?.top ? <>: <b>{leaderTop.top.name}</b> ({leaderTop.top.store}, TSTH ${leaderTop.top.tsth.toFixed(2)})</> : ''}. Everyone else sees only their own numbers here. TSTH is total sales (service, color and retail) ÷ hours.</p>
+      ) : (
+        <p className="section-hint">Your own numbers{userName ? `, ${userName}` : ''}, by the store where you did the work (as the POS recorded it). TSTH is total sales (service, color and retail) ÷ hours. Only you can see this.</p>
+      )}
       <div className="view-toggle">
         {presets.map(p => (
           <button key={p.label} className={`view-toggle-btn ${range.start === p.start && range.end === p.end ? 'active' : ''}`} onClick={() => setRange({ start: p.start, end: p.end })}>{p.label}</button>
         ))}
       </div>
       <DateRangeBar start={range.start} end={range.end} onChange={(s, e) => setRange({ start: s, end: e })} />
-      {state.loading && <span className="spinner small" />}
-      {state.error && <p className="password-error">Couldn't load your numbers: {state.error}</p>}
-      {!state.loading && result && (result.stores.length ? (
+      {loading && <span className="spinner small" />}
+      {!isOwner && state.error && <p className="password-error">Couldn't load your numbers: {state.error}</p>}
+      {!loading && result && (result.stores.length ? (
         <div className="ledger-scroll">
           <table className="ledger-table">
             <thead><tr><th className="ledger-name-col">Store</th>{cols.map(c => <th key={c.key}>{c.label}</th>)}</tr></thead>
@@ -1736,6 +1754,8 @@ function MyNumbersTab({ token, userName, presenting }) {
             {result.stores.length > 1 && <tfoot>{row('All stores', result.total, 'ledger-avg-row')}</tfoot>}
           </table>
         </div>
+      ) : isOwner ? (
+        <p className="empty-note">No one has {MIN_HOURS_FOR_TOP}+ hours with sales on file for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}.</p>
       ) : (
         <p className="empty-note">No sales, hours or tips found under your name ({(state.data?.matchedNames || []).join(', ') || userName}) for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}. If the POS spells your name differently, ask leadership to link that spelling to your login in Setup › Employee Access.</p>
       ))}
@@ -11067,7 +11087,7 @@ export default function App() {
             payTracker={payTracker}
           />
         )}
-        {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={currentUser.name} presenting={presenting} />}
+        {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={currentUser.name} presenting={presenting} isOwner={currentUser.role === 'owner'} history={history} weeklyHistory={weeklyHistory} tipsHistory={tipsHistory} />}
         {tab === 'News' && (
           <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={currentUser} newsReads={d.newsReads} onSignOff={handleSignOffNews} />
         )}

@@ -14,8 +14,8 @@
 // Logins and PINs are untouched by any of this.
 
 import { createServiceClient, requireSession } from '../src/serverAuth.js';
+import { normalizePersonName, pickOwnRecords } from '../src/myNumbers.js';
 
-export const normalizePersonName = raw => String(raw || '').replace(/\./g, '').replace(/\s+/g, ' ').trim().toLowerCase();
 const MAX_DAYS = 400;
 
 function monthKeysBetween(start, end) {
@@ -39,39 +39,6 @@ async function loadPrefix(supabase, prefix) {
     if (!data || data.length < PAGE) break;
   }
   return rows;
-}
-
-// Pure filter, exported for testing: keeps only `names`' own entries.
-export function pickOwnRecords({ dailyRows, weeklyRows, tipRows, names, start, end }) {
-  const isMe = n => names.has(normalizePersonName(n));
-  const history = {};
-  dailyRows.forEach(row => Object.entries(row.payload || {}).forEach(([key, rec]) => {
-    if (!rec || rec.date < start || rec.date > end) return;
-    const mine = Object.entries(rec.employees || {}).filter(([n]) => isMe(n));
-    if (!mine.length) return;
-    history[key] = { code: rec.code, date: rec.date, employees: Object.fromEntries(mine) };
-  }));
-  const weeklyHistory = {};
-  weeklyRows.forEach(row => Object.entries(row.payload || {}).forEach(([weekKey, w]) => {
-    if (!w || w.endDate < start || w.startDate > end) return;
-    const stores = {};
-    Object.entries(w.stores || {}).forEach(([code, s]) => {
-      const mine = (s.employees || []).filter(e => isMe(e.name));
-      // An empty entry still marks the store as covered by that week, so the
-      // client's getRangeTotals skips those days in daily history the same
-      // way it does for everyone else.
-      stores[code] = { employees: mine };
-    });
-    weeklyHistory[weekKey] = { weekKey, startDate: w.startDate, endDate: w.endDate, stores };
-  }));
-  const tips = {};
-  tipRows.forEach(row => Object.entries(row.payload || {}).forEach(([key, rec]) => {
-    if (!rec || rec.date < start || rec.date > end) return;
-    const mine = Object.entries(rec.employees || {}).filter(([n]) => isMe(n));
-    if (!mine.length) return;
-    tips[key] = { code: rec.code, date: rec.date, employees: Object.fromEntries(mine) };
-  }));
-  return { history, weeklyHistory, tips };
 }
 
 export async function handleMyNumbers(req, res) {
