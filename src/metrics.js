@@ -407,11 +407,14 @@ export function openDaysInRange(start, end) {
 // are open that month (November 2026: 30 days − Thanksgiving = 29). Weekly =
 // daily × 7 (the user's rule, 2026-11-03; it was goal ÷ 4 for a few hours
 // the same day). So 4 weeks don't add up to the monthly goal in a month
-// with more than 28 open days; that's expected.
+// with more than 28 open days; that's expected. The daily is rounded to
+// whole dollars first (that's how it's shown), and weekly is that shown
+// daily × 7, so anyone multiplying the two numbers gets an exact match.
 export function salesGoalBreakdown(goal, mk) {
   if (goal == null || goal === '' || isNaN(Number(goal))) return null;
   const [y, m] = mk.split('-').map(Number);
   const days = new Date(y, m, 0).getDate();
   const openDays = openDaysInRange(`${mk}-01`, `${mk}-${String(days).padStart(2, '0')}`);
-  return { daily: Number(goal) / openDays, weekly: (Number(goal) / openDays) * 7, openDays, days };
+  const daily = Math.round(Number(goal) / openDays);
+  return { daily, weekly: daily * 7, openDays, days };
 }
