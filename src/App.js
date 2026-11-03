@@ -5034,6 +5034,20 @@ const SALES_GOAL_BUMPS = [1000, 2000, 3000];
 // Button-set Sales goals land on the nearest $500 (e.g. $40,501 → $40,500,
 // $40,750 → $41,000). A goal leadership types by hand is kept as typed.
 const roundToNearest500 = n => Math.round(n / 500) * 500;
+// Money inputs that show "$40,500" as you type but keep a plain number
+// string ("40500") underneath, so what gets saved is unchanged.
+const moneyDigits = v => {
+  let t = String(v ?? '').replace(/[^0-9.]/g, '');
+  const dot = t.indexOf('.');
+  if (dot >= 0) t = t.slice(0, dot + 1) + t.slice(dot + 1).replace(/\./g, '').slice(0, 2);
+  return t;
+};
+const moneyDisplay = v => {
+  const t = moneyDigits(v);
+  if (t === '') return '';
+  const [whole, cents] = t.split('.');
+  return `$${whole ? Number(whole).toLocaleString('en-US') : '0'}${cents !== undefined ? `.${cents}` : ''}`;
+};
 
 function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySalesGoals, milestoneGoals, onSaveMilestoneGoal, onFinalize, history, weeklyHistory, isOwner }) {
   const thisMonth = getCurrentMonthRange().start.slice(0, 7);
@@ -5054,8 +5068,8 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
   const milestoneCell = code => (
     <td className="mg-milestone-col">
       {isOwner ? (
-        <input type="number" className="goal-input" placeholder="$0" value={milestoneVal(code)}
-          onChange={e => { const v = e.target.value; setMilestoneDrafts(prev => ({ ...prev, [code]: v })); }}
+        <input type="text" inputMode="decimal" className="goal-input" placeholder="$0" value={moneyDisplay(milestoneVal(code))}
+          onChange={e => { const v = moneyDigits(e.target.value); setMilestoneDrafts(prev => ({ ...prev, [code]: v })); }}
           onBlur={() => saveMilestone(code)} />
       ) : (
         <span className="mg-readonly">{milestoneVal(code) === '' ? '—' : fmt$(milestoneVal(code))}</span>
