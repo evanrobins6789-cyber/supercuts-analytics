@@ -1341,6 +1341,74 @@ export function mergeGiftCardsIntoHistory(giftHistory, parsed) {
   return next;
 }
 
+// ─── Tips report ────────────────────────────────────────────────────────────
+// The POS "Tips" export: one row per tipped ticket — Collection Center |
+// Center Code | … | Collection Date | Invoice No | Employee Name | Tips |
+// Employee Code | Receipt No | Job ("Stylist-15547" / "Manager-15547").
+// Boiled down to one record per store-day: { code, date, tips, tipCount,
+// employees: { [name]: { tips, job } } }. Matched to people by name, since
+// the report's Employee Code doesn't match the Master Salon List Emp ID.
+export async function parseTipsFile(file) {
+  const grid = await readWorkbookGrid(file);
+  const hdrRowIdx = grid.findIndex(row => row.some(c => cellText(c).toLowerCase() === 'employee name') && row.some(c => cellText(c).toLowerCase() === 'tips'));
+  if (hdrRowIdx === -1) throw new Error('Could not find "Employee Name" and "Tips" columns. Is this the Tips report?');
+  const headerRow = grid[hdrRowIdx];
+  const col = {
+    code: findCol(headerRow, 'Center Code'),
+    center: findCol(headerRow, 'Collection Center'),
+    date: findCol(headerRow, 'Collection Date'),
+    name: findCol(headerRow, 'Employee Name'),
+    tips: findCol(headerRow, 'Tips'),
+    job: findCol(headerRow, 'Job'),
+  };
+  if (col.date === -1) throw new Error('This Tips export has no "Collection Date" column, so tips can\'t be placed on the right day.');
+
+  let rangeStart = null;
+  let rangeEnd = null;
+  for (let r = 0; r < hdrRowIdx; r++) {
+    const text = grid[r].map(cellText).join(' ');
+    const from = text.match(/From\s*:\s*([^:]+?)\s+To\s*:/i);
+    const to = text.match(/To\s*:\s*(\d{1,2}\s+[A-Za-z]+\s+\d{4})/i);
+    if (from && to) { rangeStart = headerDateISO(from[1]); rangeEnd = headerDateISO(to[1]); break; }
+  }
+
+  const daily = new Map();
+  let tipCount = 0;
+  for (let r = hdrRowIdx + 1; r < grid.length; r++) {
+    const row = grid[r];
+    if (!rowHasData(row)) continue;
+    const code = (col.code !== -1 && /^\d+$/.test(cellText(row[col.code]).trim()) ? cellText(row[col.code]).trim() : null) || extractCode(cellText(row[col.center]));
+    if (!code) continue; // includes the "Total:" row
+    const isoDate = toISODate(cellText(row[col.date]));
+    if (!isoDate) continue;
+    const amount = numOf(row[col.tips]);
+    if (!amount) continue;
+    const name = cellText(row[col.name]).replace(/\s+/g, ' ').trim();
+    const key = `${code}|${isoDate}`;
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, tips: 0, tipCount: 0, employees: {} });
+    const rec = daily.get(key);
+    rec.tips += amount;
+    rec.tipCount += 1;
+    if (name) {
+      if (!rec.employees[name]) rec.employees[name] = { tips: 0, job: '' };
+      rec.employees[name].tips += amount;
+      const job = col.job !== -1 ? cellText(row[col.job]).replace(/-\d+$/, '').trim() : '';
+      if (job && !rec.employees[name].job) rec.employees[name].job = job;
+    }
+    tipCount++;
+  }
+  if (!daily.size && !(rangeStart && rangeEnd)) throw new Error('No tips found in this file.');
+  const records = Array.from(daily.values()).map(r => ({
+    ...r,
+    tips: Math.round(r.tips * 100) / 100,
+    employees: Object.fromEntries(Object.entries(r.employees).map(([n, v]) => [n, { tips: Math.round(v.tips * 100) / 100, job: v.job }])),
+  }));
+  const dates = records.map(r => r.date).sort();
+  return { records, tipCount, rangeStart: rangeStart || dates[0] || null, rangeEnd: rangeEnd || dates[dates.length - 1] || null };
+}
+// Same replace-the-file's-whole-range rule as gift cards.
+export const mergeTipsIntoHistory = mergeGiftCardsIntoHistory;
+
 // ─── Weekly snapshot (fed by the regular Stylist Report upload) ────────────
 // Turns an already-parsed Stylist Report into one record per store for that
 // exact week (keyed by its real start/end dates), so every normal Monday

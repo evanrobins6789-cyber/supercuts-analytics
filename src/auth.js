@@ -174,6 +174,12 @@ export function rosterLoginCounts(token) {
 // Leadership's "Finalize & email DLs" (Goals tab → api/_finalize-goals.js,
 // served through /api/scoped-data to stay under the Hobby plan's 12-function
 // limit). A write as far as presenter mode is concerned: it sends real email.
+// "My Numbers": the logged-in person's own lines only (any role), split by
+// store, for [start, end] (api/_my-numbers.js via /api/scoped-data).
+export function myNumbers(token, start, end) {
+  return postJson('/api/scoped-data', { action: 'my-numbers', token, start, end });
+}
+
 export function finalizeGoals(token, month, test) {
   return postWrite('/api/scoped-data', { action: 'finalize-goals', token, month, test: !!test });
 }

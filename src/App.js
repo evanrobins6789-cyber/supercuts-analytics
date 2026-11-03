@@ -4,7 +4,7 @@ import { Bar } from 'react-chartjs-2';
 import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDataByPrefix, supabase } from './db';
 import {
   parseStylistReport, parseEmployeeStartDates, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
-  parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory, parseGiftCardFile, mergeGiftCardsIntoHistory,
+  parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory, parseGiftCardFile, mergeGiftCardsIntoHistory, parseTipsFile, mergeTipsIntoHistory,
   buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile, parseMasterSalonListFile, parseHsaScheduleFile,
 } from './parser';
 import {
@@ -12,7 +12,7 @@ import {
   loadScoped, loadScopedByPrefix, saveScoped, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
   pointsBalance, pointsAllBalances, pointsTransactions, pointsDeleteTransaction, finalizeGoals,
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled,
-  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank, lpLoad, lpSave, emailSalonCheck,
+  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank, lpLoad, lpSave, emailSalonCheck, myNumbers,
 } from './auth';
 import { SALON_CHECK_SECTIONS, SALON_CHECK_ITEMS, scoreSalonCheck, salonCheckList } from './salonCheck';
 import { LP_RULES, parseLpSalesFile, parseLpAttendanceFile, parseLpRegisterFile, mergeLpDays, lpMonthPayload, analyzeLp, lpDefaultRange } from './lossPrevention';
@@ -28,6 +28,8 @@ import {
   shiftMonthKey, salesGoalBreakdown, monthlyReference as sharedMonthlyReference, openDaysInRange, closedDaysInMonth,
 } from './metrics';
 import { BITMOJI_POOLS } from './bitmoji';
+import { buildPayRows, topTsthRow, payPeriodFor, MIN_HOURS_FOR_TOP } from './payTracker';
+import { buildMyNumbers } from './myNumbers';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
 import supercutsWordmarkBlue from './assets/branding/supercuts-wordmark-blue.png';
 import gcRobinBadge from './assets/branding/gc-robin-badge.png';
@@ -1655,7 +1657,129 @@ function HomepageQuickPostModal({ kind, onClose, onAddNews, onAddEvent, existing
   );
 }
 
-function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore, news, events, reviews, onOpenNews, canPost, onAddNews, onAddEvent, newsGroups, onImageError, rankToken, rankRole }) {
+const fmtPayDate = iso => new Date(`${iso}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+const localTodayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+// The pay period before the one containing `iso` (1–15 ↔ 16–end).
+const previousPayPeriod = iso => {
+  const cur = payPeriodFor(iso);
+  if (cur.start.endsWith('-16')) return payPeriodFor(`${cur.start.slice(0, 8)}01`);
+  const [y, m] = cur.start.split('-').map(Number);
+  const pm = m === 1 ? 12 : m - 1;
+  const py = m === 1 ? y - 1 : y;
+  return payPeriodFor(`${py}-${String(pm).padStart(2, '0')}-16`);
+};
+
+// ─── My Numbers tab (every role) ───────────────────────────────────────────
+// The logged-in person's own numbers, one row per store where the POS
+// recorded them doing the work, plus a combined total when there's more than
+// one store. The server sends only their own lines (api/_my-numbers.js).
+function MyNumbersTab({ token, userName, presenting }) {
+  const today = localTodayISO();
+  const cur = payPeriodFor(today);
+  const [range, setRange] = useState({ start: cur.start, end: today < cur.end ? today : cur.end });
+  const [state, setState] = useState({ loading: true, data: null, error: null });
+  useEffect(() => {
+    if (presenting || !range.start || !range.end) return undefined;
+    let cancelled = false;
+    setState(s => ({ ...s, loading: true, error: null }));
+    myNumbers(token, range.start, range.end).then(r => {
+      if (!cancelled) setState({ loading: false, data: r.ok ? r : null, error: r.ok ? null : r.error });
+    });
+    return () => { cancelled = true; };
+  }, [token, range.start, range.end, presenting]);
+  const result = useMemo(() => (state.data
+    ? buildMyNumbers({ history: state.data.history, weeklyHistory: state.data.weeklyHistory, tips: state.data.tips, start: range.start, end: range.end })
+    : null), [state.data, range.start, range.end]);
+
+  if (presenting) return <div className="empty-state"><p className="empty-title">My Numbers is off in presenter mode</p><p>It shows a real person's numbers.</p></div>;
+
+  const prev = previousPayPeriod(today);
+  const presets = [
+    { label: 'This pay period', start: cur.start, end: today < cur.end ? today : cur.end },
+    { label: 'Last pay period', start: prev.start, end: prev.end },
+    { label: 'This month', ...getCurrentMonthRange() },
+  ];
+  const cols = [
+    { key: 'hours', label: 'Hours', fmt: v => fmtNum(v, 1) },
+    { key: 'haircuts', label: 'Haircuts', fmt: fmtInt },
+    { key: 'service', label: 'Service $', fmt: fmt$ },
+    { key: 'colorSales', label: 'Color $', fmt: fmt$ },
+    { key: 'retail', label: 'Retail $', fmt: fmt$ },
+    { key: 'sales', label: 'Total Sales', fmt: fmt$ },
+    { key: 'tsth', label: 'TSTH', fmt: v => (v == null ? '—' : `$${v.toFixed(2)}`) },
+    { key: 'cph', label: 'Cuts / hr', fmt: v => fmtNum(v, 2) },
+    { key: 'tips', label: 'Tips', fmt: fmt$ },
+  ];
+  const row = (label, r, cls) => (
+    <tr key={label} className={cls}>
+      <td className="ledger-name-col">{label}</td>
+      {cols.map(c => <td key={c.key}>{c.fmt(r[c.key])}</td>)}
+    </tr>
+  );
+
+  return (
+    <div className="tab-content">
+      <p className="section-hint">Your own numbers{userName ? `, ${userName}` : ''}, by the store where you did the work (as the POS recorded it). TSTH is total sales (service, color and retail) ÷ hours. Only you can see this.</p>
+      <div className="view-toggle">
+        {presets.map(p => (
+          <button key={p.label} className={`view-toggle-btn ${range.start === p.start && range.end === p.end ? 'active' : ''}`} onClick={() => setRange({ start: p.start, end: p.end })}>{p.label}</button>
+        ))}
+      </div>
+      <DateRangeBar start={range.start} end={range.end} onChange={(s, e) => setRange({ start: s, end: e })} />
+      {state.loading && <span className="spinner small" />}
+      {state.error && <p className="password-error">Couldn't load your numbers: {state.error}</p>}
+      {!state.loading && result && (result.stores.length ? (
+        <div className="ledger-scroll">
+          <table className="ledger-table">
+            <thead><tr><th className="ledger-name-col">Store</th>{cols.map(c => <th key={c.key}>{c.label}</th>)}</tr></thead>
+            <tbody>{result.stores.map(s => row(s.name, s))}</tbody>
+            {result.stores.length > 1 && <tfoot>{row('All stores', result.total, 'ledger-avg-row')}</tfoot>}
+          </table>
+        </div>
+      ) : (
+        <p className="empty-note">No sales, hours or tips found under your name ({(state.data?.matchedNames || []).join(', ') || userName}) for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}. If the POS spells your name differently, ask leadership to link that spelling to your login in Setup › Employee Access.</p>
+      ))}
+    </div>
+  );
+}
+// Pay-period earnings tracker (Homepage hero). Leadership preview for now:
+// shows the highest-TSTH employee this pay period (see src/payTracker.js for
+// the pay rules). Each employee will later see their own.
+function PayTrackerCard({ data }) {
+  if (!data) return null;
+  const { period, through, top } = data;
+  const periodLabel = `${fmtPayDate(period.start)} – ${fmtPayDate(period.end)}`;
+  if (!top) {
+    return (
+      <div className="pay-tracker">
+        <p className="pay-tracker-eyebrow">Pay period {periodLabel} · Top TSTH</p>
+        <p className="pay-tracker-empty">No one has {MIN_HOURS_FOR_TOP}+ hours with sales on file yet this pay period. Upload Sales-Accrual and Attendance to fill this in.</p>
+      </div>
+    );
+  }
+  const pct = top.goal > 0 ? Math.min(100, (top.tsth / (top.goal * 1.5)) * 100) : 0;
+  const goalMark = (1 / 1.5) * 100;
+  return (
+    <div className="pay-tracker">
+      <p className="pay-tracker-eyebrow">Pay period {periodLabel} · Top TSTH{through ? ` · through ${fmtPayDate(through)}` : ''}</p>
+      <p className="pay-tracker-name">{top.name} <span>{top.store} ({top.state}) · {top.manager ? 'Manager, 30%' : 'Stylist, 25%'}</span></p>
+      <div className="pay-tracker-bar" title={`TSTH ${fmt$(top.tsth)} vs goal ${fmt$(top.goal)}`}>
+        <div className={`pay-tracker-fill ${top.tsth >= top.goal ? 'pay-tracker-fill--over' : ''}`} style={{ width: `${pct}%` }} />
+        <div className="pay-tracker-goal" style={{ left: `${goalMark}%` }} />
+      </div>
+      <div className="pay-tracker-stats">
+        <div><span>Hours</span><strong>{fmtNum(top.hours, 1)}</strong></div>
+        <div><span>TSTH</span><strong>${top.tsth.toFixed(2)}</strong><em>goal ${fmtInt(top.goal)}</em></div>
+        <div><span>Bonus / hr</span><strong>${top.bonusPerHour.toFixed(2)}</strong></div>
+        <div><span>Bonus</span><strong>{fmt$(top.bonus)}</strong></div>
+        <div><span>Tips</span><strong>{fmt$(top.tips)}</strong></div>
+        <div className="pay-tracker-total"><span>Made so far</span><strong>{fmt$(top.madeSoFar)}</strong><em>{top.basePay != null ? `incl. ${fmt$(top.basePay)} base` : '+ base pay (rates not uploaded)'}</em></div>
+      </div>
+    </div>
+  );
+}
+
+function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore, news, events, reviews, onOpenNews, canPost, onAddNews, onAddEvent, newsGroups, onImageError, rankToken, rankRole, payTracker = null }) {
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
   const reportUsable = report && !isReportStale(report);
@@ -1743,6 +1867,7 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
           <p className="homepage-hero-title">Welcome back 👋</p>
           <p className="homepage-hero-eyebrow">{fmtDateLong(todayISO)}</p>
         </div>
+        <PayTrackerCard data={payTracker} />
         <p className="homepage-hero-blurb">Catch up on the latest news, see what's coming up, and find out who's leading the pack. Let's make it a great day! ✂️</p>
         {canPost && (
           <div className="homepage-hero-actions">
@@ -6786,8 +6911,9 @@ function LossPreventionTab({ lpData, lpStatus, onImportRegister, onGoToHistoryIm
 }
 const fmtDateShortLp = iso => { const [, m, dd] = iso.split('-').map(Number); return `${MONTH_NAMES[m - 1].slice(0, 3)} ${dd}`; };
 
-function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBatch, onClearHistory, reviews, onImportReviewsBatch, giftCardHistory, onImportGiftCardBatch }) {
+function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBatch, onClearHistory, reviews, onImportReviewsBatch, giftCardHistory, onImportGiftCardBatch, tipsHistory, onImportTipsBatch }) {
   const [processingSales, setProcessingSales] = useState(false);
+  const [processingTips, setProcessingTips] = useState(false);
   const [processingGiftCards, setProcessingGiftCards] = useState(false);
   const [processingAttendance, setProcessingAttendance] = useState(false);
   const [processingReviews, setProcessingReviews] = useState(false);
@@ -6845,6 +6971,18 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
     }
   };
   const giftCardDates = Object.values(giftCardHistory || {}).map(r => r.date).sort();
+  const handleTipsFiles = async fileList => {
+    setProcessingTips(true);
+    try {
+      const lines = await onImportTipsBatch(fileList);
+      setLog(prev => [...lines, ...prev]);
+    } catch (err) {
+      setLog(prev => [`✗ Unexpected error: ${err.message}`, ...prev]);
+    } finally {
+      setProcessingTips(false);
+    }
+  };
+  const tipsDates = Object.values(tipsHistory || {}).map(r => r.date).sort();
 
   const reviewDates = reviews?.reviews?.length ? reviews.reviews.map(r => r.postedAt).filter(Boolean).sort() : [];
 
@@ -6914,8 +7052,25 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
             </div>
           </label>
         )}
+
+        {onImportTipsBatch && (
+          <label className={`upload-slot history-upload-slot ${processingTips ? 'upload-slot--filled' : ''}`}>
+            <input
+              type="file" accept=".xlsx,.xls,.csv" multiple style={{ display: 'none' }}
+              onChange={e => { const files = Array.from(e.target.files); if (files.length) handleTipsFiles(files); e.target.value = ''; }}
+            />
+            <div className="upload-slot-icon">{processingTips ? <span className="spinner small" /> : '💵'}</div>
+            <div className="upload-slot-body">
+              <p className="upload-slot-title">Tips Files</p>
+              <p className="upload-slot-hint">The "Tips" report. Feeds the Homepage pay tracker. Re-uploading a range replaces those days.</p>
+            </div>
+          </label>
+        )}
       </div>
 
+      {onImportTipsBatch && tipsDates.length > 0 && (
+        <p className="section-hint">Tips on file: {fmtDateLong(tipsDates[0])} → {fmtDateLong(tipsDates[tipsDates.length - 1])}.</p>
+      )}
       {onImportGiftCardBatch && giftCardDates.length > 0 && (
         <p className="section-hint">Gift card sales on file: {fmtDateLong(giftCardDates[0])} → {fmtDateLong(giftCardDates[giftCardDates.length - 1])}.</p>
       )}
@@ -7350,7 +7505,7 @@ function topEmployeeLine(employees, n = 5) {
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
-function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, salonChecks) {
+function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, salonChecks, payTracker = null, myNumbersSummary = null) {
   const employeesForCodeCtx = code => {
     if (report && !isReportStale(report)) return report.stores.find(st => st.code === code)?.employees || null;
     return fallbackEmployeesByStore?.[code] || null;
@@ -7884,6 +8039,27 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     lines.push(`Totals in range: ${a.zero.reduce((s, g) => s + g.items.length, 0)} $0 services, ${a.refunds.reduce((s, g) => s + g.items.length, 0)} refunds, company loyalty-redemption rate ${Math.round(a.coLoyalRate * 100)}%, company cash-only ticket share ${Math.round(a.coCashRate * 100)}%, ${a.regCount} register closures.`);
   }
 
+  // My Numbers: the logged-in person's own numbers this pay period, by store.
+  if (myNumbersSummary) {
+    const m = myNumbersSummary;
+    const line = (label, r) => `  ${label}: ${r.hours.toFixed(1)} hrs, ${r.haircuts} haircuts, service $${Math.round(r.service)} (color $${Math.round(r.colorSales)}), retail $${Math.round(r.retail)}, total sales $${Math.round(r.sales)}, TSTH ${r.tsth != null ? `$${r.tsth.toFixed(2)}` : 'n/a'}, tips $${Math.round(r.tips)}`;
+    lines.push('');
+    lines.push(`YOUR OWN NUMBERS (the person you're talking to, ${m.name}), pay period ${m.period.start} to ${m.end}, by the store where the POS recorded the work (the "My Numbers" tab):`);
+    if (m.stores.length) {
+      m.stores.forEach(s => lines.push(line(s.name, s)));
+      if (m.stores.length > 1) lines.push(line('All stores combined', m.total));
+    } else lines.push('  None found under their name yet. If the POS spells their name differently, leadership can link it in Setup › Employee Access ("Also in sales as").');
+  }
+
+  // Pay tracker (owner only, src/payTracker.js): this pay period's TSTH,
+  // bonus and tips per employee.
+  if (payTracker && payTracker.rows?.length) {
+    const { period, through, rows } = payTracker;
+    lines.push('');
+    lines.push(`PAY TRACKER, pay period ${period.start} to ${period.end} (data through ${through || 'n/a'}). Rules: TSTH = (net service + retail incl. color) ÷ hours; TSTH goal = 2 × haircut price (PA $28, NJ/DE $30); bonus/hr = (TSTH − goal) × 25% stylists / 30% managers when above goal, paid on every hour; no other commission; made so far = base (hourly rate × hours; rates are NOT uploaded yet, so base is unknown) + bonus + tips. Top 25 by TSTH (min ${MIN_HOURS_FOR_TOP} hours):`);
+    rows.filter(r => r.hours >= MIN_HOURS_FOR_TOP).sort((x, y) => y.tsth - x.tsth).slice(0, 25).forEach(r => lines.push(`  ${r.name} @ ${r.store} (${r.state}${r.manager ? ', manager' : ''}): ${r.hours.toFixed(1)} hrs, TSTH $${r.tsth.toFixed(2)} vs goal $${r.goal}, bonus/hr $${r.bonusPerHour.toFixed(2)}, bonus $${Math.round(r.bonus)}, tips $${Math.round(r.tips)}, made so far excl. base $${Math.round(r.madeSoFar)}`));
+  }
+
   return lines.join('\n');
 }
 
@@ -7916,7 +8092,7 @@ async function buildRankContext(rankToken) {
   return lines.join('\n');
 }
 
-function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, salonChecks, rankToken }) {
+function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, salonChecks, rankToken, payTracker = null, myNumbersSummary = null }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -7929,7 +8105,7 @@ function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, salonChecks)
+      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, salonChecks, payTracker, myNumbersSummary)
         + await buildRankContext(rankToken);
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -8023,6 +8199,20 @@ function EmployeeAccessSetupTab({ token, onRosterChanged }) {
   const [loginCounts, setLoginCounts] = useState(null); // null = not loaded yet
   const [loadingLoginCounts, setLoadingLoginCounts] = useState(false);
   const [loginCountsError, setLoginCountsError] = useState(null);
+  // Other spellings of a person's name in the POS ("Sammy Allen" for
+  // Samantha Allen), keyed by employee code, so My Numbers finds their lines.
+  // A separate row (employee_name_aliases), so roster uploads never wipe it.
+  const [aliases, setAliases] = useState({});
+  const [aliasDrafts, setAliasDrafts] = useState({});
+  useEffect(() => { loadScoped('employee_name_aliases', token).then(r => { if (!r.error) setAliases(r.data || {}); }); }, [token]);
+  const saveAliases = async code => {
+    const raw = aliasDrafts[code];
+    if (raw === undefined || !code) return;
+    const list = raw.split(/[;,]/).map(x => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const r = await saveScoped(token, 'employee_name_aliases', { [code]: list.length ? list : null });
+    if (r.ok) { setAliases(r.data || {}); setAliasDrafts(prev => { const n = { ...prev }; delete n[code]; return n; }); }
+    else setMsg({ type: 'error', text: `Couldn't save the POS name: ${r.error}` });
+  };
 
   // Tracks the roster as of the last load so refresh() can hand
   // onRosterChanged a before/after pair — a plain ref instead of reading
@@ -8176,6 +8366,7 @@ function EmployeeAccessSetupTab({ token, onRosterChanged }) {
                 <th className="ledger-text-col">Employee Code</th>
                 <th className="ledger-text-col">Role</th>
                 <th className="ledger-text-col">Store Codes</th>
+                <th className="ledger-text-col" title="Other spellings of this name in the POS, separated by commas. My Numbers uses these to find their sales.">Also in sales as</th>
                 <th className="ledger-text-col">Status</th>
                 <th className="ledger-text-col"></th>
               </tr>
@@ -8216,6 +8407,14 @@ function EmployeeAccessSetupTab({ token, onRosterChanged }) {
                         className="goal-input" placeholder="Store Codes" value={getVal(e.id, 'storeCodes', (e.storeCodes || []).join(', '))}
                         onChange={ev => handleChange(e.id, 'storeCodes', ev.target.value)}
                         onBlur={() => handleBlurSave(e.id, 'storeCodes')}
+                      />
+                    </td>
+                    <td className="ledger-text-col">
+                      <input
+                        className="goal-input" placeholder="e.g. Sammy Allen"
+                        value={aliasDrafts[e.employeeCode] !== undefined ? aliasDrafts[e.employeeCode] : (aliases[e.employeeCode] || []).join(', ')}
+                        onChange={ev => { const v = ev.target.value; setAliasDrafts(prev => ({ ...prev, [e.employeeCode]: v })); }}
+                        onBlur={() => saveAliases(e.employeeCode)}
                       />
                     </td>
                     <td className="ledger-text-col">
@@ -9226,7 +9425,7 @@ function RewardsSetupTab({ token, showToast }) {
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Homepage', 'News', 'HSA', 'Overview', 'Focus Stylist', 'Shear Check', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Gift Cards', 'Budgets', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Loss Prevention', 'Setup'];
+const TABS = ['Homepage', 'My Numbers', 'News', 'HSA', 'Overview', 'Focus Stylist', 'Shear Check', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Gift Cards', 'Budgets', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Loss Prevention', 'Setup'];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
@@ -9268,6 +9467,11 @@ export default function App() {
   // sales, and mergeSalesIntoHistory would overwrite them with 0 on every
   // re-import if they shared a record. Same `code|date` keying as history.
   const [giftCardHistory, setGiftCardHistory] = useState({});
+  // Tips (Tips report, owner only for now): tips_history_YYYY-MM rows, same
+  // { "code|date": record } shape as gift cards. Feeds the Homepage pay tracker.
+  const [tipsHistory, setTipsHistory] = useState({});
+  const tipsHistoryRef = useRef(tipsHistory);
+  useEffect(() => { tipsHistoryRef.current = tipsHistory; }, [tipsHistory]);
   const giftCardHistoryRef = useRef(giftCardHistory);
   useEffect(() => { giftCardHistoryRef.current = giftCardHistory; }, [giftCardHistory]);
   // Loss Prevention (owner-only, src/lossPrevention.js): { sales, att, reg },
@@ -9495,6 +9699,16 @@ export default function App() {
         });
       }
     }).catch(() => setLoading(false));
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'owner') { setTipsHistory({}); return; }
+    loadScopedByPrefix('tips_history_', currentUser.token).then(res => {
+      const merged = {};
+      (res.data || []).forEach(chunk => Object.assign(merged, chunk.payload));
+      setTipsHistory(merged);
+      if (res.error) showToast(`Couldn't load tips (${res.error}). Try refreshing the page.`, 'error');
+    });
   }, [currentUser]);
 
   // Owner gets every store; a DL gets only their own stores (filtered
@@ -10645,6 +10859,49 @@ export default function App() {
     return queued;
   }, []);
 
+  // Tips report (owner only). Same pattern as gift cards: each file replaces
+  // every day in its own From/To range, then each touched month is rewritten
+  // whole as one tips_history_YYYY-MM row.
+  const handleImportTipsBatch = useCallback(fileList => {
+    const task = async () => {
+      let working = tipsHistoryRef.current;
+      const touchedMonths = new Set();
+      const lines = [];
+      for (const file of fileList) {
+        try {
+          const parsed = await parseTipsFile(file);
+          working = mergeTipsIntoHistory(working, parsed);
+          parsed.records.forEach(r => touchedMonths.add(r.date.slice(0, 7)));
+          if (parsed.rangeStart && parsed.rangeEnd) expandDateRangeDays(parsed.rangeStart, parsed.rangeEnd).forEach(d => touchedMonths.add(d.slice(0, 7)));
+          const total = parsed.records.reduce((sum, r) => sum + r.tips, 0);
+          lines.push(`✓ ${file.name}: ${parsed.tipCount} tip${parsed.tipCount !== 1 ? 's' : ''}, ${fmt$(total)}${parsed.rangeStart ? ` (${fmtDateLong(parsed.rangeStart)} – ${fmtDateLong(parsed.rangeEnd)})` : ''}`);
+        } catch (err) {
+          lines.push(`✗ ${file.name}: ${err.message}`);
+        }
+      }
+      tipsHistoryRef.current = working;
+      setTipsHistory(working);
+      const failedMonths = [];
+      let lastError = null;
+      for (const month of touchedMonths) {
+        const chunk = {};
+        Object.entries(working).forEach(([key, rec]) => { if (rec.date.slice(0, 7) === month) chunk[key] = rec; });
+        const result = await saveData(`tips_history_${month}`, chunk);
+        if (!result.ok) { failedMonths.push(month); lastError = result.error; }
+      }
+      if (isConfigured() && failedMonths.length) {
+        lines.push(`✗ Couldn't sync ${failedMonths.join(', ')} to Supabase (${lastError}). Try the import again.`);
+        showToast(`Imported, but couldn't sync tips to Supabase (${lastError})`, 'error');
+      } else {
+        showToast(`Processed ${fileList.length} tips file${fileList.length !== 1 ? 's' : ''}`);
+      }
+      return lines;
+    };
+    const queued = importChainRef.current.then(task, task);
+    importChainRef.current = queued.then(() => {}, () => {});
+    return queued;
+  }, []);
+
   // Unlike the ongoing single-file Setup > Upload reviews slot (which treats
   // each export as the full current list and replaces it outright), a
   // historical backfill is typically several month-limited exports that each
@@ -10713,6 +10970,35 @@ export default function App() {
     [presenterData]
   );
 
+  // My Numbers for the current pay period, loaded once per login so Tilly
+  // can answer "how am I doing" (the tab itself fetches its own ranges).
+  const [myNumbersSummary, setMyNumbersSummary] = useState(null);
+  useEffect(() => {
+    if (!currentUser?.token || presenting) { setMyNumbersSummary(null); return; }
+    const today = localTodayISO();
+    const period = payPeriodFor(today);
+    const end = today < period.end ? today : period.end;
+    myNumbers(currentUser.token, period.start, end).then(r => {
+      if (!r.ok) return;
+      setMyNumbersSummary({ period, end, name: r.name, ...buildMyNumbers({ history: r.history, weeklyHistory: r.weeklyHistory, tips: r.tips, start: period.start, end }) });
+    });
+  }, [currentUser, presenting]);
+
+  // Homepage pay tracker: leadership preview only (owner, never while
+  // presenting, since it shows a real name and pay). Current pay period
+  // (1–15 / 16–end) through today; `through` is the last day with Sales-
+  // Accrual or Attendance on file, so it's clear how fresh the numbers are.
+  const payTracker = useMemo(() => {
+    if (!currentUser || currentUser.role !== 'owner' || presenting) return null;
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const period = payPeriodFor(today);
+    const end = today < period.end ? today : period.end;
+    const rows = buildPayRows({ history, weeklyHistory, tipsHistory, start: period.start, end });
+    const days = Object.values(history || {}).filter(r => r.date >= period.start && r.date <= end && r.employees && Object.keys(r.employees).length).map(r => r.date).sort();
+    return { period, through: days[days.length - 1] || null, top: topTsthRow(rows), rows };
+  }, [currentUser, presenting, history, weeklyHistory, tipsHistory]);
+
   const handleTogglePresenter = on => {
     if (!currentUser || currentUser.role !== 'owner') return;
     if (on) {
@@ -10743,7 +11029,7 @@ export default function App() {
   // exact same tables via each tab's own current-month fallback (see
   // getCurrentMonthRange). Only actually block on "nothing at all yet".
   const hasHistoricalData = Object.keys(history || {}).length > 0 || Object.keys(weeklyHistory || {}).length > 0;
-  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases' && tab !== 'Gift Cards' && tab !== 'Loss Prevention' && tab !== 'Focus Stylist' && tab !== 'Shear Check';
+  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'My Numbers' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases' && tab !== 'Gift Cards' && tab !== 'Loss Prevention' && tab !== 'Focus Stylist' && tab !== 'Shear Check';
 
   const d = presenterData
     ? { ...presenterData, fallbackEmployeesByStore: presenterFallbackEmployees }
@@ -10778,8 +11064,10 @@ export default function App() {
             canPost={currentUser.role === 'owner' && !presenting} onAddNews={handleAddNews} onAddEvent={handleAddEvent}
             newsGroups={newsGroups} onImageError={msg => showToast(msg, 'error')}
             rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} rankRole={currentUser.role}
+            payTracker={payTracker}
           />
         )}
+        {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={currentUser.name} presenting={presenting} />}
         {tab === 'News' && (
           <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={currentUser} newsReads={d.newsReads} onSignOff={handleSignOffNews} />
         )}
@@ -10897,7 +11185,7 @@ export default function App() {
               onReorderNewsGroup: handleReorderNewsGroup, onSetNewsGroupColor: handleSetNewsGroupColor,
               onImageError: msg => showToast(msg, 'error'),
             }}
-            historyProps={{ history: d.history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory, reviews: d.reviews, onImportReviewsBatch: handleImportReviewsBatch, giftCardHistory: d.giftCardHistory, onImportGiftCardBatch: handleImportGiftCardBatch }}
+            historyProps={{ history: d.history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory, reviews: d.reviews, onImportReviewsBatch: handleImportReviewsBatch, giftCardHistory: d.giftCardHistory, onImportGiftCardBatch: handleImportGiftCardBatch, tipsHistory, onImportTipsBatch: handleImportTipsBatch }}
             uploadProps={{
               report: d.report, uploading, onFile: handleFile, onClear: handleClearAll,
               employeeRoster: d.employeeRoster, uploadingRoster, onRosterFile: handleRosterFile, onClearRoster: handleClearRoster,
@@ -10914,7 +11202,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
+      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} payTracker={payTracker} myNumbersSummary={myNumbersSummary} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
     </div>
   );
 }

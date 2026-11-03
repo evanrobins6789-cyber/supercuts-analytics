@@ -1339,3 +1339,24 @@
 /* General cards. */
 .lease-card { padding: 11px 14px; gap: 8px; }
 .monthly-goals { padding: 12px 14px; }
+
+/* ─── Homepage pay tracker (hero, next to "Welcome back") ─────────────────
+   Leadership preview of the pay-period earnings tracker (src/payTracker.js). */
+.pay-tracker {
+  flex: 1 1 420px; max-width: 660px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 12px; padding: 10px 14px; position: relative; z-index: 1;
+}
+.pay-tracker-eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; color: #B9C6D6; text-transform: uppercase; letter-spacing: 0.05em; }
+.pay-tracker-name { font-size: 15px; font-weight: 700; margin-top: 2px; }
+.pay-tracker-name span { font-size: 12px; font-weight: 500; color: #C7D3E3; margin-left: 4px; }
+.pay-tracker-empty { font-size: 12.5px; color: #DCE4EE; margin-top: 4px; }
+.pay-tracker-bar { position: relative; height: 8px; border-radius: 999px; background: rgba(255,255,255,0.18); margin: 8px 0 8px; }
+.pay-tracker-fill { height: 100%; border-radius: 999px; background: #E9B949; }
+.pay-tracker-fill--over { background: #5BC98A; }
+.pay-tracker-goal { position: absolute; top: -3px; width: 2px; height: 14px; background: #fff; border-radius: 1px; }
+.pay-tracker-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(76px, 1fr)); gap: 6px 10px; }
+.pay-tracker-stats > div { display: flex; flex-direction: column; min-width: 0; }
+.pay-tracker-stats span { font-size: 10.5px; color: #B9C6D6; text-transform: uppercase; letter-spacing: 0.04em; }
+.pay-tracker-stats strong { font-size: 16px; font-weight: 700; color: #fff; }
+.pay-tracker-stats em { font-style: normal; font-size: 10.5px; color: #C7D3E3; }
+.pay-tracker-total strong { color: #FFE08A; }

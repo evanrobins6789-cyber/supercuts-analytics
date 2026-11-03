@@ -13,9 +13,10 @@ import { rollup } from '../src/parser.js';
 import { getCodeForStoreName } from '../src/storeDirectory.js';
 import { handleFinalizeGoals } from './_finalize-goals.js';
 import { handleSalonCheckEmail, cleanSalonCheckPatch } from './_salon-check.js';
+import { handleMyNumbers } from './_my-numbers.js';
 
-const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases', 'focus_stylists', 'salon_checks']);
-const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_', 'gift_card_history_'];
+const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases', 'focus_stylists', 'salon_checks', 'employee_name_aliases']);
+const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_', 'gift_card_history_', 'tips_history_'];
 
 // Gift card sales and the gift card goal: the owner sees all, a DL sees their
 // own stores (read-only; 2026-11-03), and managers/employees get neither
@@ -31,7 +32,7 @@ const OWNER_ONLY_GOAL_WRITE_PREFIXES = ['salesGoal:'];
 // object and support scoped PATCH writes below — a merge-in for just the
 // codes in the patch, never a full-object overwrite. store_goals/
 // store_managers/milestone_goals/store_leases all share this shape.
-const PATCHABLE_KEYS = new Set(['store_goals', 'store_managers', 'milestone_goals', 'store_leases', 'focus_stylists', 'salon_checks']);
+const PATCHABLE_KEYS = new Set(['store_goals', 'store_managers', 'milestone_goals', 'store_leases', 'focus_stylists', 'salon_checks', 'employee_name_aliases']);
 
 // Focus Stylist list: { [storeCode]: { [nameKey]: { name, tsthGoal, cphGoal, addedBy, addedAt } } }.
 // Only the owner and District Leaders use it — a DL sees and edits their
@@ -118,6 +119,11 @@ function filterPayload(key, payload, employee) {
   // Gift card sales: a DL gets their own stores' days (Gift Cards tab, the
   // user's call 2026-11-03); managers/employees get nothing. Same
   // { key: { code, date, ... } } shape as daily_history, so same filter.
+  // Tips (pay tracker, 2026-11-03): owner only while it's a leadership
+  // preview. When each employee sees their own, filter by name here.
+  if (key.startsWith('tips_history_')) return {};
+  // POS-name spellings linked to logins (Setup → Employee Access): owner only.
+  if (key === 'employee_name_aliases') return {};
   if (key.startsWith('gift_card_history_')) return employee.role === 'district_leader' ? filterDailyHistory(payload, allowed) : {};
   // Leases (rent/landlord/critical-date data) are owner-only, full stop —
   // unlike store_goals/store_managers/milestone_goals, no other role has a
@@ -144,6 +150,11 @@ export default async function handler(req, res) {
   // own owner-session check); see api/_finalize-goals.js for why.
   if (req.body?.action === 'finalize-goals') {
     await handleFinalizeGoals(req, res);
+    return;
+  }
+  // "My Numbers": the caller's own lines only, any role (api/_my-numbers.js).
+  if (req.body?.action === 'my-numbers') {
+    await handleMyNumbers(req, res);
     return;
   }
   // Shear Check "email the DL" rides here too (api/_salon-check.js).
@@ -208,6 +219,10 @@ export default async function handler(req, res) {
       if (employee.role !== 'owner') {
         // Leases have no per-store carve-out like store_goals does — a
         // non-owner can't patch even their own store's lease entry.
+        if (key === 'employee_name_aliases') {
+          res.status(403).json({ error: 'Only the owner can link POS names to logins.' });
+          return;
+        }
         if (key === 'store_leases') {
           res.status(403).json({ error: 'Only the owner can modify lease data.' });
           return;
