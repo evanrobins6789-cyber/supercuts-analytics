@@ -17,9 +17,10 @@ import { handleSalonCheckEmail, cleanSalonCheckPatch } from './_salon-check.js';
 const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases', 'focus_stylists', 'salon_checks']);
 const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_', 'gift_card_history_'];
 
-// Gift card sales and the gift card goal are owner-only: no other role gets
-// gift_card_history_* back at all, and giftCardGoal is stripped out of the
-// store_goals they do see (and refused if a non-owner tries to write it).
+// Gift card sales and the gift card goal: the owner sees all, a DL sees their
+// own stores (read-only; 2026-11-03), and managers/employees get neither
+// (no gift_card_history_*, and giftCardGoal stripped from store_goals).
+// Only the owner can write giftCardGoal.
 const OWNER_ONLY_GOAL_FIELDS = ['giftCardGoal'];
 // Matches the field itself and its monthly form (`giftCardGoal:2026-11`).
 const isOwnerOnlyGoalField = k => OWNER_ONLY_GOAL_FIELDS.some(f => k === f || k.startsWith(`${f}:`));
@@ -106,7 +107,7 @@ function filterPayload(key, payload, employee) {
     Object.entries(scoped).forEach(([code, g]) => {
       if (!g || typeof g !== 'object') { out[code] = g; return; }
       const rest = { ...g };
-      Object.keys(rest).forEach(k => { if (isOwnerOnlyGoalField(k)) delete rest[k]; });
+      if (employee.role !== 'district_leader') Object.keys(rest).forEach(k => { if (isOwnerOnlyGoalField(k)) delete rest[k]; });
       out[code] = rest;
     });
     return out;

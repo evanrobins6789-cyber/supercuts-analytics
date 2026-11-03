@@ -4795,9 +4795,9 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
   const effectiveRange = usingDefaultRange ? getCurrentMonthRange() : dateRange;
   const hasAnyData = Object.keys(giftCardHistory || {}).length > 0;
   // Monthly Gift Cards $ goal (Goals tab, owner only), the full month (goalForRange).
-  // A DL sees the tab (their own stores) but never the goal: the server strips
-  // giftCardGoal for them anyway, and every goal column is hidden below.
-  const getGoal = code => !isOwner ? null : goalForRange(goals, code, 'giftCardGoal', effectiveRange.start, effectiveRange.end).value;
+  // DLs see the goal and progress too (read-only; only the owner can set it
+  // on the Goals tab).
+  const getGoal = code => goalForRange(goals, code, 'giftCardGoal', effectiveRange.start, effectiveRange.end).value;
 
   // Every store with a sale in range OR a goal set, so a store with a goal
   // and no sales yet still shows up (as behind goal) instead of vanishing.
@@ -4829,7 +4829,7 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
   const goalSum = list => list.reduce((s, r) => s + (r.goal ?? 0), 0);
   const diffCell = diff => <td className={vsGoalClass(diff)}>{diff != null ? `${diff >= 0 ? '+' : ''}${fmt$(diff)}` : '—'}</td>;
   const totalStoresShown = viewMode === 'dl' ? groups.reduce((n, g) => n + g.stores.length, 0) : sortedFlat.length;
-  const colCount = isOwner ? 5 : 3;
+  const colCount = 5;
 
   const storeRow = s => {
     const isOpen = !!expanded[s.code];
@@ -4840,8 +4840,8 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
           <td className="ledger-name-col">{hasSellers && <span className={`mini-chevron ${isOpen ? 'mini-chevron--open' : ''}`}>▸</span>} {s.name}</td>
           <td>{fmt$(s.giftCards)}</td>
           <td>{fmtInt(s.giftCardCount)}</td>
-          {isOwner && <td>{s.goal != null ? fmt$(s.goal) : '—'}</td>}
-          {isOwner && diffCell(s.vsGoal)}
+          <td>{s.goal != null ? fmt$(s.goal) : '—'}</td>
+          {diffCell(s.vsGoal)}
         </tr>
         {isOpen && hasSellers && (
           <tr className="store-expand-row">
@@ -4862,7 +4862,7 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
       </React.Fragment>
     );
   };
-  const tableHead = <thead><tr><th className="ledger-name-col">Store</th><th>Gift Card $</th><th># Sold</th>{isOwner && <th>Goal</th>}{isOwner && <th>vs Goal</th>}</tr></thead>;
+  const tableHead = <thead><tr><th className="ledger-name-col">Store</th><th>Gift Card $</th><th># Sold</th><th>Goal</th><th>vs Goal</th></tr></thead>;
   const totalsRow = (label, list) => {
     const goalTotal = goalSum(list);
     return (
@@ -4870,8 +4870,8 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
         <td className="ledger-name-col">{label}</td>
         <td>{fmt$(sumOf(list, 'giftCards'))}</td>
         <td>{fmtInt(sumOf(list, 'giftCardCount'))}</td>
-        {isOwner && <td>{goalTotal > 0 ? fmt$(goalTotal) : '—'}</td>}
-        {isOwner && diffCell(goalTotal > 0 ? sumOf(list, 'giftCards') - goalTotal : null)}
+        <td>{goalTotal > 0 ? fmt$(goalTotal) : '—'}</td>
+        {diffCell(goalTotal > 0 ? sumOf(list, 'giftCards') - goalTotal : null)}
       </tr>
     );
   };
@@ -4895,7 +4895,7 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
   return (
     <div className="tab-content">
       <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
-      {usingDefaultRange && <p className="section-hint">Showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}). Gift card sales only, not redemptions. {isOwner ? 'Only you and the DLs (their own stores) can see this tab; only you see the goals.' : 'Your stores only.'}</p>}
+      {usingDefaultRange && <p className="section-hint">Showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}). Gift card sales only, not redemptions. {isOwner ? 'Only you and the DLs (their own stores) can see this tab.' : 'Your stores only.'}</p>}
       <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
 
       <div className="view-toggle">
@@ -4908,7 +4908,7 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
         <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
           <option value="giftCards">Sort: Gift Card $</option>
           <option value="giftCardCount">Sort: # Sold</option>
-          {isOwner && <option value="vsGoal">Sort: vs Goal</option>}
+          <option value="vsGoal">Sort: vs Goal</option>
           <option value="name">Sort: Name (A–Z)</option>
         </select>
       </div>
@@ -4930,8 +4930,8 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
                   <div className="dl-card-stats">
                     <div className="dl-stat"><span className="dl-stat-label">Gift Card $</span><span className="dl-stat-value">{fmt$(amount)}</span></div>
                     <div className="dl-stat"><span className="dl-stat-label"># Sold</span><span className="dl-stat-value">{fmtInt(sumOf(g.stores, 'giftCardCount'))}</span></div>
-                    {isOwner && <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{goalTotal > 0 ? fmt$(goalTotal) : '—'}</span></div>}
-                    {isOwner && <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={amount} milestone={goalTotal} /></div>}
+                    <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{goalTotal > 0 ? fmt$(goalTotal) : '—'}</span></div>
+                    <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={amount} milestone={goalTotal} /></div>
                   </div>
                 </button>
                 {isLeaderOpen && (
@@ -4974,8 +4974,8 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
 // goals (`goals[code].salesGoal` etc., no month) are no longer read
 // anywhere, though the old values are still in store_goals.
 // ownerOnly: leadership sets it (also enforced in api/scoped-data.js); DLs see it read-only.
-// ownerVisible: hidden from everyone but the owner (gift cards; the server
-//   strips it from what DLs get, see OWNER_ONLY_GOAL_FIELDS).
+// giftCards: shown only to the owner and DLs (the server strips it for
+//   managers, see OWNER_ONLY_GOAL_FIELDS).
 // pct: typed as a whole percent ("15" = 15%), and a rate, so goalForRange
 //   averages it over the days shown instead of scaling it.
 const MONTHLY_GOAL_FIELDS = [
@@ -4987,9 +4987,10 @@ const MONTHLY_GOAL_FIELDS = [
   { key: 'retailAttachGoal', label: 'Retail Attach %', pct: true },
   { key: 'bottleToColorGoal', label: 'Bottle-to-Color %', pct: true },
   { key: 'bottleToSSGoal', label: 'Bottle-to-SS %', pct: true },
-  { key: 'giftCardGoal', label: 'Gift Cards $', money: true, ownerVisible: true },
+  { key: 'giftCardGoal', label: 'Gift Cards $', money: true, ownerOnly: true, giftCards: true },
 ];
-const monthlyGoalFieldsFor = isOwner => MONTHLY_GOAL_FIELDS.filter(f => !f.ownerVisible || isOwner);
+// Gift Cards $ shows for the owner (editable) and DLs (read-only), not managers.
+const monthlyGoalFieldsFor = (isOwner, canSeeGiftCards = isOwner) => MONTHLY_GOAL_FIELDS.filter(f => !f.giftCards || canSeeGiftCards);
 const fmtGoalValue = (f, v) => (v === '' || v == null ? '—' : f.money ? fmt$(v) : f.pct ? `${fmtNum(v, 0)}%` : fmtInt(v));
 const monthlyGoalKey = (field, month) => `${field}:${month}`;
 const isoDayDiff = (a, b) => Math.round((new Date(`${b}T00:00:00`) - new Date(`${a}T00:00:00`)) / 86400000);
@@ -5059,7 +5060,7 @@ const moneyDisplay = v => {
   return `$${whole ? Number(whole).toLocaleString('en-US') : '0'}${cents !== undefined ? `.${cents}` : ''}`;
 };
 
-function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySalesGoals, milestoneGoals, onSaveMilestoneGoal, onFinalize, history, weeklyHistory, isOwner }) {
+function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySalesGoals, milestoneGoals, onSaveMilestoneGoal, onFinalize, history, weeklyHistory, isOwner, canSeeGiftCards = isOwner }) {
   const thisMonth = getCurrentMonthRange().start.slice(0, 7);
   const [month, setMonth] = useState(thisMonth);
   const [finalizing, setFinalizing] = useState(false);
@@ -5092,7 +5093,7 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
   const prevRef = useMemo(() => monthlyReference(history, weeklyHistory, prevMonth), [history, weeklyHistory, prevMonth]);
   const prevIsPartial = prevMonth === thisMonth;
   const groups = groupStoresByLeader(stores);
-  const fields = monthlyGoalFieldsFor(isOwner);
+  const fields = monthlyGoalFieldsFor(isOwner, canSeeGiftCards);
 
   const getVal = (code, field) => {
     const k = monthlyGoalKey(field, month);
@@ -5241,7 +5242,7 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
   );
 }
 
-function GoalsTab({ report, goals, onSaveGoal, onApplySalesGoals, milestoneGoals, onSaveMilestoneGoal, onFinalize, fallbackEmployeesByStore, isOwner, history, weeklyHistory }) {
+function GoalsTab({ report, goals, onSaveGoal, onApplySalesGoals, milestoneGoals, onSaveMilestoneGoal, onFinalize, fallbackEmployeesByStore, isOwner, canSeeGiftCards = isOwner, history, weeklyHistory }) {
   const [query, setQuery] = useState('');
 
   // A live weekly Stylist Report isn't always on file (see the rest of the
@@ -5265,7 +5266,7 @@ function GoalsTab({ report, goals, onSaveGoal, onApplySalesGoals, milestoneGoals
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
-      <MonthlyGoalsSection stores={stores} allStores={allStores} goals={goals} onSaveGoal={onSaveGoal} onApplySalesGoals={onApplySalesGoals} milestoneGoals={milestoneGoals} onSaveMilestoneGoal={onSaveMilestoneGoal} onFinalize={onFinalize} history={history} weeklyHistory={weeklyHistory} isOwner={isOwner} />
+      <MonthlyGoalsSection stores={stores} allStores={allStores} goals={goals} onSaveGoal={onSaveGoal} onApplySalesGoals={onApplySalesGoals} milestoneGoals={milestoneGoals} onSaveMilestoneGoal={onSaveMilestoneGoal} onFinalize={onFinalize} history={history} weeklyHistory={weeklyHistory} isOwner={isOwner} canSeeGiftCards={canSeeGiftCards} />
       {!stores.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
     </div>
   );
@@ -7598,7 +7599,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
         const v = f => g[monthlyGoalKey(f, mk)];
         const money = n => `$${Math.round(n)}`;
         const sb = salesGoalBreakdown(v('salesGoal'), mk);
-        const goalStr = MONTHLY_GOAL_FIELDS.filter(f => f.key !== 'salesGoal' && (!f.ownerVisible || v(f.key) != null)).map(f => {
+        const goalStr = MONTHLY_GOAL_FIELDS.filter(f => f.key !== 'salesGoal' && (!f.giftCards || v(f.key) != null)).map(f => {
           const val = v(f.key);
           return `${f.label} Goal ${val == null ? 'none' : f.money ? money(val) : f.pct ? `${val}%` : val}`;
         }).join(', ');
@@ -10857,7 +10858,7 @@ export default function App() {
           />
         )}
         {tab === 'Goals' && (
-          <GoalsTab report={d.report} goals={d.goals} isOwner={currentUser.role === 'owner'} onSaveGoal={handleSaveGoal} onApplySalesGoals={handleApplySalesGoals} milestoneGoals={d.milestoneGoals} onSaveMilestoneGoal={handleSaveMilestoneGoal} onFinalize={handleFinalizeGoals} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} />
+          <GoalsTab report={d.report} goals={d.goals} isOwner={currentUser.role === 'owner'} canSeeGiftCards={currentUser.role === 'owner' || currentUser.role === 'district_leader'} onSaveGoal={handleSaveGoal} onApplySalesGoals={handleApplySalesGoals} milestoneGoals={d.milestoneGoals} onSaveMilestoneGoal={handleSaveMilestoneGoal} onFinalize={handleFinalizeGoals} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} />
         )}
         {tab === 'Leases' && (
           <LeasesTab

@@ -60,6 +60,13 @@
 - Confirm the Signature Service tab now shows 1016/$12,142.36 for Aug 1–9 (already corrected directly in Supabase, not just in code) — and if you have a cleaner source for the 1017/$12,154.36 figure you originally gave me, worth checking where that extra unit/$12 comes from.
 - None of the 2026-08-13 changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
 
+Last updated: 2026-11-03 (gift card goals). **DLs now also see the gift card goal, read-only.** User: "I want them to see the goals progress bar and all on the gift card tab. I just don't want them to be able to edit the goal in the goal tab." This replaces the "goal stays owner-only" part of the entry below.
+- **Server**: `filterPayload` keeps `giftCardGoal*` in `store_goals` for DLs (own stores) and still strips it for managers and employees. Writes are still owner-only (403).
+- **Gift Cards tab**: Goal, vs Goal, DL-card Goal/Progress and the vs Goal sort are shown to DLs again. Only the upload button and its help text stay owner-only.
+- **Goals tab**: the Gift Cards $ field is now `ownerOnly` (read-only for DLs) plus `giftCards: true`. `monthlyGoalFieldsFor(isOwner, canSeeGiftCards)` hides the column from managers only. `ownerVisible` is gone.
+- **Mistake caught before commit**: my first edit script used JS `String.replace`, where `$'` in the replacement ("Gift Cards $',") pasted about 5,900 duplicate lines into App.js. It was restored from git and redone with `split/join`. Pushed commits were checked and are clean. **For scripted edits in this repo, never use `.replace(str, str)` on text containing `$`. Also normalize CRLF first, since `git checkout` writes CRLF.**
+- Build clean, not checked with a DL login.
+
 Last updated: 2026-11-03 (gift cards). **DLs can see the Gift Cards tab, for their own stores only.** User: "make the gift card tab visible to the DLs".
 - **Server**: `filterPayload` (`api/scoped-data.js`) returns `gift_card_history_*` filtered to the DL's `store_codes` (`filterDailyHistory`, same record shape). Managers and employees still get `{}`.
 - **Client**: the gift card load, the tab list and the tab render now allow `district_leader`. `GiftCardsTab` takes `isOwner`. For a DL the Goal / vs Goal columns, DL-card Goal/Progress, the vs Goal sort and the upload button are hidden. **The gift card goal stays owner-only**, as the user decided earlier (`ownerVisible`). I kept it that way since they didn't ask to change it; offered to show it.
