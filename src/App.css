@@ -1359,4 +1359,5 @@
 .pay-tracker-stats span { font-size: 10.5px; color: #B9C6D6; text-transform: uppercase; letter-spacing: 0.04em; }
 .pay-tracker-stats strong { font-size: 16px; font-weight: 700; color: #fff; }
 .pay-tracker-stats em { font-style: normal; font-size: 10.5px; color: #C7D3E3; }
-.pay-tracker-total strong { color: #FFE08A; }
+.pay-tracker-total { grid-column: span 2; }
+.pay-tracker-total strong { color: #FFE08A; font-size: 18px; }
