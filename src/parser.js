@@ -747,9 +747,26 @@ function parseMasterEmployeeListGrid(grid) {
     last: findCol(header, 'Last Name'),
     phone: findCol(header, 'Phone'),
   };
-  if (Object.values(col).some(c => c === -1)) {
-    throw new Error('Could not find the expected columns (Salon, Emp ID, First Name, Last Name, Phone) on the Employee List sheet.');
+  // Newer versions of the workbook (from Nov 2026) merge the two name
+  // columns into one "Last, First Name" column ("Bieniek, Taylor M.").
+  // Either layout works.
+  const combinedCol = header.findIndex(c => /^last\s*,\s*first/i.test(cellText(c)));
+  const hasSplitNames = col.first !== -1 && col.last !== -1;
+  if (col.salon === -1 || col.empId === -1 || col.phone === -1 || (!hasSplitNames && combinedCol === -1)) {
+    throw new Error('Could not find the expected columns (Salon, Emp ID, First Name + Last Name or "Last, First Name", Phone) on the Employee List sheet.');
   }
+  // "Bieniek, Taylor M." -> "Taylor Bieniek". A trailing middle initial is
+  // dropped so names match the older split-column files exactly (checked
+  // against the Oct 2026 file: 281 of 285 matched; the other 4 were real
+  // name changes in the workbook).
+  const nameFromCombined = raw => {
+    const s = cellText(raw);
+    const i = s.indexOf(',');
+    if (i < 0) return s;
+    const last = s.slice(0, i).trim();
+    const first = s.slice(i + 1).trim().replace(/\s+[A-Za-z]\.?$/, '');
+    return `${first} ${last}`;
+  };
 
   const stylists = [];
   const skipped = [];
@@ -758,7 +775,7 @@ function parseMasterEmployeeListGrid(grid) {
     if (!rowHasData(row)) continue;
     const salon = cellText(row[col.salon]);
     const empId = cellText(row[col.empId]);
-    const name = `${cellText(row[col.first])} ${cellText(row[col.last])}`.replace(/\s+/g, ' ').trim();
+    const name = (hasSplitNames ? `${cellText(row[col.first])} ${cellText(row[col.last])}` : nameFromCombined(row[combinedCol])).replace(/\s+/g, ' ').trim();
     const phone = cellText(row[col.phone]).replace(/\D/g, '');
     if (!salon || !empId || !name) continue;
     const storeCode = getCodeForStoreName(salon);
