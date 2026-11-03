@@ -30,14 +30,17 @@ const OTHER_GOALS = [
   { key: 'bottleToSSGoal', label: 'Bottle-to-SS %' },
 ];
 
-function leaderEmail({ leader, rows, month, lyMonth, prevMonth, prevPartial, siteUrl }) {
-  const td = `padding:7px 8px;font-family:${FONT};font-size:12.5px;border-bottom:1px solid ${BRAND.line};`;
-  const th = `padding:7px 8px;font-family:${FONT};font-size:11.5px;font-weight:700;color:#fff;background:${BRAND.navy2};`;
-  const money = n => (n == null ? '&mdash;' : fmt$(n));
-  // Per-day / per-week averages: bigger and bold so they read at a glance.
-  const avg = 'font-size:13.5px;font-weight:700;margin-top:3px;';
-  const goalAvg = `${avg}color:${BRAND.navy};`;
-  const refAvg = `${avg}color:#444;`;
+const td = `padding:7px 8px;font-family:${FONT};font-size:12.5px;border-bottom:1px solid ${BRAND.line};`;
+const th = `padding:7px 8px;font-family:${FONT};font-size:11.5px;font-weight:700;color:#fff;background:${BRAND.navy2};`;
+const money = n => (n == null ? '&mdash;' : fmt$(n));
+// Per-day / per-week averages: bigger and bold so they read at a glance.
+const avg = 'font-size:13.5px;font-weight:700;margin-top:3px;';
+const goalAvg = `${avg}color:${BRAND.navy};`;
+const refAvg = `${avg}color:#444;`;
+
+// Store | Goal | last year | last month table, with a total row. Shared by
+// each DL's email and the leadership roll-up so the numbers can't differ.
+function storesTable({ rows, month, lyMonth, prevMonth, prevPartial, totalLabel = 'Total', firstCol = 'Store' }) {
   const body = rows.map((r, i) => `
     <tr style="background:${i % 2 ? BRAND.paper : BRAND.card};">
       <td style="${td}color:${BRAND.navy};font-weight:700;">${escapeHtml(r.name)}</td>
@@ -53,11 +56,59 @@ function leaderEmail({ leader, rows, month, lyMonth, prevMonth, prevPartial, sit
   const totalBreak = salesGoalBreakdown(totalGoal, month);
   const totalRow = `
     <tr style="background:${BRAND.line};">
-      <td style="${td}font-weight:700;color:${BRAND.navy};">Total</td>
+      <td style="${td}font-weight:700;color:${BRAND.navy};">${escapeHtml(totalLabel)}</td>
       <td style="${td}text-align:right;font-weight:700;color:${BRAND.navy};">${fmt$(totalGoal)}${totalBreak ? `<div style="${goalAvg}">${fmt$(totalBreak.daily)}/day &middot; ${fmt$(totalBreak.weekly)}/wk</div>` : ''}</td>
       <td style="${td}text-align:right;font-weight:700;">${fmt$(sum(r => r.ly?.sales))}</td>
       <td style="${td}text-align:right;font-weight:700;">${fmt$(sum(r => r.prev?.sales))}</td>
     </tr>`;
+  return `
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid ${BRAND.line};">
+      <tr>
+        <td style="${th}">${escapeHtml(firstCol)}</td>
+        <td style="${th}text-align:right;background:${BRAND.red};">${monthLabel(month)} Goal</td>
+        <td style="${th}text-align:right;">${monthLabel(lyMonth)}</td>
+        <td style="${th}text-align:right;">${monthLabel(prevMonth)}${prevPartial ? ' (so far)' : ''}</td>
+      </tr>
+      ${body}${totalRow}
+    </table>`;
+}
+
+const emailShell = (month, subtitle, inner) => `
+    <div style="background:${BRAND.paper};padding:24px 12px;font-family:${FONT};">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;margin:0 auto;background:${BRAND.card};border-radius:10px;overflow:hidden;">
+        <tr><td style="background:${BRAND.navy};padding:24px 28px;text-align:center;">
+          <div style="font-size:11px;letter-spacing:2px;color:#9FB3CE;text-transform:uppercase;">Supercuts Analytics</div>
+          <div style="font-size:22px;font-weight:700;color:#fff;margin-top:4px;">${monthLabel(month)} Sales Goals</div>
+          <div style="font-size:13px;color:#C7D3E3;margin-top:6px;">${subtitle}</div>
+        </td></tr>
+        <tr><td style="padding:20px 24px 24px;">${inner}</td></tr>
+      </table>
+    </div>`.replace(/>\s*\n\s*</g, '><');
+
+// Leadership's roll-up: every DL's stores in one email, a section per DL
+// with that DL's total, then the company total across all of them.
+function leadershipEmail({ groups, month, lyMonth, prevMonth, prevPartial }) {
+  const ctx = { month, lyMonth, prevMonth, prevPartial };
+  const all = groups.flatMap(g => g.rows);
+  const companyBreak = salesGoalBreakdown(all.reduce((s, r) => s + (r.goal || 0), 0), month);
+  const sections = groups.map(g => `
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;">
+      ${sectionBand(escapeHtml(g.leader), BRAND.navy)}
+      <tr><td>${storesTable({ ...ctx, rows: g.rows, totalLabel: `${g.leader} total` })}</td></tr>
+    </table>`).join('');
+  const summaryRows = groups.map(g => ({ name: g.leader, goal: g.rows.reduce((s, r) => s + (r.goal || 0), 0), ly: { sales: g.rows.reduce((s, r) => s + (r.ly?.sales || 0), 0) }, prev: { sales: g.rows.reduce((s, r) => s + (r.prev?.sales || 0), 0) } }))
+    .map(r => ({ ...r, breakdown: salesGoalBreakdown(r.goal, month) }));
+  const inner = `
+    <p style="margin:0 0 4px;font-family:${FONT};font-size:13.5px;color:#333;line-height:1.5;">Every DL's ${monthLabel(month)} Sales goals in one place, as each DL received them, next to ${monthLabel(lyMonth)} and ${monthLabel(prevMonth)}${prevPartial ? ' (so far)' : ''}.${companyBreak ? ` Company goal: <strong>${fmt$(all.reduce((s, r) => s + (r.goal || 0), 0))}</strong> (${fmt$(companyBreak.daily)}/day &middot; ${fmt$(companyBreak.weekly)}/wk).` : ''}</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:14px;">
+      ${sectionBand('By DL', BRAND.red)}
+      <tr><td>${storesTable({ ...ctx, rows: summaryRows, totalLabel: 'Company total', firstCol: 'DL' })}</td></tr>
+    </table>
+    ${sections}`;
+  return { subject: `${monthLabel(month)} Sales Goals — All DLs`, html: emailShell(month, 'Leadership roll-up, all DLs', inner) };
+}
+
+function leaderEmail({ leader, rows, month, lyMonth, prevMonth, prevPartial, siteUrl }) {
 
   const missing = rows.map(r => ({ name: r.name, labels: OTHER_GOALS.filter(g => r.other[g.key] == null).map(g => g.label) })).filter(m => m.labels.length);
   const reminder = missing.length
@@ -69,41 +120,20 @@ function leaderEmail({ leader, rows, month, lyMonth, prevMonth, prevPartial, sit
       <a href="${escapeHtml(siteUrl)}" style="display:inline-block;padding:10px 22px;font-family:${FONT};font-size:13px;font-weight:700;color:#fff;text-decoration:none;">Open the Goals tab &#8594;</a>
     </td></tr></table>` : '';
 
-  const html = `
-    <div style="background:${BRAND.paper};padding:24px 12px;font-family:${FONT};">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;margin:0 auto;background:${BRAND.card};border-radius:10px;overflow:hidden;">
-        <tr><td style="background:${BRAND.navy};padding:24px 28px;text-align:center;">
-          <div style="font-size:11px;letter-spacing:2px;color:#9FB3CE;text-transform:uppercase;">Supercuts Analytics</div>
-          <div style="font-size:22px;font-weight:700;color:#fff;margin-top:4px;">${monthLabel(month)} Sales Goals</div>
-          <div style="font-size:13px;color:#C7D3E3;margin-top:6px;">For ${escapeHtml(leader)}</div>
-        </td></tr>
-        <tr><td style="padding:20px 24px 24px;">
-          <p style="margin:0 0 4px;font-family:${FONT};font-size:13.5px;color:#333;line-height:1.5;">Leadership has finalized your stores' Sales goals for ${monthLabel(month)}. Each goal is shown per day and per week, next to ${monthLabel(lyMonth)} and ${monthLabel(prevMonth)}${prevPartial ? ' (so far)' : ''} for comparison.</p>
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-            ${sectionBand(`Your stores`, BRAND.navy)}
-            <tr><td>
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border:1px solid ${BRAND.line};">
-                <tr>
-                  <td style="${th}">Store</td>
-                  <td style="${th}text-align:right;background:${BRAND.red};">${monthLabel(month)} Goal</td>
-                  <td style="${th}text-align:right;">${monthLabel(lyMonth)}</td>
-                  <td style="${th}text-align:right;">${monthLabel(prevMonth)}${prevPartial ? ' (so far)' : ''}</td>
-                </tr>
-                ${body}${totalRow}
-              </table>
-            </td></tr>
-          </table>
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:18px;background:#FBF6E6;border-left:4px solid ${BRAND.gold};border-radius:6px;">
-            <tr><td style="padding:14px 16px;font-family:${FONT};font-size:13px;color:#333;line-height:1.5;">
-              <div style="font-size:12px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;color:${BRAND.bronze};margin-bottom:6px;">Reminder</div>
-              ${reminder}
-              ${button}
-            </td></tr>
-          </table>
-        </td></tr>
-      </table>
-    </div>`.replace(/>\s*\n\s*</g, '><');
-  return { subject: `${monthLabel(month)} Sales Goals — ${leader}`, html };
+  const inner = `
+    <p style="margin:0 0 4px;font-family:${FONT};font-size:13.5px;color:#333;line-height:1.5;">Leadership has finalized your stores' Sales goals for ${monthLabel(month)}. Each goal is shown per day and per week, next to ${monthLabel(lyMonth)} and ${monthLabel(prevMonth)}${prevPartial ? ' (so far)' : ''} for comparison.</p>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      ${sectionBand(`Your stores`, BRAND.navy)}
+      <tr><td>${storesTable({ rows, month, lyMonth, prevMonth, prevPartial })}</td></tr>
+    </table>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:18px;background:#FBF6E6;border-left:4px solid ${BRAND.gold};border-radius:6px;">
+      <tr><td style="padding:14px 16px;font-family:${FONT};font-size:13px;color:#333;line-height:1.5;">
+        <div style="font-size:12px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;color:${BRAND.bronze};margin-bottom:6px;">Reminder</div>
+        ${reminder}
+        ${button}
+      </td></tr>
+    </table>`;
+  return { subject: `${monthLabel(month)} Sales Goals — ${leader}`, html: emailShell(month, `For ${escapeHtml(leader)}`, inner) };
 }
 
 // Builds every leader's email for `month` from the stored goals + history.
@@ -115,6 +145,7 @@ export function buildGoalEmails({ goals, history, weeklyHistory, month, todayISO
   const prev = monthlyReference(history, weeklyHistory, prevMonth, todayISO);
   const emails = {};
   const withoutGoals = [];
+  const groups = [];
   LEADER_ROSTER_SECTIONS.flatMap(sec => sec.leaders).forEach(l => {
     const rows = l.storeCodes.map(code => {
       const g = goals?.[code] || {};
@@ -124,8 +155,10 @@ export function buildGoalEmails({ goals, history, weeklyHistory, month, todayISO
     }).sort((a, b) => a.name.localeCompare(b.name));
     if (!rows.some(r => r.goal != null)) { withoutGoals.push(l.name); return; }
     emails[l.name] = leaderEmail({ leader: l.name, rows, month, lyMonth, prevMonth, prevPartial, siteUrl });
+    groups.push({ leader: l.name, rows });
   });
-  return { emails, withoutGoals };
+  const leadership = groups.length ? leadershipEmail({ groups, month, lyMonth, prevMonth, prevPartial }) : null;
+  return { emails, withoutGoals, leadership };
 }
 
 // Called from api/scoped-data.js ({ action: 'finalize-goals' }) rather than
@@ -168,7 +201,7 @@ export async function handleFinalizeGoals(req, res) {
     if (goalsRow.error) throw new Error(goalsRow.error.message);
     const proto = (req.headers['x-forwarded-proto'] || 'https').split(',')[0];
     const siteUrl = req.headers.host ? `${proto}://${req.headers.host}` : null;
-    const { emails, withoutGoals } = buildGoalEmails({ goals: goalsRow.data?.payload || {}, history, weeklyHistory, month, todayISO, siteUrl });
+    const { emails, withoutGoals, leadership } = buildGoalEmails({ goals: goalsRow.data?.payload || {}, history, weeklyHistory, month, todayISO, siteUrl });
     if (!Object.keys(emails).length) {
       res.status(400).json({ error: `No store has a ${monthLabel(month)} Sales goal yet, so there's nothing to send.` });
       return;
@@ -177,7 +210,9 @@ export async function handleFinalizeGoals(req, res) {
     const scriptRes = await fetch(webAppUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ secret, action: 'goals', test: !!test, emails }),
+      // `leadership` goes to every 'ALL' address in the script's RECIPIENTS.
+      // A script older than 2026-11-03 ignores it (see leadershipMissing).
+      body: JSON.stringify({ secret, action: 'goals', test: !!test, emails, leadership }),
       redirect: 'follow',
     });
     const text = await scriptRes.text();
@@ -186,7 +221,9 @@ export async function handleFinalizeGoals(req, res) {
       throw new Error('The Apps Script web app didn\'t answer. Check it\'s deployed with "Who has access: Anyone".');
     }
     if (!result.ok) throw new Error(result.error || 'The Apps Script web app reported a problem.');
-    res.status(200).json({ ok: true, sent: result.sent || [], skipped: result.skipped || [], withoutGoals });
+    // The updated script reports `leadershipSent`; an old one doesn't, so
+    // the owner is told the Apps Script still needs the new code.
+    res.status(200).json({ ok: true, sent: result.sent || [], skipped: result.skipped || [], withoutGoals, leadershipSent: result.leadershipSent || [], leadershipMissing: !!leadership && !Array.isArray(result.leadershipSent) });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }

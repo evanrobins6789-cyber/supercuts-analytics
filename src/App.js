@@ -5177,7 +5177,7 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
         <div className="mg-bump-row mg-finalize-row">
           <button type="button" className="mg-finalize-btn" disabled={finalizing}
             onClick={async () => {
-              if (!window.confirm(`Finalize ${fmtMonthLong(month)} Sales goals and email each DL?\n\nEach DL gets their stores' Sales goals (per day and per week), ${fmtMonthLong(lyMonth)} and ${fmtMonthLong(prevMonth)} for comparison, and a reminder of which other goals they still need to set.`)) return;
+              if (!window.confirm(`Finalize ${fmtMonthLong(month)} Sales goals and email each DL?\n\nEach DL gets their stores' Sales goals (per day and per week), ${fmtMonthLong(lyMonth)} and ${fmtMonthLong(prevMonth)} for comparison, and a reminder of which other goals they still need to set. Leadership (every ALL address in the Apps Script) gets one roll-up of all DLs.`)) return;
               setFinalizing(true);
               await onFinalize(month, false);
               setFinalizing(false);
@@ -8331,31 +8331,47 @@ function sendWeeklyLeaderboard() {
 // per leader here; this sends each to that leader's address in RECIPIENTS.
 // Needs this script deployed as a web app (Deploy → New deployment → Web
 // app, Execute as: Me, Who has access: Anyone) and that URL saved in Vercel
-// as GOALS_EMAIL_WEBAPP_URL. A test goes only to the first 'ALL' address.
+// as GOALS_EMAIL_WEBAPP_URL. Every 'ALL' address (leadership) also gets one
+// roll-up email with all DLs' goals. A test goes only to the first 'ALL'
+// address: one DL's email plus the roll-up.
 function doPost(e) {
   const body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
   if (body.secret !== SHARED_SECRET) return jsonOut({ ok: false, error: 'Invalid secret.' });
   if (body.action !== 'goals') return jsonOut({ ok: false, error: 'Unknown action.' });
   const emails = body.emails || {};
+  const leadership = body.leadership;
   const list = Array.isArray(RECIPIENTS) ? [] : Object.entries(RECIPIENTS);
+  const isReal = email => email.indexOf('EMAIL_HERE') !== 0 && email.indexOf('@') > 0;
   const sent = [];
   const skipped = [];
+  const leadershipSent = [];
   if (body.test) {
     const me = (list.find(([, who]) => who === 'ALL') || [])[0];
     const first = Object.keys(emails)[0];
     if (!me || !first) return jsonOut({ ok: false, error: 'Nothing to test with (needs an ALL recipient and at least one leader email).' });
     GmailApp.sendEmail(me, '[TEST] ' + emails[first].subject, 'This email requires HTML support to view.', { htmlBody: emails[first].html });
-    return jsonOut({ ok: true, sent: [me + ' (copy of ' + first + "'s email)"], skipped: [] });
+    if (leadership) {
+      GmailApp.sendEmail(me, '[TEST] ' + leadership.subject, 'This email requires HTML support to view.', { htmlBody: leadership.html });
+      leadershipSent.push(me);
+    }
+    return jsonOut({ ok: true, sent: [me + ' (copy of ' + first + "'s email)"], skipped: [], leadershipSent: leadershipSent });
   }
   const covered = {};
   list.forEach(([email, who]) => {
-    if (!who || who === 'ALL' || email.indexOf('EMAIL_HERE') === 0 || email.indexOf('@') < 0 || !emails[who]) return;
+    if (!who || !isReal(email)) return;
+    if (who === 'ALL') {
+      if (!leadership) return;
+      GmailApp.sendEmail(email, leadership.subject, 'This email requires HTML support to view.', { htmlBody: leadership.html });
+      leadershipSent.push(email);
+      return;
+    }
+    if (!emails[who]) return;
     GmailApp.sendEmail(email, emails[who].subject, 'This email requires HTML support to view.', { htmlBody: emails[who].html });
     sent.push(who + ' (' + email + ')');
     covered[who] = true;
   });
   Object.keys(emails).forEach(who => { if (!covered[who]) skipped.push(who); });
-  return jsonOut({ ok: true, sent: sent, skipped: skipped });
+  return jsonOut({ ok: true, sent: sent, skipped: skipped, leadershipSent: leadershipSent });
 }
 
 function jsonOut(obj) {
@@ -9812,8 +9828,10 @@ export default function App() {
     const notes = [
       r.skipped?.length ? `No email address for: ${r.skipped.join('; ')}` : '',
       !test && r.withoutGoals?.length ? `No Sales goals yet (not emailed): ${r.withoutGoals.join(', ')}` : '',
+      r.leadershipMissing ? 'The leadership roll-up was not sent: update the Apps Script with the new code from Setup › Email Reports, then Deploy › Manage deployments › New version.' : '',
     ].filter(Boolean).join(' · ');
-    showToast(test ? `Test email sent (${r.sent?.join(', ') || 'no recipient'}).` : `Sent ${sent} DL goal email${sent === 1 ? '' : 's'}.${notes ? ` ${notes}` : ''}`, notes ? 'error' : undefined);
+    const lead = r.leadershipSent?.length ? ` Leadership roll-up sent to ${r.leadershipSent.join(', ')}.` : '';
+    showToast(test ? `Test email sent (${r.sent?.join(', ') || 'no recipient'}).${lead}${notes ? ` ${notes}` : ''}` : `Sent ${sent} DL goal email${sent === 1 ? '' : 's'}.${lead}${notes ? ` ${notes}` : ''}`, notes ? 'error' : undefined);
   }, [currentUser]);
 
   const handleSaveManager = useCallback((storeCode, name) => {
