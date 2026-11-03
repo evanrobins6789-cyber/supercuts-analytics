@@ -25,7 +25,7 @@ import {
   EMPTY_RANGE_TOTALS, addRangeInto, expandDateRangeDays, mergeEmployeesInto, finalizeEmployee,
   getRangeTotals, historyTotalsToReportShape, rollupRows, addDaysISO, isoWeekStart, getLastFullWeekRange, sortByMetric,
   shiftYearISO, getStoreCutsPerDay, cpdOf,
-  shiftMonthKey, salesGoalBreakdown, monthlyReference as sharedMonthlyReference,
+  shiftMonthKey, salesGoalBreakdown, monthlyReference as sharedMonthlyReference, openDaysInRange, closedDaysInMonth,
 } from './metrics';
 import { BITMOJI_POOLS } from './bitmoji';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
@@ -5006,7 +5006,11 @@ function goalForRange(goals, code, field, start, end, { rate = false } = {}) {
     const s = start > `${mk}-01` ? start : `${mk}-01`;
     const e = end < monthEnd ? end : monthEnd;
     const n = isoDayDiff(s, e) + 1;
-    total += rate ? Number(v) * n : Number(v) * (n / dim);
+    // $ and count goals are spread over the days stores are open, so a
+    // holiday (Thanksgiving etc., see closedHolidays in metrics.js) carries
+    // none of the goal.
+    const monthOpen = openDaysInRange(`${mk}-01`, monthEnd);
+    total += rate ? Number(v) * n : Number(v) * (monthOpen ? openDaysInRange(s, e) / monthOpen : 0);
     days += n;
   }
   return { value: rate ? total / days : total, monthly: true };
@@ -5018,7 +5022,8 @@ function goalSourceNote(start, end, usesMonthly) {
   const months = [];
   for (let mk = start.slice(0, 7); mk <= end.slice(0, 7); mk = shiftMonthKey(mk, 1)) months.push(fmtMonthLong(mk));
   if (!usesMonthly) return `No Monthly Goals are set for ${months.join(' / ')} yet (Goals tab), so goal columns show —.`;
-  return `Goals are the ${months.join(' / ')} Monthly Goals (Goals tab), scaled to the ${days} day${days === 1 ? '' : 's'} shown. A store with no goal for every month shown has no goal here.`;
+  const open = openDaysInRange(start, end);
+  return `Goals are the ${months.join(' / ')} Monthly Goals (Goals tab), scaled to the ${open} open day${open === 1 ? '' : 's'} shown${open < days ? ' (holidays carry no goal)' : ''}. A store with no goal for every month shown has no goal here.`;
 }
 const MONTHLY_REF_METRICS = [
   { key: 'cuts', label: 'Cuts', fmt: fmtInt },
@@ -5186,7 +5191,7 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
         </div>
       )}
       <p className="section-hint">
-        Goals for {fmtMonthLong(month)}, next to the same month last year ({fmtMonthLong(lyMonth)}) and last month ({fmtMonthLong(prevMonth)}{prevIsPartial ? ', so far' : ''}). {isOwner ? 'Sales goals are set by leadership: the buttons above round to the nearest $500, or type any store by hand.' : 'Sales goals are set by leadership.'} Milestone stays the same every month until leadership changes it (same as Setup › Milestone Goals). Each Sales goal shows what it works out to per day and per week ({fmtMonthLong(month)} has {new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()} days). Daily Avg is sales ÷ days the store was open; Weekly Avg is sales ÷ weeks in the month. The % goals are whole percents (type 15 for 15%). Goals save when you click out of the box.
+        Goals for {fmtMonthLong(month)}, next to the same month last year ({fmtMonthLong(lyMonth)}) and last month ({fmtMonthLong(prevMonth)}{prevIsPartial ? ', so far' : ''}). {isOwner ? 'Sales goals are set by leadership: the buttons above round to the nearest $500, or type any store by hand.' : 'Sales goals are set by leadership.'} Milestone stays the same every month until leadership changes it (same as Setup › Milestone Goals). Each Sales goal shows what it works out to per day and per week. Per day uses the {openDaysInRange(`${month}-01`, `${month}-${String(new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()).padStart(2, '0')}`)} days stores are open in {fmtMonthLong(month)}{closedDaysInMonth(month).length ? ` (closed ${closedDaysInMonth(month).map(h => h.name).join(' and ')})` : ''}. Daily Avg is sales ÷ days the store was open; Weekly Avg is sales ÷ weeks in the month. The % goals are whole percents (type 15 for 15%). Goals save when you click out of the box.
       </p>
       {/* Scrolls inside its own box (both ways) so the two header rows can
           stay pinned at the top while you scroll down through the stores. */}
@@ -7580,7 +7585,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       const ly = monthlyReference(history, weeklyHistory, shiftMonthKey(mk, -12));
       const pm = monthlyReference(history, weeklyHistory, shiftMonthKey(mk, -1));
       const refStr = r => (r ? `Cuts ${r.cuts}, CPD ${r.cpd != null ? r.cpd.toFixed(1) : 'n/a'}, Sales $${Math.round(r.sales)}, Daily Avg ${r.daily != null ? `$${Math.round(r.daily)}` : 'n/a'}, Weekly Avg ${r.weekly != null ? `$${Math.round(r.weekly)}` : 'n/a'}` : 'no data');
-      lines.push(`MONTHLY GOALS for ${fmtMonthLong(mk)} (for this month only, set on the Goals tab: Sales $ by leadership, broken into per-day and per-week over the calendar days of the month; Retail $, Color $, Bottles (unit count), Signature Service (count of services, NOT dollars), Retail Attach % (share of color tickets that also have a retail item), Bottle-to-Color % and Bottle-to-SS % (bottles per color service / per Signature Service; goal-only, no actual is computed) by DLs; Gift Cards $ by the owner only. The app's tabs compare actuals against these goals scaled to the dates being viewed (% goals are not scaled). A store with no goal for a month has no goal at all; there are no standing goals any more; reference = same month last year (${fmtMonthLong(shiftMonthKey(mk, -12))}) and the month before (${fmtMonthLong(shiftMonthKey(mk, -1))})):`);
+      lines.push(`MONTHLY GOALS for ${fmtMonthLong(mk)} (for this month only, set on the Goals tab: Sales $ by leadership, broken into per-day (over the days stores are open; every store closes New Year's Day, Easter, Thanksgiving and Christmas) and per-week (an average calendar week); Retail $, Color $, Bottles (unit count), Signature Service (count of services, NOT dollars), Retail Attach % (share of color tickets that also have a retail item), Bottle-to-Color % and Bottle-to-SS % (bottles per color service / per Signature Service; goal-only, no actual is computed) by DLs; Gift Cards $ by the owner only. The app's tabs compare actuals against these goals scaled to the dates being viewed (% goals are not scaled). A store with no goal for a month has no goal at all; there are no standing goals any more; reference = same month last year (${fmtMonthLong(shiftMonthKey(mk, -12))}) and the month before (${fmtMonthLong(shiftMonthKey(mk, -1))})):`);
       rows.forEach(([code, g]) => {
         const v = f => g[monthlyGoalKey(f, mk)];
         const money = n => `$${Math.round(n)}`;

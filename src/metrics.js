@@ -354,11 +354,59 @@ export function monthlyReference(history, weeklyHistory, mk, todayISO) {
   return out;
 }
 
-// A monthly Sales goal per day and per week: goal ÷ calendar days in the
-// month, and goal ÷ (calendar days ÷ 7).
+// ─── Company-wide closed days ───────────────────────────────────────────────
+// Every store is closed on these four holidays (confirmed against sales
+// history: zero sales company-wide on each one in 2025 and 2026). Snow days
+// and other one-off closures can't be known ahead, so they aren't here.
+// To add a holiday, add it to closedHolidays().
+
+// Easter Sunday (Anonymous Gregorian algorithm). 2026 → "2026-04-05".
+function easterSundayISO(y) {
+  const a = y % 19; const b = Math.floor(y / 100); const c = y % 100;
+  const d = Math.floor(b / 4); const e = b % 4; const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3); const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4); const k = c % 4; const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+// Thanksgiving: 4th Thursday of November.
+function thanksgivingISO(y) {
+  const firstDow = new Date(y, 10, 1).getDay(); // 0 = Sun … 4 = Thu
+  const firstThu = 1 + ((4 - firstDow + 7) % 7);
+  return `${y}-11-${String(firstThu + 21).padStart(2, '0')}`;
+}
+export function closedHolidays(y) {
+  return [
+    { date: `${y}-01-01`, name: "New Year's Day" },
+    { date: easterSundayISO(y), name: 'Easter' },
+    { date: thanksgivingISO(y), name: 'Thanksgiving' },
+    { date: `${y}-12-25`, name: 'Christmas' },
+  ];
+}
+// The holidays that fall inside one month ("2026-11" → [{ date, name }]).
+export function closedDaysInMonth(mk) {
+  return closedHolidays(Number(mk.slice(0, 4))).filter(h => h.date.startsWith(`${mk}-`));
+}
+// Days in [start, end] the stores are open (calendar days minus holidays).
+export function openDaysInRange(start, end) {
+  if (!start || !end || start > end) return 0;
+  const calendar = Math.round((new Date(`${end}T00:00:00`) - new Date(`${start}T00:00:00`)) / 86400000) + 1;
+  let closed = 0;
+  for (let y = Number(start.slice(0, 4)); y <= Number(end.slice(0, 4)); y++) {
+    closedHolidays(y).forEach(h => { if (h.date >= start && h.date <= end) closed++; });
+  }
+  return calendar - closed;
+}
+
+// A monthly Sales goal per day and per week. Daily = goal ÷ days the stores
+// are open that month (November 2026: 30 days − Thanksgiving = 29). Weekly =
+// goal ÷ (calendar days ÷ 7), an average calendar week.
 export function salesGoalBreakdown(goal, mk) {
   if (goal == null || goal === '' || isNaN(Number(goal))) return null;
   const [y, m] = mk.split('-').map(Number);
   const days = new Date(y, m, 0).getDate();
-  return { daily: Number(goal) / days, weekly: Number(goal) / (days / 7) };
+  const openDays = openDaysInRange(`${mk}-01`, `${mk}-${String(days).padStart(2, '0')}`);
+  return { daily: Number(goal) / openDays, weekly: Number(goal) / (days / 7), openDays, days };
 }
