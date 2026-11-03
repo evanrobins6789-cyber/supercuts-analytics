@@ -338,19 +338,23 @@ export function monthKeyRange(mk, todayISO) {
 
 // { [storeCode]: { cuts, cpd, sales, daily, weekly } } for one month.
 // Daily avg = sales ÷ days the store had cuts (same days CPD uses); weekly
-// avg = sales ÷ (open days in the range ÷ 7), so a holiday (closedHolidays)
-// doesn't water down the average.
+// avg = sales ÷ 4 for a full month, the same split the weekly Sales goal
+// uses (salesGoalBreakdown). A month still in progress uses the open weeks
+// so far (open days ÷ 7, capped at 4).
 export function monthlyReference(history, weeklyHistory, mk, todayISO) {
   const { start, end } = monthKeyRange(mk, todayISO);
   if (start > end) return {};
   const openDays = openDaysInRange(start, end);
+  const [yy, mm] = mk.split('-').map(Number);
+  const fullMonth = end === `${mk}-${String(new Date(yy, mm, 0).getDate()).padStart(2, '0')}`;
+  const weeks = fullMonth ? WEEKS_PER_MONTH : Math.min(WEEKS_PER_MONTH, openDays / 7);
   const totals = getRangeTotals(history, weeklyHistory, start, end);
   const cpd = getStoreCutsPerDay(history, weeklyHistory, start, end);
   const out = {};
   Object.entries(totals).forEach(([code, t]) => {
     const sales = historyTotalsToReportShape(t).sales || 0;
     const days = cpd[code]?.days || 0;
-    out[code] = { cuts: t.haircuts || 0, cpd: cpdOf(cpd[code]), sales, daily: days > 0 ? sales / days : null, weekly: openDays > 0 ? sales / (openDays / 7) : null };
+    out[code] = { cuts: t.haircuts || 0, cpd: cpdOf(cpd[code]), sales, daily: days > 0 ? sales / days : null, weekly: weeks > 0 ? sales / weeks : null };
   });
   return out;
 }
@@ -403,12 +407,13 @@ export function openDaysInRange(start, end) {
 
 // A monthly Sales goal per day and per week. Daily = goal ÷ days the stores
 // are open that month (November 2026: 30 days − Thanksgiving = 29). Weekly =
-// 7 open days of that (goal ÷ (open days ÷ 7)), so the holiday is taken out
-// of the weekly number too. A holiday week itself is 6 open days.
+// goal ÷ 4, so 4 weeks always add back up to the monthly goal (the user's
+// rule, 2026-11-03; daily × 7 left 4 weeks short of the goal).
+export const WEEKS_PER_MONTH = 4;
 export function salesGoalBreakdown(goal, mk) {
   if (goal == null || goal === '' || isNaN(Number(goal))) return null;
   const [y, m] = mk.split('-').map(Number);
   const days = new Date(y, m, 0).getDate();
   const openDays = openDaysInRange(`${mk}-01`, `${mk}-${String(days).padStart(2, '0')}`);
-  return { daily: Number(goal) / openDays, weekly: (Number(goal) / openDays) * 7, openDays, days };
+  return { daily: Number(goal) / openDays, weekly: Number(goal) / WEEKS_PER_MONTH, openDays, days };
 }
