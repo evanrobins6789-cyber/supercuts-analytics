@@ -61,7 +61,7 @@
 - None of the 2026-08-13 changes have been visually confirmed in a real browser — this sandbox has no way to log into the live site.
 
 Last updated: 2026-11-02 (night, late). **Goal math skips company holidays.** User: "we are closed on Thanksgiving so you are dividing by one too many days for the daily." Sales history shows zero sales company-wide on New Year's Day, Easter, Thanksgiving and Christmas in both 2025 and 2026, so all four are in `closedHolidays(y)` (`src/metrics.js`). The Jan 25–26, 2026 snow days aren't, since they can't be predicted.
-- `salesGoalBreakdown` daily = goal ÷ open days (Nov 2026 = 29); weekly is still goal ÷ (calendar days ÷ 7). That covers the Goals tab, the DL goal email and Tilly.
+- `salesGoalBreakdown` daily = goal ÷ open days (Nov 2026 = 29), and weekly = daily × 7 (the user asked for the weekly to reflect the holiday too). The reference "Weekly Avg" in `monthlyReference` is sales ÷ (open days ÷ 7). That covers the Goals tab, the DL goal email and Tilly. Tested: $29,000 Nov goal → $1,000/day, $7,000/wk; Oct $31,000 → $7,000/wk.
 - `goalForRange` scales $/count goals by open days (a holiday carries no goal); % goals are unchanged. `goalSourceNote` and the Goals tab hint name the closed holiday.
 - Temp jest test: holidays match the history closures exactly, Nov = 29 open days, $29,000 → $1,000/day. Build clean.
 - **The franchisee kit's `metrics.js` still has the old version** (kit work is paused mid-update; port this too when resuming).

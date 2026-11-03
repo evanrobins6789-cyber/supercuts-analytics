@@ -338,18 +338,19 @@ export function monthKeyRange(mk, todayISO) {
 
 // { [storeCode]: { cuts, cpd, sales, daily, weekly } } for one month.
 // Daily avg = sales ÷ days the store had cuts (same days CPD uses); weekly
-// avg = sales ÷ (calendar days in the range ÷ 7).
+// avg = sales ÷ (open days in the range ÷ 7), so a holiday (closedHolidays)
+// doesn't water down the average.
 export function monthlyReference(history, weeklyHistory, mk, todayISO) {
   const { start, end } = monthKeyRange(mk, todayISO);
   if (start > end) return {};
-  const calendarDays = Math.round((new Date(`${end}T00:00:00`) - new Date(`${start}T00:00:00`)) / 86400000) + 1;
+  const openDays = openDaysInRange(start, end);
   const totals = getRangeTotals(history, weeklyHistory, start, end);
   const cpd = getStoreCutsPerDay(history, weeklyHistory, start, end);
   const out = {};
   Object.entries(totals).forEach(([code, t]) => {
     const sales = historyTotalsToReportShape(t).sales || 0;
     const days = cpd[code]?.days || 0;
-    out[code] = { cuts: t.haircuts || 0, cpd: cpdOf(cpd[code]), sales, daily: days > 0 ? sales / days : null, weekly: calendarDays > 0 ? sales / (calendarDays / 7) : null };
+    out[code] = { cuts: t.haircuts || 0, cpd: cpdOf(cpd[code]), sales, daily: days > 0 ? sales / days : null, weekly: openDays > 0 ? sales / (openDays / 7) : null };
   });
   return out;
 }
@@ -402,11 +403,12 @@ export function openDaysInRange(start, end) {
 
 // A monthly Sales goal per day and per week. Daily = goal ÷ days the stores
 // are open that month (November 2026: 30 days − Thanksgiving = 29). Weekly =
-// goal ÷ (calendar days ÷ 7), an average calendar week.
+// 7 open days of that (goal ÷ (open days ÷ 7)), so the holiday is taken out
+// of the weekly number too. A holiday week itself is 6 open days.
 export function salesGoalBreakdown(goal, mk) {
   if (goal == null || goal === '' || isNaN(Number(goal))) return null;
   const [y, m] = mk.split('-').map(Number);
   const days = new Date(y, m, 0).getDate();
   const openDays = openDaysInRange(`${mk}-01`, `${mk}-${String(days).padStart(2, '0')}`);
-  return { daily: Number(goal) / openDays, weekly: Number(goal) / (days / 7), openDays, days };
+  return { daily: Number(goal) / openDays, weekly: (Number(goal) / openDays) * 7, openDays, days };
 }
