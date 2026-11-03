@@ -1359,8 +1359,12 @@
 .pay-tracker-stats span { font-size: 10.5px; color: #B9C6D6; text-transform: uppercase; letter-spacing: 0.04em; }
 .pay-tracker-stats strong { font-size: 16px; font-weight: 700; color: #fff; }
 .pay-tracker-stats em { font-style: normal; font-size: 10.5px; color: #C7D3E3; }
-.pay-tracker-total { grid-column: span 2; }
+.pay-tracker-pay { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-top: 10px; }
+.pay-tracker-total { display: flex; flex-direction: column; background: rgba(255,255,255,0.07); border-radius: 8px; padding: 7px 10px; }
+.pay-tracker-total span { font-size: 10.5px; color: #B9C6D6; text-transform: uppercase; letter-spacing: 0.04em; }
+.pay-tracker-total em { font-style: normal; font-size: 11px; color: #C7D3E3; }
 .pay-tracker-total strong { color: #FFE08A; font-size: 18px; }
+.pay-tracker-total--sure strong { color: #9BE3B8; }
 
 /* Hero left column when the pay tracker is shown: welcome, date, post
    buttons, then the blurb underneath them. */

@@ -1793,20 +1793,31 @@ function PayTrackerCard({ data }) {
         <div><span>TSTH</span><strong>${top.tsth.toFixed(2)}</strong><em>goal ${fmtInt(top.goal)}</em></div>
         <div><span>Bonus</span><strong>{fmt$(top.bonus)}</strong><em>${top.bonusPerHour.toFixed(2)}/hr</em></div>
         <div><span>Tips</span><strong>{fmt$(top.tips)}</strong><em>${(top.hours > 0 ? top.tips / top.hours : 0).toFixed(2)}/hr</em></div>
-        <div className="pay-tracker-total">
-          <span>Made per hour</span>
-          {top.hourly != null ? (
-            <>
-              <strong>${(top.madeSoFar / top.hours).toFixed(2)}/hr</strong>
-              <em>${top.hourly.toFixed(2)} base + ${top.bonusPerHour.toFixed(2)} bonus + ${(top.tips / top.hours).toFixed(2)} tips · {fmt$(top.madeSoFar)} total</em>
-            </>
-          ) : (
-            <>
-              <strong>${((top.bonus + top.tips) / top.hours).toFixed(2)}/hr + base</strong>
-              <em>{data.ratesLoaded ? 'No pay rate matched for this name' : 'Pay rates not uploaded'}</em>
-            </>
-          )}
-        </div>
+      </div>
+      <div className="pay-tracker-pay">
+        {/* Guaranteed = hourly base + tips, theirs no matter what. Possible =
+            guaranteed + the bonus earned so far, paid if they make it to the
+            end of the pay period. */}
+        {top.hourly != null ? (
+          <>
+            <div className="pay-tracker-total pay-tracker-total--sure">
+              <span>Guaranteed pay</span>
+              <strong>{fmt$(top.basePay + top.tips)}</strong>
+              <em>${((top.basePay + top.tips) / top.hours).toFixed(2)}/hr · ${top.hourly.toFixed(2)} base + ${(top.tips / top.hours).toFixed(2)} tips</em>
+            </div>
+            <div className="pay-tracker-total">
+              <span>Possible pay</span>
+              <strong>{fmt$(top.madeSoFar)}</strong>
+              <em>${(top.madeSoFar / top.hours).toFixed(2)}/hr · adds the {fmt$(top.bonus)} bonus if they finish the pay period</em>
+            </div>
+          </>
+        ) : (
+          <div className="pay-tracker-total">
+            <span>Guaranteed / possible</span>
+            <strong>{fmt$(top.tips)} / {fmt$(top.tips + top.bonus)} + base</strong>
+            <em>{data.ratesLoaded ? 'No pay rate matched for this name' : 'Pay rates not uploaded'}</em>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -8146,7 +8157,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     const { period, through, rows } = payTracker;
     lines.push('');
     lines.push(`PAY TRACKER, pay period ${period.start} to ${period.end} (data through ${through || 'n/a'}). Rules: TSTH = (net service + retail incl. color) ÷ hours; TSTH goal = 2 × haircut price (PA $28, NJ/DE $30); bonus/hr = (TSTH − goal) × 25% stylists / 30% managers when above goal, paid on every hour; no other commission; made so far = base (hourly rate × hours, from the Employee Pay Rate Report) + bonus + tips${payTracker.ratesLoaded ? '' : '; pay rates are NOT uploaded yet, so base is unknown'}. Top 25 by TSTH (min ${MIN_HOURS_FOR_TOP} hours):`);
-    rows.filter(r => r.hours >= MIN_HOURS_FOR_TOP).sort((x, y) => y.tsth - x.tsth).slice(0, 25).forEach(r => lines.push(`  ${r.name} @ ${r.store} (${r.state}${r.manager ? ', manager' : ''}): ${r.hours.toFixed(1)} hrs, TSTH $${r.tsth.toFixed(2)} vs goal $${r.goal}, bonus/hr $${r.bonusPerHour.toFixed(2)}, bonus $${Math.round(r.bonus)}, tips $${Math.round(r.tips)}, ${r.basePay != null ? `base $${Math.round(r.basePay)} ($${r.hourly.toFixed(2)}/hr), made so far $${Math.round(r.madeSoFar)}, made per hour all-in $${(r.madeSoFar / r.hours).toFixed(2)}` : `no pay rate matched, made so far excl. base $${Math.round(r.madeSoFar)}`}`));
+    rows.filter(r => r.hours >= MIN_HOURS_FOR_TOP).sort((x, y) => y.tsth - x.tsth).slice(0, 25).forEach(r => lines.push(`  ${r.name} @ ${r.store} (${r.state}${r.manager ? ', manager' : ''}): ${r.hours.toFixed(1)} hrs, TSTH $${r.tsth.toFixed(2)} vs goal $${r.goal}, bonus/hr $${r.bonusPerHour.toFixed(2)}, bonus $${Math.round(r.bonus)}, tips $${Math.round(r.tips)}, ${r.basePay != null ? `base $${Math.round(r.basePay)} ($${r.hourly.toFixed(2)}/hr), made so far $${Math.round(r.madeSoFar)}, guaranteed pay (base + tips) $${Math.round(r.basePay + r.tips)} = $${((r.basePay + r.tips) / r.hours).toFixed(2)}/hr, possible pay (adds the bonus, paid only if they finish the pay period) $${Math.round(r.madeSoFar)} = $${(r.madeSoFar / r.hours).toFixed(2)}/hr` : `no pay rate matched, made so far excl. base $${Math.round(r.madeSoFar)}`}`));
     if (payTracker.noRate?.length) lines.push(`  ${payTracker.noRate.length} people with hours this pay period have no pay rate matched (name differs from the pay rate report; leadership can link it in Setup › Employee Access "Also in sales as"): ${payTracker.noRate.slice(0, 40).join(', ')}`);
   }
 
