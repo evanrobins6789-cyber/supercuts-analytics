@@ -68,7 +68,10 @@ export function buildPeerStats({ history, weeklyHistory, names, codes, start, en
     agg.otherServices += e.otherServices || 0;
   };
   const addPrices = (agg, t) => {
-    Object.values(t.products || {}).forEach(pr => { agg.productQty += pr.qty || 0; agg.productAmount += pr.amount || 0; });
+    agg.productMap ||= {};
+    agg.extraMap ||= {};
+    Object.entries(t.products || {}).forEach(([n, pr]) => { agg.productQty += pr.qty || 0; agg.productAmount += pr.amount || 0; const m = (agg.productMap[n] ||= { qty: 0, amount: 0 }); m.qty += pr.qty || 0; m.amount += pr.amount || 0; });
+    Object.entries(t.extras || {}).forEach(([n, ex]) => { const m = (agg.extraMap[n] ||= { qty: 0, amount: 0 }); m.qty += ex.qty || 0; m.amount += ex.amount || 0; });
     agg.colorTickets += t.colorTicketCount || 0;
     agg.colorAmount += t.color || 0;
   };
@@ -81,6 +84,12 @@ export function buildPeerStats({ history, weeklyHistory, names, codes, start, en
       if (codes.includes(code)) add(stores[code] ||= EMPTY_PEERS(), e);
     });
   });
+  // Keep only the top sellers (by count) so the payload stays small.
+  const top = (map, n = 5) => Object.entries(map || {}).filter(([, v]) => v.qty > 0).sort((a, b) => b[1].qty - a[1].qty || b[1].amount - a[1].amount).slice(0, n)
+    .map(([name, v]) => ({ name, qty: Math.round(v.qty), amount: Math.round(v.amount * 100) / 100, avg: v.qty > 0 ? Math.round((v.amount / v.qty) * 100) / 100 : null }));
+  const finish = agg => { agg.topProducts = top(agg.productMap); agg.topExtras = top(agg.extraMap); delete agg.productMap; delete agg.extraMap; };
+  Object.values(stores).forEach(finish);
+  finish(company);
   return { stores, company };
 }
 

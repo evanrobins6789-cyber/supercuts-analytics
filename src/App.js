@@ -1693,7 +1693,7 @@ function TsthBar({ tsth, goal, dark = true }) {
 }
 
 // "How your pay works" + "Ways to raise your TSTH" (My Numbers).
-function PayExplainer({ pay, coaching, leaderName = null }) {
+function PayExplainer({ pay, coaching, leaderName = null, stores = [], peers = null }) {
   if (!pay) return null;
   const you = leaderName ? `${leaderName}'s` : 'Your';
   const money2 = v => `$${(v || 0).toFixed(2)}`;
@@ -1752,6 +1752,38 @@ function PayExplainer({ pay, coaching, leaderName = null }) {
                 <p className="coach-detail">{c.detail}</p>
               </div>
             ))}
+          </div>
+        </>
+      )}
+
+      {/* What sells best at each store they worked, as a reference for the
+          product and extras ideas above. Store-wide counts, no names. */}
+      {stores.some(st => peers?.stores?.[st.code]?.topProducts?.length || peers?.stores?.[st.code]?.topExtras?.length) && (
+        <>
+          <p className="section-label">🛍️ Best sellers {stores.length > 1 ? 'at your stores' : `at ${stores[0].name}`}</p>
+          <p className="section-hint">What sold the most at the store over these same dates (everyone there combined), with the average price. Good ones to suggest.</p>
+          <div className="coach-list">
+            {stores.map(st => {
+              const ps = peers?.stores?.[st.code];
+              if (!ps) return null;
+              const list = (title, items, empty) => (
+                <div className="best-sellers-col">
+                  <p className="best-sellers-head">{title}</p>
+                  {items?.length ? (
+                    <ol className="best-sellers-list">{items.map(it => <li key={it.name}><span>{it.name}</span><em>{it.qty} sold{it.avg != null ? ` · ~${fmt$(it.avg)}` : ''}</em></li>)}</ol>
+                  ) : <p className="empty-note">{empty}</p>}
+                </div>
+              );
+              return (
+                <div key={st.code} className="coach-card best-sellers-card">
+                  {stores.length > 1 && <p className="coach-title">{st.name}</p>}
+                  <div className="best-sellers-grid">
+                    {list('Top products', ps.topProducts, 'No product sales on file for these dates.')}
+                    {list('Top extra services', ps.topExtras, 'Shows up once Sales-Accrual files from these dates are uploaded again (extras by name started Nov 3, 2026).')}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </>
       )}
@@ -1870,7 +1902,7 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
               {result.stores.length > 1 && <tfoot>{row('All stores', result.total, 'ledger-avg-row')}</tfoot>}
             </table>
           </div>
-          <PayExplainer pay={pay} coaching={coaching} leaderName={isOwner ? leaderTop?.top?.name : null} />
+          <PayExplainer pay={pay} coaching={coaching} leaderName={isOwner ? leaderTop?.top?.name : null} stores={result.stores} peers={isOwner ? leaderTop?.peers : state.data?.peers} />
         </>
       ) : isOwner ? (
         <p className="empty-note">No one has {MIN_HOURS_FOR_TOP}+ hours with sales on file for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}.</p>
@@ -8262,6 +8294,12 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       m.stores.forEach(s => lines.push(line(s.name, s)));
       if (m.stores.length > 1) lines.push(line('All stores combined', m.total));
     } else lines.push('  None found under their name yet. If the POS spells their name differently, leadership can link it in Setup › Employee Access ("Also in sales as").');
+    m.stores.forEach(s => {
+      const ps = m.peers?.stores?.[s.code];
+      const fmtList = items => (items || []).map(it => `${it.name} (${it.qty} sold${it.avg != null ? `, ~$${it.avg.toFixed(2)}` : ''})`).join('; ');
+      if (ps?.topProducts?.length) lines.push(`  Best-selling products at ${s.name} this pay period (everyone there combined): ${fmtList(ps.topProducts)}`);
+      if (ps?.topExtras?.length) lines.push(`  Most popular extra services at ${s.name}: ${fmtList(ps.topExtras)}`);
+    });
   }
 
   // Pay tracker (owner only, src/payTracker.js): this pay period's TSTH,
@@ -11218,7 +11256,7 @@ export default function App() {
     const end = today < period.end ? today : period.end;
     myNumbers(currentUser.token, period.start, end).then(r => {
       if (!r.ok) return;
-      setMyNumbersSummary({ period, end, name: r.name, ...buildMyNumbers({ history: r.history, weeklyHistory: r.weeklyHistory, tips: r.tips, start: period.start, end }) });
+      setMyNumbersSummary({ period, end, name: r.name, peers: r.peers, ...buildMyNumbers({ history: r.history, weeklyHistory: r.weeklyHistory, tips: r.tips, start: period.start, end }) });
     });
   }, [currentUser, presenting]);
 

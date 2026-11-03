@@ -1009,7 +1009,7 @@ export async function parseSalesAccrualFile(file) {
     const invoiceNo = col.invoice !== -1 ? cellText(row[col.invoice]) : '';
 
     const key = `${code}|${isoDate}`;
-    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0, otherServices: 0, colorTicketCount: 0, colorTicketsWithRetail: 0, signatureTicketCount: 0, signatureTicketsWithRetail: 0, employees: {}, products: {} });
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0, otherServices: 0, colorTicketCount: 0, colorTicketsWithRetail: 0, signatureTicketCount: 0, signatureTicketsWithRetail: 0, employees: {}, products: {}, extras: {} });
     const rec = daily.get(key);
     const employeeFor = name => {
       if (!name) return null;
@@ -1048,6 +1048,14 @@ export async function parseSalesAccrualFile(file) {
     // name-heuristic branch below has no equally reliable signal for which
     // rows are genuinely one distinct product vs. a service line that merely
     // looks retail-shaped, so it's deliberately left out of product tracking.
+    // Same, by name, for the extra services (the otherServices bucket: beard
+    // trims, waxes, shampoos, add-ons). Feeds My Numbers' "popular extras".
+    const addExtra = () => {
+      if (!itemName) return;
+      if (!rec.extras[itemName]) rec.extras[itemName] = { qty: 0, amount: 0 };
+      rec.extras[itemName].qty += qty;
+      rec.extras[itemName].amount += amount;
+    };
     const addProduct = () => {
       if (!itemName) return;
       if (!rec.products[itemName]) rec.products[itemName] = { qty: 0, amount: 0 };
@@ -1084,7 +1092,7 @@ export async function parseSalesAccrualFile(file) {
         if (isColor) rec.color += amount;
         if (isHaircut) rec.haircuts += qty;
         if (isSignature) { rec.signatureS += amount; rec.signatureSCount += qty; }
-        if (!isColor && !isHaircut && !isSignature) rec.otherServices += amount;
+        if (!isColor && !isHaircut && !isSignature) { rec.otherServices += amount; addExtra(); }
         addService(stylist, isColor, isHaircut, isSignature);
         markInvoice(invoiceNo, code, isoDate, isColor, isSignature, false);
       }
@@ -1103,7 +1111,7 @@ export async function parseSalesAccrualFile(file) {
         if (isColor) rec.color += amount;
         if (isHaircut) rec.haircuts += qty;
         if (isSignature) { rec.signatureS += amount; rec.signatureSCount += qty; }
-        if (!isColor && !isHaircut && !isSignature) rec.otherServices += amount;
+        if (!isColor && !isHaircut && !isSignature) { rec.otherServices += amount; addExtra(); }
         addService(stylist, isColor, isHaircut, isSignature);
         markInvoice(invoiceNo, code, isoDate, isColor, isSignature, false);
       }
@@ -1155,6 +1163,9 @@ export async function parseSalesAccrualFile(file) {
     })),
     products: Object.fromEntries(
       Object.entries(r.products).map(([name, v]) => [name, { qty: Math.round(v.qty * 100) / 100, amount: Math.round(v.amount * 100) / 100 }])
+    ),
+    extras: Object.fromEntries(
+      Object.entries(r.extras || {}).map(([name, v]) => [name, { qty: Math.round(v.qty * 100) / 100, amount: Math.round(v.amount * 100) / 100 }])
     ),
   }));
   return { records, fileName: file.name };
@@ -1223,12 +1234,13 @@ export function mergeSalesIntoHistory(history, salesRecords) {
   const next = { ...history };
   salesRecords.forEach(r => {
     const key = `${r.code}|${r.date}`;
-    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, signatureSCount: null, bottles: null, otherServices: null, colorTicketCount: null, colorTicketsWithRetail: null, signatureTicketCount: null, signatureTicketsWithRetail: null, employees: {}, products: {} };
+    const existing = next[key] || { code: r.code, date: r.date, service: null, retail: null, color: null, hours: null, giftCards: null, haircuts: null, signatureS: null, signatureSCount: null, bottles: null, otherServices: null, colorTicketCount: null, colorTicketsWithRetail: null, signatureTicketCount: null, signatureTicketsWithRetail: null, employees: {}, products: {}, extras: {} };
     next[key] = {
       ...existing, service: r.service, retail: r.retail, color: r.color, giftCards: r.giftCards, haircuts: r.haircuts, signatureS: r.signatureS, signatureSCount: r.signatureSCount, bottles: r.bottles, otherServices: r.otherServices,
       colorTicketCount: r.colorTicketCount, colorTicketsWithRetail: r.colorTicketsWithRetail,
       signatureTicketCount: r.signatureTicketCount, signatureTicketsWithRetail: r.signatureTicketsWithRetail,
       products: r.products || {},
+      extras: r.extras || {},
       employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales', 'haircuts', 'retail', 'signatureS', 'signatureSCount', 'otherServices']),
     };
   });
