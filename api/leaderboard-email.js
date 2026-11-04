@@ -29,7 +29,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { STORE_CODE_TO_NAME } from '../src/storeDirectory.js';
 import { LEADER_ROSTER_SECTIONS } from '../src/leaderRoster.js';
-import { getRangeTotals, historyTotalsToReportShape, getLastFullWeekRange, sortByMetric, shiftYearISO, addDaysISO } from '../src/metrics.js';
+import { getRangeTotals, historyTotalsToReportShape, getLastFullWeekRange, sortByMetric, sameWeekdayLastYear, addDaysISO } from '../src/metrics.js';
 import { buildGoalProgressEmails } from './_goal-progress-email.js';
 
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || '';
@@ -220,8 +220,9 @@ function eventsSection(events, todayISO) {
     <tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${cards}</table></td></tr>`;
 }
 
-// Last week vs the same dates last year (shiftYearISO, same as the Overview
-// tiles' YOY line). Like-for-like stores only: a store with no data in one
+// Last week (Monday to Sunday) vs the same Monday to Sunday last year
+// (sameWeekdayLastYear, the user's call 2026-11-04). The site's Overview tiles
+// still use calendar dates. Like-for-like stores only: a store with no data in one
 // of the two weeks is left out of both sides, so a new or not-yet-imported
 // store can't inflate a total. Up is green, down is red. `buildYoy` returns
 // null when no store has data in both years, and the section is left out.
@@ -496,7 +497,7 @@ export default async function handler(req, res) {
       return;
     }
     const range = getLastFullWeekRange();
-    const lyRange = { start: shiftYearISO(range.start, -1), end: shiftYearISO(range.end, -1) };
+    const lyRange = { start: sameWeekdayLastYear(range.start), end: sameWeekdayLastYear(range.end) };
     const [{ history, weeklyHistory }, news, events] = await Promise.all([
       loadHistory([range, lyRange]), loadRow('homepage_news'), loadRow('homepage_events'),
     ]);

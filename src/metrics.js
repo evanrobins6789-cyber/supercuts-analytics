@@ -259,6 +259,10 @@ export function rollupRows(rows) {
   };
 }
 
+// The same weekday a year back: exactly 52 weeks, so a Monday-to-Sunday week
+// compares with a Monday-to-Sunday week (Mon Nov 2 2026 -> Mon Nov 3 2025).
+export const sameWeekdayLastYear = iso => addDaysISO(iso, -364);
+
 export function addDaysISO(dateStr, n) {
   const d = new Date(dateStr + 'T00:00:00');
   d.setDate(d.getDate() + n);

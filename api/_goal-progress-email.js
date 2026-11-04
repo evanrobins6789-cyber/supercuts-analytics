@@ -7,7 +7,7 @@
 //   - each DL/AS gets their own group (`byLeader[name]`),
 //   - leadership gets the company totals, then every group (`allHtml`).
 // Each row shows progress toward the group's Monthly Goals (Goals tab) and the
-// same dates a year earlier. The two sides count different stores: goal
+// same weekdays a year earlier (52 weeks back). The two sides count different stores: goal
 // progress counts stores with a goal, and the year comparison counts stores
 // with data in both years, same as the Weekly Recap and Overview.
 //
@@ -15,7 +15,7 @@
 // at import time, because that file imports this one back.
 
 import { LEADER_ROSTER_SECTIONS } from '../src/leaderRoster.js';
-import { getRangeTotals, historyTotalsToReportShape, getLastFullWeekRange, shiftYearISO } from '../src/metrics.js';
+import { getRangeTotals, historyTotalsToReportShape, getLastFullWeekRange, sameWeekdayLastYear } from '../src/metrics.js';
 import { collectiveGoal, goalHeat, goalPace } from '../src/goalProgress.js';
 import { loadHistory, loadChunked, loadRow, BRAND, FONT, escapeHtml, fmt$, fmtInt, sectionBand, yoyChange, storeChangeCell } from './leaderboard-email.js';
 
@@ -130,7 +130,7 @@ function shell({ data, intro, sections, siteUrl }) {
         <tr><td style="background:${BRAND.navy};padding:26px 28px;text-align:center;">
           <div style="font-family:${FONT};font-size:11px;letter-spacing:2px;color:#9FB3CE;text-transform:uppercase;">Supercuts Analytics</div>
           <div style="font-family:${FONT};font-size:23px;font-weight:700;color:#fff;margin-top:4px;">${data.monthName} Goal Progress</div>
-          <div style="font-family:${FONT};font-size:13px;color:#C7D3E3;margin-top:6px;">${dayLabel(data.start)} &ndash; ${dayLabel(data.end)}, ${data.curYear}, compared with the same dates in ${data.lyYear}</div>
+          <div style="font-family:${FONT};font-size:13px;color:#C7D3E3;margin-top:6px;">${dayLabel(data.start)} &ndash; ${dayLabel(data.end)}, ${data.curYear}, compared with the same weekdays last year (${dayLabel(data.lyStart)} &ndash; ${dayLabel(data.lyEnd)}, ${data.lyYear})</div>
           ${button}
         </td></tr>
         <tr><td style="padding:16px 24px 24px;">
@@ -150,19 +150,20 @@ export async function buildGoalProgressEmails(siteUrl) {
   const weekEnd = getLastFullWeekRange().end;
   const month = weekEnd.slice(0, 7);
   const start = `${month}-01`;
-  const lyStartAll = shiftYearISO(start, -1);
+  const lyStartAll = sameWeekdayLastYear(start);
   const [{ history, weeklyHistory }, goals, giftRows, lyGiftRows] = await Promise.all([
-    loadHistory([{ start, end: weekEnd }, { start: lyStartAll, end: shiftYearISO(weekEnd, -1) }]),
+    loadHistory([{ start, end: weekEnd }, { start: lyStartAll, end: sameWeekdayLastYear(weekEnd) }]),
     loadRow('store_goals'),
     loadChunked(`gift_card_history_${month}`),
-    loadChunked(`gift_card_history_${lyStartAll.slice(0, 7)}`),
+    // Two months: 52 weeks back can cross into the next month.
+    Promise.all([lyStartAll, sameWeekdayLastYear(weekEnd)].map(d => loadChunked(`gift_card_history_${d.slice(0, 7)}`))).then(r => r.flat()),
   ]);
   const end = lastDataDay(history, start, weekEnd) || weekEnd;
-  const lyEnd = shiftYearISO(end, -1);
+  const lyEnd = sameWeekdayLastYear(end);
   const shapesFor = (s, e) => Object.fromEntries(Object.entries(getRangeTotals(history, weeklyHistory, s, e)).map(([c, t]) => [c, historyTotalsToReportShape(t)]));
   const merged = rows => Object.assign({}, ...rows.map(r => r.payload));
   const data = {
-    goals, month, start, end,
+    goals, month, start, end, lyStart: lyStartAll, lyEnd,
     monthName: MONTHS[Number(month.slice(5, 7)) - 1],
     curYear: start.slice(0, 4), lyYear: lyStartAll.slice(0, 4),
     pace: goalPace(start, end),
