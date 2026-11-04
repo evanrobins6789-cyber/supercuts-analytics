@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { loadTabFavorites, saveTabFavorites } from './auth';
 
 // Site navigation: one button showing the current tab, plus any tabs this
 // person starred. The button opens every tab at once, sorted under these
@@ -20,8 +21,9 @@ export function groupTabs(tabs) {
   return groups.filter(g => g.tabs.length);
 }
 
-// Favorites are a per-person, per-device convenience: saved in this browser
-// under the login's name, so people sharing a salon computer keep their own.
+// Favorites belong to the person's account (api/_tab-favorites.js), so they
+// follow them between devices. This browser keeps a copy, by login name, only
+// so the buttons show instantly on load; the account's list then wins.
 const favoritesKey = userKey => `tabFavorites:${userKey}`;
 export function loadFavorites(userKey) {
   try {
@@ -33,11 +35,31 @@ function saveFavorites(userKey, favorites) {
   try { window.localStorage.setItem(favoritesKey(userKey), JSON.stringify(favorites)); } catch { /* storage blocked */ }
 }
 
-export function TabMenu({ tabs, tab, onPick, userKey }) {
+export function TabMenu({ tabs, tab, onPick, userKey, token, onSaveError }) {
   const [open, setOpen] = useState(false);
   const [favorites, setFavorites] = useState(() => loadFavorites(userKey));
   // Skip any saved tab this login can't see (or that no longer exists).
   const shownFavorites = favorites.filter(t => tabs.includes(t));
+  // A star tapped before the account's list arrives wins over that list.
+  const changedHere = useRef(false);
+  // Saves go one at a time, so quick taps can't land out of order.
+  const saveQueue = useRef(Promise.resolve());
+
+  useEffect(() => {
+    let cancelled = false;
+    loadTabFavorites(token).then(res => {
+      if (cancelled || changedHere.current || !res.ok) return;
+      if (res.tabs) {
+        setFavorites(res.tabs);
+        saveFavorites(userKey, res.tabs);
+      } else {
+        // Nothing on the account yet: carry over what this browser has.
+        const here = loadFavorites(userKey);
+        if (here.length) saveTabFavorites(token, here);
+      }
+    }).catch(() => { /* the browser's copy stays on screen */ });
+    return () => { cancelled = true; };
+  }, [token, userKey]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -56,8 +78,13 @@ export function TabMenu({ tabs, tab, onPick, userKey }) {
 
   const toggleFavorite = t => {
     const next = favorites.includes(t) ? favorites.filter(f => f !== t) : [...favorites, t];
+    changedHere.current = true;
     setFavorites(next);
     saveFavorites(userKey, next);
+    saveQueue.current = saveQueue.current
+      .then(() => saveTabFavorites(token, next))
+      .then(res => { if (!res.ok) onSaveError?.(res.error); })
+      .catch(() => onSaveError?.('Could not reach the server'));
   };
 
   return (

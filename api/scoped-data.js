@@ -15,6 +15,7 @@ import { handleFinalizeGoals } from './_finalize-goals.js';
 import { handleSalonCheckEmail, cleanSalonCheckPatch } from './_salon-check.js';
 import { handleMyNumbers } from './_my-numbers.js';
 import { handlePayRates } from './_pay-rates.js';
+import { handleTabFavorites } from './_tab-favorites.js';
 
 const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases', 'focus_stylists', 'salon_checks', 'employee_name_aliases']);
 const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_', 'gift_card_history_', 'tips_history_'];
@@ -175,6 +176,11 @@ export default async function handler(req, res) {
   // "My Numbers": the caller's own lines only, any role (api/_my-numbers.js).
   if (req.body?.action === 'my-numbers') {
     await handleMyNumbers(req, res);
+    return;
+  }
+  // Starred tabs: the caller's own, any role (api/_tab-favorites.js).
+  if (req.body?.action === 'tab-favorites-load' || req.body?.action === 'tab-favorites-save') {
+    await handleTabFavorites(req, res);
     return;
   }
   // Shear Check "email the DL" rides here too (api/_salon-check.js).

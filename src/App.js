@@ -1502,6 +1502,7 @@ function CoreValuesWidget({ bitmojiImg, bitmojiActive }) {
 // roles: which roles see the tip (omit = everyone).
 const LEADERS = ['owner', 'district_leader', 'manager'];
 const SITE_TIPS = [
+  { icon: '⭐', title: 'Favorite tabs', body: 'Open the ☰ menu and tap the ☆ next to any tab to keep it at the top of your screen. Your favorites are saved to your login, so they follow you to any phone or computer.' },
   { icon: '📊', title: 'My Numbers', body: 'Open the My Numbers tab to see your own hours, sales, TSTH and tips, split by each store you worked at, plus your base pay, bonus and what you’re making per hour. Only you can see your numbers.' },
   { icon: '🎯', title: 'How the bonus works', body: 'TSTH is your total sales (services, color and product) divided by your hours. Beat the goal (2 × the haircut price: $56 in PA, $60 in NJ/DE) and you earn 25% of everything above it on every hour you work.' },
   { icon: '📈', title: 'Raise your TSTH', body: 'My Numbers compares you with the other stylists at your store and tells you exactly what would help, like "sell 1 more product (~$25)", and how much more bonus that would earn you.' },
@@ -11458,7 +11459,7 @@ export default function App() {
         </div>
       </header>
 
-      <TabMenu key={currentUser.name} userKey={currentUser.name} tabs={visibleTabs} tab={tab} onPick={setTab} />
+      <TabMenu key={currentUser.token} userKey={currentUser.name} token={currentUser.token} tabs={visibleTabs} tab={tab} onPick={setTab} onSaveError={msg => showToast(`Couldn't save your favorite tabs (${msg})`, 'error')} />
       <main className="app-main" key={presenting ? 'main-presenting' : 'main-live'}>
         {needsReport && <div className="empty-state"><p className="empty-title">No data yet</p><p>Go to the Setup tab and either upload this week's Stylist Report, or run a Sales-Accrual/Attendance historical import.</p></div>}
         {tab === 'Homepage' && (

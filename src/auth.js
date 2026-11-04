@@ -180,6 +180,16 @@ export function myNumbers(token, start, end) {
   return postJson('/api/scoped-data', { action: 'my-numbers', token, start, end });
 }
 
+// Starred tabs, saved to the logged-in person's account (api/_tab-favorites.js).
+// Saving isn't a presenter-mode write: it's a personal menu preference, not
+// company data, so it uses postJson.
+export function loadTabFavorites(token) {
+  return postJson('/api/scoped-data', { action: 'tab-favorites-load', token });
+}
+export function saveTabFavorites(token, tabs) {
+  return postJson('/api/scoped-data', { action: 'tab-favorites-save', token, tabs });
+}
+
 // Owner-only hourly pay rates (api/_pay-rates.js, locked pay_rates table).
 export function payRatesLoad(token) {
   return postJson('/api/scoped-data', { action: 'pay-rates-load', token });
