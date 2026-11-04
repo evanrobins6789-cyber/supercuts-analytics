@@ -42,6 +42,29 @@ export function goalPace(start, end, today = new Date().toISOString().slice(0, 1
   return Math.min(1, daysDone / totalDays);
 }
 
+// Gift card goals that run longer than a month (the user, 2026-11-04: the
+// holiday goal runs through the end of December). It's saved once, under
+// `goalMonth` on the Goals tab. For any dates touching the period, that one
+// goal applies, and progress counts every sale since the period started.
+export const GIFT_CARD_GOAL_PERIODS = [
+  { goalMonth: '2026-11', start: '2026-11-01', end: '2026-12-31', label: 'Nov 1 – Dec 31' },
+];
+export const giftCardPeriodFor = (start, end) => GIFT_CARD_GOAL_PERIODS.find(p => start <= p.end && end >= p.start) || null;
+export function giftCardPeriodGoal(goals, code, period) {
+  const v = goals?.[code]?.[`giftCardGoal:${period.goalMonth}`];
+  return v == null || v === '' ? null : Number(v);
+}
+// Last day of the period that sales can count through so far.
+export const periodThrough = (period, today = new Date().toISOString().slice(0, 10)) => (today < period.end ? today : period.end);
+// Like goalPace, but across the whole period, so November isn't judged as if
+// the goal were due on Nov 30.
+export function periodPace(period, through, today = new Date().toISOString().slice(0, 10)) {
+  const totalDays = dayDiff(period.start, period.end) + 1;
+  const daysDone = through < today ? dayDiff(period.start, through) + 1 : dayDiff(period.start, today);
+  if (daysDone <= 0) return null;
+  return Math.min(1, daysDone / totalDays);
+}
+
 // Heat color + wording. With a pace: green at or ahead of it, gold within 10%
 // of it, red further behind. Without one: green at the goal, otherwise gold.
 export function goalHeat(actual, goal, pace) {

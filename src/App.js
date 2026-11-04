@@ -33,7 +33,7 @@ import { buildMyNumbers, pickOwnRecords, normalizePersonName, buildPeerStats } f
 import { buildPayBreakdown, buildCoaching } from './payCoach';
 import { TabMenu } from './TabMenu';
 import { CollectiveGoalBars } from './CollectiveGoalBars';
-import { collectiveGoal, goalPace } from './goalProgress';
+import { collectiveGoal, goalPace, GIFT_CARD_GOAL_PERIODS, giftCardPeriodFor, giftCardPeriodGoal, periodThrough, periodPace } from './goalProgress';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
 import supercutsWordmarkBlue from './assets/branding/supercuts-wordmark-blue.png';
 import gcRobinBadge from './assets/branding/gc-robin-badge.png';
@@ -1504,7 +1504,7 @@ function CoreValuesWidget({ bitmojiImg, bitmojiActive }) {
 // roles: which roles see the tip (omit = everyone).
 const LEADERS = ['owner', 'district_leader', 'manager'];
 const SITE_TIPS = [
-  { icon: '🔥', title: 'Collective goal bars', body: 'The bars at the top of Retail, Color Sales, Signature Service and Gift Cards add up every store with a goal. The line on each bar marks where the company should be by now, based on the days finished this month.', roles: ['owner'] },
+  { icon: '🔥', title: 'Collective goal bars', body: 'The bars at the top of Retail, Color Sales, Signature Service and Gift Cards add up every store with a goal. The line on each bar marks where the company should be by now, based on the days finished so far. The Gift Card goal runs Nov 1 – Dec 31.', roles: ['owner'] },
   { icon: '⭐', title: 'Favorite tabs', body: 'Open the ☰ menu and tap the ☆ next to any tab to keep it at the top of your screen. Your favorites are saved to your login, so they follow you to any phone or computer.' },
   { icon: '📊', title: 'My Numbers', body: 'Open the My Numbers tab to see your own hours, sales, TSTH and tips, split by each store you worked at, plus your base pay, bonus and what you’re making per hour. Only you can see your numbers.' },
   { icon: '🎯', title: 'How the bonus works', body: 'TSTH is your total sales (services, color and product) divided by your hours. Beat the goal (2 × the haircut price: $56 in PA, $60 in NJ/DE) and you earn 25% of everything above it on every hour you work.' },
@@ -5258,24 +5258,30 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
   // Monthly Gift Cards $ goal (Goals tab, owner only), the full month (goalForRange).
   // DLs see the goal and progress too (read-only; only the owner can set it
   // on the Goals tab).
-  const getGoal = code => goalForRange(goals, code, 'giftCardGoal', effectiveRange.start, effectiveRange.end).value;
+  // A goal with its own dates (goalProgress.js) replaces the monthly one, and
+  // its progress counts every sale since it started, whatever dates are picked.
+  const goalPeriod = giftCardPeriodFor(effectiveRange.start, effectiveRange.end);
+  const getGoal = code => (goalPeriod ? giftCardPeriodGoal(goals, code, goalPeriod) : goalForRange(goals, code, 'giftCardGoal', effectiveRange.start, effectiveRange.end).value);
+  const goalThrough = goalPeriod ? periodThrough(goalPeriod) : null;
 
   // Every store with a sale in range OR a goal set, so a store with a goal
   // and no sales yet still shows up (as behind goal) instead of vanishing.
   const rows = useMemo(() => {
     const totals = getGiftCardRangeTotals(giftCardHistory, effectiveRange.start, effectiveRange.end);
+    const goalTotals = goalPeriod ? getGiftCardRangeTotals(giftCardHistory, goalPeriod.start, goalThrough) : totals;
     const codes = new Set([...Object.keys(totals), ...Object.keys(goals || {}).filter(c => getGoal(c) != null)]);
     return [...codes].map(code => {
       const t = totals[code] || { giftCards: 0, giftCardCount: 0, sellers: {} };
       const goal = getGoal(code);
+      const goalSales = goalTotals[code]?.giftCards || 0;
       return {
         code, name: STORE_CODE_TO_NAME[code] || `Store ${code}`,
-        giftCards: t.giftCards, giftCardCount: t.giftCardCount,
+        giftCards: t.giftCards, giftCardCount: t.giftCardCount, goalSales,
         sellers: sortByMetric(Object.values(t.sellers), 'giftCards', 'desc'),
-        goal, vsGoal: goal != null ? t.giftCards - goal : null,
+        goal, vsGoal: goal != null ? goalSales - goal : null,
       };
     });
-  }, [giftCardHistory, goals, effectiveRange.start, effectiveRange.end]);
+  }, [giftCardHistory, goals, effectiveRange.start, effectiveRange.end, goalPeriod, goalThrough]);
 
   const filterByQuery = (list, includeLeader) => {
     const q = query.trim().toLowerCase();
@@ -5332,7 +5338,7 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
         <td>{fmt$(sumOf(list, 'giftCards'))}</td>
         <td>{fmtInt(sumOf(list, 'giftCardCount'))}</td>
         <td>{goalTotal > 0 ? fmt$(goalTotal) : '—'}</td>
-        {diffCell(goalTotal > 0 ? sumOf(list, 'giftCards') - goalTotal : null)}
+        {diffCell(goalTotal > 0 ? sumOf(list, 'goalSales') - goalTotal : null)}
       </tr>
     );
   };
@@ -5354,13 +5360,18 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
   }
 
   const collectiveBars = isOwner ? [
-    { label: 'Gift Cards', fmt: fmt$, ...collectiveGoal(rows.map(r => r.code), code => rows.find(r => r.code === code)?.goal, code => rows.find(r => r.code === code)?.giftCards) },
+    {
+      label: goalPeriod ? `Gift Cards (${goalPeriod.label})` : 'Gift Cards', fmt: fmt$,
+      ...(goalPeriod ? { pace: periodPace(goalPeriod, goalThrough) } : {}),
+      ...collectiveGoal(rows.map(r => r.code), code => rows.find(r => r.code === code)?.goal, code => rows.find(r => r.code === code)?.goalSales),
+    },
   ] : [];
 
   return (
     <div className="tab-content">
       <CollectiveGoalBars bars={collectiveBars} start={effectiveRange.start} end={effectiveRange.end} />
       <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
+      {goalPeriod && <p className="section-hint">The Gift Card goal runs {goalPeriod.label}. Goal, vs Goal and Progress count every sale since {fmtDateLong(goalPeriod.start)}, even when the dates above are narrower. Gift Card $ and # Sold follow the dates above.</p>}
       {usingDefaultRange && <p className="section-hint">Showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}). Gift card sales only, not redemptions. {isOwner ? 'Only you and the DLs (their own stores) can see this tab.' : 'Your stores only.'}</p>}
       <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
 
@@ -5397,7 +5408,7 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
                     <div className="dl-stat"><span className="dl-stat-label">Gift Card $</span><span className="dl-stat-value">{fmt$(amount)}</span></div>
                     <div className="dl-stat"><span className="dl-stat-label"># Sold</span><span className="dl-stat-value">{fmtInt(sumOf(g.stores, 'giftCardCount'))}</span></div>
                     <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{goalTotal > 0 ? fmt$(goalTotal) : '—'}</span></div>
-                    <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={amount} milestone={goalTotal} /></div>
+                    <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={sumOf(g.stores, 'goalSales')} milestone={goalTotal} /></div>
                   </div>
                 </button>
                 {isLeaderOpen && (
@@ -5665,6 +5676,7 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
           </button>
         </div>
       )}
+      {canSeeGiftCards && <p className="section-hint">{GIFT_CARD_GOAL_PERIODS.map(p => `The ${fmtMonthLong(p.goalMonth)} Gift Cards $ goal covers ${p.label}, so leave the later month blank.`).join(' ')}</p>}
       <p className="section-hint">
         Goals for {fmtMonthLong(month)}, next to the same month last year ({fmtMonthLong(lyMonth)}) and last month ({fmtMonthLong(prevMonth)}{prevIsPartial ? ', so far' : ''}). {isOwner ? 'Sales goals are set by leadership: the buttons above round to the nearest $500, or type any store by hand.' : 'Sales goals are set by leadership.'} Milestone stays the same every month until leadership changes it (same as Setup › Milestone Goals). Each Sales goal shows what it works out to per day and per week. Both use the {openDaysInRange(`${month}-01`, `${month}-${String(new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()).padStart(2, '0')}`)} days stores are open in {fmtMonthLong(month)}{closedDaysInMonth(month).length ? ` (closed ${closedDaysInMonth(month).map(h => h.name).join(' and ')})` : ''}. Daily Avg is sales ÷ days the store was open. The weekly goal is the daily goal × 7, and Weekly Avg is sales ÷ open weeks (open days ÷ 7) the same way. The % goals are whole percents (type 15 for 15%). Goals save when you click out of the box.
       </p>
@@ -8123,16 +8135,17 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     const { start, end } = getCurrentMonthRange();
     const totals = getRangeTotals(history, weeklyHistory, start, end);
     const shapes = Object.fromEntries(Object.entries(totals).map(([code, t]) => [code, historyTotalsToReportShape(t)]));
-    const gifts = getGiftCardRangeTotals(giftCardHistory || {}, start, end);
+    const giftPeriod = giftCardPeriodFor(start, end);
+    const gifts = getGiftCardRangeTotals(giftCardHistory || {}, giftPeriod ? giftPeriod.start : start, end);
     const pace = goalPace(start, end);
     const progress = [
       ['Retail $', 'retailGoal', c => shapes[c]?.retail, fmt$],
       ['Bottles', 'bottleGoal', c => shapes[c]?.bottles, fmtInt],
       ['Color $', 'colorGoal', c => shapes[c]?.colorSales, fmt$],
       ['Signature Services (count)', 'signatureSGoal', c => shapes[c]?.signatureSCount, fmtInt],
-      ['Gift Cards $', 'giftCardGoal', c => gifts[c]?.giftCards, fmt$],
+      [giftPeriod ? `Gift Cards $ (this goal runs ${giftPeriod.label}, so this counts sales since ${giftPeriod.start}; pace mark ${Math.round((periodPace(giftPeriod, end) || 0) * 100)}% of that period)` : 'Gift Cards $', 'giftCardGoal', c => gifts[c]?.giftCards, fmt$],
     ].map(([label, field, actualOf, f]) => {
-      const c = collectiveGoal(Object.keys(goals), code => goalForRange(goals, code, field, start, end).value, actualOf);
+      const c = collectiveGoal(Object.keys(goals), code => (giftPeriod && field === 'giftCardGoal' ? giftCardPeriodGoal(goals, code, giftPeriod) : goalForRange(goals, code, field, start, end).value), actualOf);
       return c.goal > 0 ? `${label} ${f(c.actual)} of ${f(c.goal)} (${Math.round((c.actual / c.goal) * 100)}%, ${c.stores} stores with a goal)` : null;
     }).filter(Boolean);
     if (progress.length) {
@@ -8424,7 +8437,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       Object.entries(totals).sort((a, b) => b[1].giftCards - a[1].giftCards).forEach(([code, t]) => {
         const goal = goals?.[code]?.[monthlyGoalKey('giftCardGoal', month)];
         const sellers = Object.values(t.sellers).sort((a, b) => b.giftCards - a.giftCards).map(e => `${e.name} ${fmt$(e.giftCards)} (${e.giftCardCount})`).join(', ');
-        lines.push(`  ${STORE_CODE_TO_NAME[code] || `Store ${code}`}: ${fmt$(t.giftCards)}, ${t.giftCardCount} sold${goal != null ? `, goal ${fmt$(goal)}` : ''}${sellers ? ` — sold by ${sellers}` : ''}`);
+        lines.push(`  ${STORE_CODE_TO_NAME[code] || `Store ${code}`}: ${fmt$(t.giftCards)}, ${t.giftCardCount} sold${goal != null ? `, goal ${fmt$(goal)}${GIFT_CARD_GOAL_PERIODS.find(p => p.goalMonth === month) ? ` (covers ${GIFT_CARD_GOAL_PERIODS.find(p => p.goalMonth === month).label}, not just this month)` : ''}` : ''}${sellers ? ` — sold by ${sellers}` : ''}`);
       });
     });
   }

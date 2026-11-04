@@ -16,7 +16,7 @@
 
 import { LEADER_ROSTER_SECTIONS } from '../src/leaderRoster.js';
 import { getRangeTotals, historyTotalsToReportShape, getLastFullWeekRange, sameWeekdayLastYear } from '../src/metrics.js';
-import { collectiveGoal, goalHeat, goalPace } from '../src/goalProgress.js';
+import { collectiveGoal, goalHeat, goalPace, giftCardPeriodFor, giftCardPeriodGoal, periodPace } from '../src/goalProgress.js';
 import { loadHistory, loadChunked, loadRow, BRAND, FONT, escapeHtml, fmt$, fmtInt, sectionBand, yoyChange, storeChangeCell } from './leaderboard-email.js';
 
 const goalRows = () => [
@@ -53,15 +53,17 @@ function giftByStore(records, start, end) {
 
 // One metric for one group of stores.
 export function groupRow(row, codes, data) {
-  const { goals, month, shapes, lyShapes, gift, lyGift } = data;
-  const goalOf = c => Number(goals?.[c]?.[`${row.field}:${month}`]);
-  const actualOf = c => (row.gift ? gift[c] : shapes[c]?.[row.key]);
+  const { goals, month, shapes, lyShapes, gift, lyGift, giftPeriod, giftPeriodSales } = data;
+  const periodGoal = row.gift && giftPeriod;
+  const goalOf = c => (periodGoal ? giftCardPeriodGoal(goals, c, giftPeriod) : Number(goals?.[c]?.[`${row.field}:${month}`]));
+  const actualOf = c => (periodGoal ? giftPeriodSales[c] : row.gift ? gift[c] : shapes[c]?.[row.key]);
   const progress = collectiveGoal(codes, goalOf, actualOf);
   let cur = null;
   let ly = null;
   if (row.gift) {
-    // Gift card history starts Aug 2026. A store with no sale has no record
-    // that day, so the only "no data" case is the whole year being missing.
+    // Gift card history has gaps (Nov 2025 to Jan 2026, then Aug 2026 on). A
+    // store with no sale has no record that day, so the only "no data" case
+    // is those dates being missing altogether.
     if (Object.keys(lyGift).length) {
       cur = codes.reduce((s, c) => s + (gift[c] || 0), 0);
       ly = codes.reduce((s, c) => s + (lyGift[c] || 0), 0);
@@ -75,7 +77,7 @@ export function groupRow(row, codes, data) {
       ly = lySum;
     }
   }
-  return { ...row, progress, cur, ly, storeCount: codes.length };
+  return { ...row, progress, cur, ly, storeCount: codes.length, periodLabel: periodGoal ? giftPeriod.label : null };
 }
 
 function goalCell(r, pace, td) {
@@ -84,10 +86,11 @@ function goalCell(r, pace, td) {
   const pct = (actual / goal) * 100;
   const heat = goalHeat(actual, goal, pace);
   const color = heatColor(heat.status);
+  const period = r.periodLabel ? ` &middot; goal runs ${r.periodLabel.replace('–', '&ndash;')}` : '';
   const fill = Math.max(1, Math.min(100, Math.round(pct)));
   const bar = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:3px 0;"><tr><td width="${fill}%" height="8" bgcolor="${color}" style="background:${color};font-size:0;line-height:0;">&nbsp;</td>${fill < 100 ? `<td height="8" bgcolor="${BRAND.line}" style="background:${BRAND.line};font-size:0;line-height:0;">&nbsp;</td>` : ''}</tr></table>`;
   const partial = stores < r.storeCount ? ` &middot; ${stores} of ${r.storeCount} stores` : '';
-  return `<td style="${td}"><span style="font-weight:700;color:${BRAND.navy};">${Math.round(pct)}%</span>${heat.text ? ` <span style="font-size:10.5px;font-weight:700;color:${heat.status === 'onpace' ? '#8A6D12' : color};">${heat.text}</span>` : ''}${bar}<span style="font-size:10.5px;color:${BRAND.inkSoft};">${r.fmt(actual)} of ${r.fmt(goal)}${partial}</span></td>`;
+  return `<td style="${td}"><span style="font-weight:700;color:${BRAND.navy};">${Math.round(pct)}%</span>${heat.text ? ` <span style="font-size:10.5px;font-weight:700;color:${heat.status === 'onpace' ? '#8A6D12' : color};">${heat.text}</span>` : ''}${bar}<span style="font-size:10.5px;color:${BRAND.inkSoft};">${r.fmt(actual)} of ${r.fmt(goal)}${partial}${period}</span></td>`;
 }
 
 function groupTable(title, codes, data) {
@@ -100,7 +103,7 @@ function groupTable(title, codes, data) {
     const change = r.cur == null
       ? `<td align="center" style="${td}font-size:10.5px;color:${BRAND.inkSoft};">No ${data.lyYear} data</td>`
       : storeChangeCell(yoyChange({ fmt: r.fmt }, r.cur, r.ly), td);
-    return `<tr style="background:${i % 2 ? BRAND.paper : BRAND.card};"><td style="${td}font-weight:700;color:${BRAND.navy};">${r.label}</td>${goalCell(r, data.pace, td)}${num(r.cur, BRAND.navy)}${num(r.ly, BRAND.inkSoft)}${change}</tr>`;
+    return `<tr style="background:${i % 2 ? BRAND.paper : BRAND.card};"><td style="${td}font-weight:700;color:${BRAND.navy};">${r.label}</td>${goalCell(r, r.periodLabel ? data.giftPace : data.pace, td)}${num(r.cur, BRAND.navy)}${num(r.ly, BRAND.inkSoft)}${change}</tr>`;
   }).join('');
   return `
     <tr><td style="padding:12px 0 0;">
@@ -151,10 +154,12 @@ export async function buildGoalProgressEmails(siteUrl) {
   const month = weekEnd.slice(0, 7);
   const start = `${month}-01`;
   const lyStartAll = sameWeekdayLastYear(start);
+  const giftPeriod = giftCardPeriodFor(start, weekEnd);
   const [{ history, weeklyHistory }, goals, giftRows, lyGiftRows] = await Promise.all([
     loadHistory([{ start, end: weekEnd }, { start: lyStartAll, end: sameWeekdayLastYear(weekEnd) }]),
     loadRow('store_goals'),
-    loadChunked(`gift_card_history_${month}`),
+    // A goal with its own dates can start in an earlier month than this one.
+    Promise.all([...new Set([month, ...(giftPeriod ? [giftPeriod.start.slice(0, 7)] : [])])].map(m => loadChunked(`gift_card_history_${m}`))).then(r => r.flat()),
     // Two months: 52 weeks back can cross into the next month.
     Promise.all([lyStartAll, sameWeekdayLastYear(weekEnd)].map(d => loadChunked(`gift_card_history_${d.slice(0, 7)}`))).then(r => r.flat()),
   ]);
@@ -168,6 +173,9 @@ export async function buildGoalProgressEmails(siteUrl) {
     curYear: start.slice(0, 4), lyYear: lyStartAll.slice(0, 4),
     pace: goalPace(start, end),
     shapes: shapesFor(start, end), lyShapes: shapesFor(lyStartAll, lyEnd),
+    giftPeriod,
+    giftPeriodSales: giftPeriod ? giftByStore(merged(giftRows), giftPeriod.start, end) : {},
+    giftPace: giftPeriod ? periodPace(giftPeriod, end) : null,
     gift: giftByStore(merged(giftRows), start, end), lyGift: giftByStore(merged(lyGiftRows), lyStartAll, lyEnd),
   };
 

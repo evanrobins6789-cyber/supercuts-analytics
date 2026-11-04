@@ -37,7 +37,8 @@ function CollectiveBar({ label, actual, goal, stores, fmt, pace }) {
   );
 }
 
-// bars: [{ label, actual, goal, stores, fmt }]. Bars with no goal are left out.
+// bars: [{ label, actual, goal, stores, fmt, pace? }]. A bar's own pace is for a
+// goal with its own dates. Bars with no goal are left out.
 export function CollectiveGoalBars({ bars, start, end }) {
   const shown = bars.filter(b => b.goal > 0);
   if (!shown.length) return null;
@@ -46,7 +47,7 @@ export function CollectiveGoalBars({ bars, start, end }) {
     <section className="collective-goal" aria-label="All stores progress toward the collective goal">
       <p className="collective-goal-title">🔥 All stores: collective goal</p>
       <div className="collective-goal-grid">
-        {shown.map(b => <CollectiveBar key={b.label} {...b} pace={pace} />)}
+        {shown.map(b => <CollectiveBar key={b.label} {...b} pace={b.pace !== undefined ? b.pace : pace} />)}
       </div>
     </section>
   );
