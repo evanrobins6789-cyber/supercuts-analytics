@@ -442,6 +442,22 @@
 .thermo-goal-tick { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--navy); }
 .thermo-milestone-label { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: var(--ink-soft); white-space: nowrap; }
 .thermo-pct { font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; white-space: nowrap; min-width: 32px; text-align: right; }
+/* Leadership's all-stores heat bars (src/CollectiveGoalBars.js). */
+.collective-goal { background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 14px 18px; }
+.collective-goal-title { margin: 0 0 10px; color: var(--navy); font-family: 'Barlow Condensed', sans-serif; font-size: 18px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.collective-goal-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px 28px; }
+.collective-bar-head, .collective-bar-foot { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.collective-bar-label { color: var(--navy); font-size: 14px; font-weight: 600; }
+.collective-bar-pct { color: var(--navy); font-family: 'IBM Plex Mono', monospace; font-size: 22px; font-weight: 700; }
+.collective-bar-track { height: 22px; margin: 5px 0 6px; border-radius: 11px; overflow: visible; }
+.collective-bar-track .thermo-fill { border-radius: 11px; }
+.collective-bar-track .thermo-goal-tick { top: -4px; bottom: -4px; width: 3px; }
+.collective-bar-foot { color: var(--ink-soft); font-size: 12.5px; }
+.collective-bar-foot strong { color: var(--navy); }
+.collective-bar-note { margin: 4px 0 0; color: var(--ink-soft); font-size: 11.5px; }
+.collective-heat--behind { color: var(--red-deep); }
+.collective-heat--onpace { color: #8A6D12; }
+.collective-heat--hit { color: var(--green); }
 
 /* ─── Empty / loading ────────────────────────────────────────────────── */
 .empty-note { font-size: 12.5px; color: var(--ink-soft); }

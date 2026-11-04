@@ -32,6 +32,7 @@ import { buildPayRows, topTsthRow, payPeriodFor, MIN_HOURS_FOR_TOP, buildRateLoo
 import { buildMyNumbers, pickOwnRecords, normalizePersonName, buildPeerStats } from './myNumbers';
 import { buildPayBreakdown, buildCoaching } from './payCoach';
 import { TabMenu } from './TabMenu';
+import { CollectiveGoalBars, collectiveGoal, goalPace } from './CollectiveGoalBars';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
 import supercutsWordmarkBlue from './assets/branding/supercuts-wordmark-blue.png';
 import gcRobinBadge from './assets/branding/gc-robin-badge.png';
@@ -1502,6 +1503,7 @@ function CoreValuesWidget({ bitmojiImg, bitmojiActive }) {
 // roles: which roles see the tip (omit = everyone).
 const LEADERS = ['owner', 'district_leader', 'manager'];
 const SITE_TIPS = [
+  { icon: '🔥', title: 'Collective goal bars', body: 'The bars at the top of Retail, Color Sales, Signature Service and Gift Cards add up every store with a goal. The line on each bar marks where the company should be by now, based on the days finished this month.', roles: ['owner'] },
   { icon: '⭐', title: 'Favorite tabs', body: 'Open the ☰ menu and tap the ☆ next to any tab to keep it at the top of your screen. Your favorites are saved to your login, so they follow you to any phone or computer.' },
   { icon: '📊', title: 'My Numbers', body: 'Open the My Numbers tab to see your own hours, sales, TSTH and tips, split by each store you worked at, plus your base pay, bonus and what you’re making per hour. Only you can see your numbers.' },
   { icon: '🎯', title: 'How the bonus works', body: 'TSTH is your total sales (services, color and product) divided by your hours. Beat the goal (2 × the haircut price: $56 in PA, $60 in NJ/DE) and you earn 25% of everything above it on every hour you work.' },
@@ -4317,8 +4319,18 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   const companyGoalActual = actualWithGoal(rows, goalKey, getGoal);
   const prevMonthColSum = arr => arr.reduce((s, st) => s + (st.prevMonthColor || 0), 0);
 
+  // Leadership's all-stores bars. Every store with a goal counts, even one
+  // with no sales in these dates (those aren't in `rows`).
+  const goalCodes = [...Object.keys(goals || {}), ...rows.map(r => r.code)];
+  const rowByCode = Object.fromEntries(rows.map(r => [r.code, r]));
+  const collectiveBars = isOwner && showGoals ? [
+    { label: goalMetricLabel || title, fmt: goalFormatter, ...collectiveGoal(goalCodes, getGoal, c => rowByCode[c]?.[goalKey]) },
+    ...(extraGoal ? [{ label: extraGoal.label, fmt: extraGoal.fmt || fmt$, ...collectiveGoal(goalCodes, getExtraGoal, c => rowByCode[c]?.[extraGoal.metricKey]) }] : []),
+  ] : [];
+
   return (
     <div className="tab-content">
+      <CollectiveGoalBars bars={collectiveBars} start={goalStart} end={goalEnd} />
       {onDateRangeChange && <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />}
       {usingDefaultRange && <p className="section-hint">No current weekly report on file — showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}) from Sales-Accrual/Attendance imports. Pick a different range above if you want something else.</p>}
       {goalNote && <p className="section-hint">{goalNote}</p>}
@@ -5340,8 +5352,13 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
     );
   }
 
+  const collectiveBars = isOwner ? [
+    { label: 'Gift Cards', fmt: fmt$, ...collectiveGoal(rows.map(r => r.code), code => rows.find(r => r.code === code)?.goal, code => rows.find(r => r.code === code)?.giftCards) },
+  ] : [];
+
   return (
     <div className="tab-content">
+      <CollectiveGoalBars bars={collectiveBars} start={effectiveRange.start} end={effectiveRange.end} />
       <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
       {usingDefaultRange && <p className="section-hint">Showing month-to-date ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}). Gift card sales only, not redemptions. {isOwner ? 'Only you and the DLs (their own stores) can see this tab.' : 'Your stores only.'}</p>}
       <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
@@ -8098,6 +8115,28 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     currentAllEmployees.forEach(e => {
       lines.push(`${e.name} @ ${e.store}: Sales $${Math.round(e.sales)}, Color $${Math.round(e.colorSales)}, Retail $${Math.round(e.retail)}, Cuts ${Math.round(e.haircuts || 0)}, Hours ${Math.round(e.totalHours)}, CPH ${e.cph != null ? e.cph.toFixed(2) : 'n/a'}`);
     });
+  }
+
+  // The collective heat bars at the top of the Retail/Color/SS/Gift Cards tabs.
+  if (goals && Object.keys(goals).length) {
+    const { start, end } = getCurrentMonthRange();
+    const totals = getRangeTotals(history, weeklyHistory, start, end);
+    const shapes = Object.fromEntries(Object.entries(totals).map(([code, t]) => [code, historyTotalsToReportShape(t)]));
+    const gifts = getGiftCardRangeTotals(giftCardHistory || {}, start, end);
+    const pace = goalPace(start, end);
+    const progress = [
+      ['Retail $', 'retailGoal', c => shapes[c]?.retail, fmt$],
+      ['Bottles', 'bottleGoal', c => shapes[c]?.bottles, fmtInt],
+      ['Color $', 'colorGoal', c => shapes[c]?.colorSales, fmt$],
+      ['Signature Services (count)', 'signatureSGoal', c => shapes[c]?.signatureSCount, fmtInt],
+      ['Gift Cards $', 'giftCardGoal', c => gifts[c]?.giftCards, fmt$],
+    ].map(([label, field, actualOf, f]) => {
+      const c = collectiveGoal(Object.keys(goals), code => goalForRange(goals, code, field, start, end).value, actualOf);
+      return c.goal > 0 ? `${label} ${f(c.actual)} of ${f(c.goal)} (${Math.round((c.actual / c.goal) * 100)}%, ${c.stores} stores with a goal)` : null;
+    }).filter(Boolean);
+    if (progress.length) {
+      lines.push(`COLLECTIVE GOAL PROGRESS, month-to-date ${start} through ${end}, the stores this login can see added together, counting only stores with a goal${pace != null ? `; pace mark ${Math.round(pace * 100)}% of the month (days finished ÷ days in the month): at or ahead of it is green, within 10% of it is gold, further behind is red` : ''}: ${progress.join('; ')}.`, '');
+    }
   }
 
   // Monthly Goals (Goals tab), stored as `<field>:YYYY-MM` on store_goals.
