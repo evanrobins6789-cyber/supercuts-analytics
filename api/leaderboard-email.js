@@ -30,6 +30,7 @@ import { createClient } from '@supabase/supabase-js';
 import { STORE_CODE_TO_NAME } from '../src/storeDirectory.js';
 import { LEADER_ROSTER_SECTIONS } from '../src/leaderRoster.js';
 import { getRangeTotals, historyTotalsToReportShape, getLastFullWeekRange, sortByMetric, shiftYearISO, addDaysISO } from '../src/metrics.js';
+import { buildGoalProgressEmails } from './_goal-progress-email.js';
 
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY || '';
@@ -462,6 +463,8 @@ export { buildEmail, buildYoy, yoySection };
 // Shared with api/_finalize-goals.js (the DL monthly goals email) so it
 // loads history the same way and looks like this email.
 export { loadHistory, loadRow, BRAND, FONT, escapeHtml, fmt$, fmtInt, sectionBand };
+// Shared with api/_goal-progress-email.js, the separate Monday Goal Progress email.
+export { loadChunked, yoyChange, storeChangeCell };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -485,6 +488,13 @@ export default async function handler(req, res) {
   }
 
   try {
+    // Same host logic as below: this endpoint is only reached on the live site.
+    if (req.body?.report === 'goal-progress') {
+      const scheme = (req.headers['x-forwarded-proto'] || 'https').split(',')[0];
+      const emails = await buildGoalProgressEmails(req.headers.host ? `${scheme}://${req.headers.host}` : null);
+      res.status(200).json({ ok: true, ...emails });
+      return;
+    }
     const range = getLastFullWeekRange();
     const lyRange = { start: shiftYearISO(range.start, -1), end: shiftYearISO(range.end, -1) };
     const [{ history, weeklyHistory }, news, events] = await Promise.all([

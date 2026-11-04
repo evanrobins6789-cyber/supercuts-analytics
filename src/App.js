@@ -32,7 +32,8 @@ import { buildPayRows, topTsthRow, payPeriodFor, MIN_HOURS_FOR_TOP, buildRateLoo
 import { buildMyNumbers, pickOwnRecords, normalizePersonName, buildPeerStats } from './myNumbers';
 import { buildPayBreakdown, buildCoaching } from './payCoach';
 import { TabMenu } from './TabMenu';
-import { CollectiveGoalBars, collectiveGoal, goalPace } from './CollectiveGoalBars';
+import { CollectiveGoalBars } from './CollectiveGoalBars';
+import { collectiveGoal, goalPace } from './goalProgress';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
 import supercutsWordmarkBlue from './assets/branding/supercuts-wordmark-blue.png';
 import gcRobinBadge from './assets/branding/gc-robin-badge.png';
@@ -8942,6 +8943,43 @@ function sendWeeklyLeaderboard() {
     MailApp.sendEmail(Session.getActiveUser().getEmail(), 'Weekly Leaderboard: some recipients were skipped',
       skipped.join('\\n') + '\\n\\nLeader names it knows: ' + Object.keys(data.byLeader || {}).join(', '));
   }
+  sendGoalProgress();
+}
+
+// The separate Goal Progress email, sent right after the Weekly Recap. Each
+// leader gets their own group, 'ALL' gets the company totals and every group,
+// and '' addresses don't get it.
+function fetchGoalProgress_() {
+  const response = UrlFetchApp.fetch(ENDPOINT_URL, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ secret: SHARED_SECRET, report: 'goal-progress' }),
+    muteHttpExceptions: true,
+  });
+  const status = response.getResponseCode();
+  if (status < 200 || status >= 300) {
+    MailApp.sendEmail(Session.getActiveUser().getEmail(), 'Goal Progress email failed', 'HTTP ' + status + ': ' + response.getContentText());
+    return null;
+  }
+  return JSON.parse(response.getContentText());
+}
+function sendGoalProgress() {
+  const data = fetchGoalProgress_();
+  if (!data || Array.isArray(RECIPIENTS)) return;
+  Object.entries(RECIPIENTS).forEach(([email, who]) => {
+    const html = !who ? null : who === 'ALL' ? data.allHtml : data.byLeader[who];
+    if (html) GmailApp.sendEmail(email, data.subject, 'This email requires HTML support to view.', { htmlBody: html });
+  });
+}
+// Run this by hand to preview: sends the leadership copy and one DL's copy to
+// you only.
+function sendGoalProgressTest() {
+  const data = fetchGoalProgress_();
+  if (!data) return;
+  const me = Session.getActiveUser().getEmail();
+  const first = Object.keys(data.byLeader)[0];
+  GmailApp.sendEmail(me, '[TEST] ' + data.subject, 'This email requires HTML support to view.', { htmlBody: data.allHtml });
+  GmailApp.sendEmail(me, '[TEST, ' + first + '] ' + data.subject, 'This email requires HTML support to view.', { htmlBody: data.byLeader[first] });
 }
 
 // Goals tab → "Finalize & email DLs". The site posts one ready-made email
@@ -9153,6 +9191,7 @@ function notifyFailure(labelName, fileName, detail) {
         <div><p className="step-title">Add the matching secret in Vercel</p><p className="step-body">Vercel project → Settings → Environment Variables → add <code>LEADERBOARD_EMAIL_SECRET</code> set to the exact same value you pasted into the script → redeploy.</p></div>
       </div>
       <p className="step-body">If the fetch fails (wrong/missing secret, deployment not redeployed yet, etc.), you get a failure email at your own address instead of a broken send — no email goes out to the full recipient list in that case.</p>
+      <p className="step-body"><strong>Goal Progress email:</strong> the same run also sends a separate email of month-to-date goal progress with last year's same dates. DLs get their own group, <code>'ALL'</code> addresses get the company totals and every DL group, and <code>''</code> addresses don't get it. Run <code>sendGoalProgressTest</code> to preview it in your own inbox only.</p>
     </div>
   );
 }
