@@ -2,8 +2,8 @@
 // deployment at 12; reached as POST /api/leaderboard-email { report: 'goal-progress' }).
 //
 // The Monday "Goal Progress" email, a separate email sent by the same Apps
-// Script run as the Weekly Recap. Month to date through last Sunday, or the
-// last day with sales uploaded if that's earlier:
+// Script run as the Weekly Recap. Month to date through yesterday (Sunday on
+// a Monday send), or the last day with sales uploaded if that's earlier:
 //   - each DL/AS gets their own group (`byLeader[name]`),
 //   - leadership gets the company totals, then every group (`allHtml`).
 // Each row shows progress toward the group's Monthly Goals (Goals tab) and the
@@ -15,7 +15,7 @@
 // at import time, because that file imports this one back.
 
 import { LEADER_ROSTER_SECTIONS } from '../src/leaderRoster.js';
-import { getRangeTotals, historyTotalsToReportShape, getLastFullWeekRange, sameWeekdayLastYear } from '../src/metrics.js';
+import { getRangeTotals, historyTotalsToReportShape, addDaysISO, sameWeekdayLastYear } from '../src/metrics.js';
 import { collectiveGoal, goalHeat, goalPace, giftCardPeriodFor, giftCardPeriodGoal, periodPace } from '../src/goalProgress.js';
 import { loadHistory, loadChunked, loadRow, BRAND, FONT, escapeHtml, fmt$, fmtInt, sectionBand, yoyChange, storeChangeCell } from './leaderboard-email.js';
 
@@ -150,20 +150,20 @@ function shell({ data, intro, sections, siteUrl }) {
 }
 
 export async function buildGoalProgressEmails(siteUrl) {
-  const weekEnd = getLastFullWeekRange().end;
-  const month = weekEnd.slice(0, 7);
+  const lastFullDay = addDaysISO(new Date().toISOString().slice(0, 10), -1);
+  const month = lastFullDay.slice(0, 7);
   const start = `${month}-01`;
   const lyStartAll = sameWeekdayLastYear(start);
-  const giftPeriod = giftCardPeriodFor(start, weekEnd);
+  const giftPeriod = giftCardPeriodFor(start, lastFullDay);
   const [{ history, weeklyHistory }, goals, giftRows, lyGiftRows] = await Promise.all([
-    loadHistory([{ start, end: weekEnd }, { start: lyStartAll, end: sameWeekdayLastYear(weekEnd) }]),
+    loadHistory([{ start, end: lastFullDay }, { start: lyStartAll, end: sameWeekdayLastYear(lastFullDay) }]),
     loadRow('store_goals'),
     // A goal with its own dates can start in an earlier month than this one.
     Promise.all([...new Set([month, ...(giftPeriod ? [giftPeriod.start.slice(0, 7)] : [])])].map(m => loadChunked(`gift_card_history_${m}`))).then(r => r.flat()),
     // Two months: 52 weeks back can cross into the next month.
-    Promise.all([lyStartAll, sameWeekdayLastYear(weekEnd)].map(d => loadChunked(`gift_card_history_${d.slice(0, 7)}`))).then(r => r.flat()),
+    Promise.all([lyStartAll, sameWeekdayLastYear(lastFullDay)].map(d => loadChunked(`gift_card_history_${d.slice(0, 7)}`))).then(r => r.flat()),
   ]);
-  const end = lastDataDay(history, start, weekEnd) || weekEnd;
+  const end = lastDataDay(history, start, lastFullDay) || lastFullDay;
   const lyEnd = sameWeekdayLastYear(end);
   const shapesFor = (s, e) => Object.fromEntries(Object.entries(getRangeTotals(history, weeklyHistory, s, e)).map(([c, t]) => [c, historyTotalsToReportShape(t)]));
   const merged = rows => Object.assign({}, ...rows.map(r => r.payload));
