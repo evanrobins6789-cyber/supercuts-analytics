@@ -1520,7 +1520,7 @@ const SITE_TIPS = [
   { icon: '✂️', title: 'Shear Check', body: 'Use Shear Check during a salon visit: pick the store, answer each item Yes / No / N/A, add notes, and email it to that store’s DL. Scores are tracked over time.', roles: ['owner', 'district_leader'] },
   { icon: '⭐', title: 'Focus Stylist', body: 'Tap FOCUS next to a stylist on the Overview or DL tab to pick them for the month, then track their TSTH and cuts-per-hour goals on the Focus Stylist tab. They get a FOCUS STYLIST tag next to their name.', roles: ['owner', 'district_leader'] },
   { icon: '🎁', title: 'Gift Cards', body: 'The Gift Cards tab shows gift card sales and progress toward the gift card goal for your stores. Tap a store to see who sold them.', roles: ['owner', 'district_leader'] },
-  { icon: '👀', title: 'Pick who’s on the pay card', body: 'On the Homepage pay card or the My Numbers tab, use the "Showing" menu to look at any employee. It starts on the top-TSTH person.', roles: ['owner'] },
+  { icon: '👀', title: 'Pick who’s on the pay card', body: 'On the Homepage pay card or the My Numbers tab, use the "Showing" menu to look at any employee. It lists everyone by TSTH, highest first: green is bonusing, red is not. It starts on the top-TSTH person.', roles: ['owner'] },
   { icon: '📥', title: 'Keep the numbers fresh', body: 'Setup › Historical Import takes Sales-Accrual, Attendance, Tips and Pay Rates files. Re-uploading the same dates is safe; those days are replaced, not doubled.', roles: ['owner'] },
   { icon: '🔗', title: 'Different POS names', body: 'If someone’s name in the POS differs from their login ("Sammy" vs "Samantha"), type the POS spelling in Setup › Employee Access › "Also in sales as" so their numbers and pay rate line up.', roles: ['owner'] },
   { icon: '✉️', title: 'Finalize goals', body: 'On the Goals tab, "Finalize & email DLs" sends each DL their Sales goals and leadership a roll-up of everyone. Send yourself a test first.', roles: ['owner'] },
@@ -1984,16 +1984,65 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
 // Pay-period earnings tracker (Homepage hero). Leadership preview for now:
 // shows the highest-TSTH employee this pay period (see src/payTracker.js for
 // the pay rules). Each employee will later see their own.
-// Leadership picker: anyone with hours in the dates shown, or the top-TSTH
-// person (the default).
+// Leadership picker: anyone with hours in the dates shown, highest TSTH first,
+// or the top-TSTH person (the default). A custom list rather than a <select>,
+// because phones and Macs won't color part of an option. Green = above their
+// own TSTH goal (bonusing), red = not; the goal depends on the store's state.
 function EmployeePicker({ rows, value, onChange, dark = false }) {
-  const options = [...(rows || [])].filter(r => r.hours > 0).sort((a, b) => a.name.localeCompare(b.name));
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+  const triggerRef = useRef(null);
+  const panelRef = useRef(null);
+  const options = [...(rows || [])].filter(r => r.hours > 0).sort((a, b) => b.tsth - a.tsth);
   const isFocus = useIsFocusStylist();
+  const selected = value ? options.find(r => r.name === value) : null;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    panelRef.current?.querySelector('.employee-picker-option--on')?.focus();
+    const close = e => { if (!wrapRef.current?.contains(e.target)) setOpen(false); };
+    const onKey = e => { if (e.key === 'Escape') { setOpen(false); triggerRef.current?.focus(); } };
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('pointerdown', close); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  const pick = name => { setOpen(false); onChange(name); triggerRef.current?.focus(); };
+  const moveFocus = e => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const items = [...panelRef.current.querySelectorAll('button')];
+    const next = items.indexOf(document.activeElement) + (e.key === 'ArrowDown' ? 1 : -1);
+    items[Math.max(0, Math.min(items.length - 1, next))]?.focus();
+  };
+
   return (
-    <select className={`employee-picker ${dark ? 'employee-picker--dark' : ''}`} value={value || ''} onChange={e => onChange(e.target.value || null)} aria-label="Show employee">
-      <option value="">⭐ Top TSTH (auto)</option>
-      {options.map(r => <option key={r.name + r.code} value={r.name}>{r.name}{isFocus(r.name) ? ' ★ Focus' : ''} · {r.store}</option>)}
-    </select>
+    <div className="employee-picker-wrap" ref={wrapRef}>
+      <button type="button" ref={triggerRef} className={`employee-picker ${dark ? 'employee-picker--dark' : ''}`} aria-label="Show employee" aria-expanded={open} onClick={() => setOpen(o => !o)}>
+        <span className="employee-picker-current">{selected ? `${selected.name}${isFocus(selected.name) ? ' ★ Focus' : ''} · ${selected.store}` : '⭐ Top TSTH (auto)'}</span>
+        <span aria-hidden="true">▾</span>
+      </button>
+      {open && (
+        <div className={`employee-picker-panel ${dark ? 'employee-picker-panel--dark' : ''}`} ref={panelRef} role="group" aria-label="Employees, highest TSTH first" onKeyDown={moveFocus}>
+          <p className="employee-picker-hint">Highest TSTH first. <b className="employee-picker-tsth--bonus">Green</b> is bonusing, <b className="employee-picker-tsth--none">red</b> is not.</p>
+          <button type="button" className={`employee-picker-option ${selected ? '' : 'employee-picker-option--on'}`} onClick={() => pick(null)}>
+            <span className="employee-picker-name">⭐ Top TSTH (auto)</span>
+          </button>
+          {options.map(r => {
+            const bonusing = r.bonusPerHour > 0;
+            return (
+              <button type="button" key={r.name + r.code} className={`employee-picker-option ${selected?.name === r.name ? 'employee-picker-option--on' : ''}`} onClick={() => pick(r.name)}>
+                <span className="employee-picker-who">
+                  <span className="employee-picker-name">{r.name}{isFocus(r.name) ? ' ★ Focus' : ''}</span>
+                  <span className="employee-picker-store">{r.store}</span>
+                </span>
+                <span className={`employee-picker-tsth ${bonusing ? 'employee-picker-tsth--bonus' : 'employee-picker-tsth--none'}`} aria-label={`TSTH $${r.tsth.toFixed(2)}, ${bonusing ? 'bonusing' : 'not bonusing'}`}>${r.tsth.toFixed(2)}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

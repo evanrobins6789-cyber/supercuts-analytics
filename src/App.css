@@ -1486,11 +1486,29 @@
 .best-sellers-list li em { font-style: normal; color: #666; margin-left: 6px; font-size: 12px; }
 
 /* ─── Leadership employee picker (pay card + My Numbers) ─────────────────── */
-.employee-picker { font-size: 12.5px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: #fff; color: var(--navy); max-width: 100%; }
+.employee-picker-wrap { position: relative; max-width: 100%; }
+.employee-picker { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: #fff; color: var(--navy); max-width: 100%; cursor: pointer; font-family: inherit; }
 .employee-picker--dark { background: rgba(255,255,255,0.12); color: #fff; border-color: rgba(255,255,255,0.3); }
-.employee-picker--dark option { color: #13294B; }
+.employee-picker-current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.employee-picker-panel { position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; width: 300px; max-height: 340px; overflow-y: auto; background: #fff; color: var(--navy); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(20,42,74,0.22); padding: 4px; }
+.employee-picker-panel--dark { left: auto; right: 0; }
+.employee-picker-hint { font-size: 11.5px; color: var(--ink-soft); padding: 5px 8px 6px; margin: 0; }
+.employee-picker-option { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 40px; padding: 5px 8px; border: 0; border-radius: 7px; background: none; color: var(--navy); text-align: left; cursor: pointer; font-family: inherit; }
+.employee-picker-option:hover, .employee-picker-option:focus-visible { background: var(--paper); }
+.employee-picker-option--on { background: #E8EEF6; }
+.employee-picker-who { display: flex; flex-direction: column; min-width: 0; }
+.employee-picker-name { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.employee-picker-store { font-size: 11.5px; color: var(--ink-soft); overflow-wrap: anywhere; }
+.employee-picker-tsth { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.employee-picker-tsth--bonus { color: var(--green); }
+.employee-picker-tsth--none { color: var(--red); }
+/* Phones: span the card or row, so the list can't run off the screen. */
+@media (max-width: 760px) {
+  .employee-picker-wrap { position: static; }
+  .employee-picker-panel, .employee-picker-panel--dark { left: 0; right: 0; width: auto; top: auto; margin-top: 4px; }
+}
 .pay-tracker-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-.my-numbers-picker-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.my-numbers-picker-row { position: relative; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
 .my-numbers-picker-label { font-weight: 700; color: var(--navy); font-size: 13px; }
 
 /* ─── Tips & Tricks widget (Homepage, under Core Values) ─────────────────── */

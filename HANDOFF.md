@@ -1,6 +1,6 @@
 # Handoff — Supercuts Analytics
 
-## Where things stand (updated 2026-11-03, end of session)
+## Where things stand (updated 2026-11-04)
 
 **The user's 2026-10-28 list:**
 1. ~~Bonus + tips as an hourly figure~~ **Built 2026-11-03.** The rules came from the user (see the TSTH/bonus entries below). Tips come from the new Tips report upload. Base pay comes from the Employee Pay Rate Report (locked `pay_rates` table).
@@ -20,7 +20,13 @@
 
 **Pushing from Claude Code in this repo**: commit with `git commit -m '…'` (single quotes), then a bare `git push origin main` as its own command. Pay/payroll-related pushes are sometimes still denied by auto mode's classifier. Then give the user `! git push origin main` to paste. Never chain the push with `cd`/pipes, or it won't match the allow rule.
 
-**Gift card goal runs Nov 1 – Dec 31 (2026-11-04, latest).** User: "the gift card sales goal goes until the end of december." One goal is saved, `giftCardGoal:2026-11` ($500,998, 42 stores), with nothing under December. The Nov 1 start is my assumption (the goal is saved under November); the user gave only the end date.
+**Employee picker sorted by TSTH, colored by bonus (2026-11-04, latest).** User: the pay card dropdown should run largest to smallest TSTH, with the number green if bonusing and red if not.
+- **`EmployeePicker` (`src/App.js`) is now a custom list, not a `<select>`**, because a native option can't color just the number (and phones/Macs ignore option colors). Styles are `.employee-picker*`. Keyboard: Esc, up/down arrows, Tab. Outside click closes.
+- Green = `bonusPerHour > 0`, so against that person's own goal ($56 PA, $60 NJ/DE). A TSTH exactly on goal is red, since bonus pays only above goal. The same $58 can be green in PA and red in NJ, so the colors don't split cleanly at one spot in the list.
+- The list includes everyone with hours, so someone with a short shift can sit above the auto Top TSTH person (who needs `MIN_HOURS_FOR_TOP` = 8 hours). The picker is shared, so My Numbers changed too.
+- **Verified**: build clean; temp test on the real component (order, colors, pick, auto, focus tag, Esc, outside click, arrows, a pick not in the list); mock screenshots with the real CSS at 1280px and 390px. Not checked in the logged-in app or on a real phone.
+
+**Gift card goal runs Nov 1 – Dec 31 (2026-11-04).** User: "the gift card sales goal goes until the end of december." One goal is saved, `giftCardGoal:2026-11` ($500,998, 42 stores), with nothing under December. The Nov 1 start is my assumption (the goal is saved under November); the user gave only the end date.
 - **`GIFT_CARD_GOAL_PERIODS` in `src/goalProgress.js`** holds the dates; add a row for the next long goal. `giftCardPeriodFor`, `giftCardPeriodGoal`, `periodThrough`, `periodPace`.
 - **Gift Cards tab**: for any dates touching the period, Goal is the November entry, and vs Goal, DL card Progress, totals and the heat bar use `goalSales` (all sales since Nov 1 through today). Gift Card $ and # Sold still follow the picked dates, and a hint says so. So in December the store row's $ and vs Goal won't subtract to each other on a narrow range, on purpose.
 - **Also**: the Monday email (gift row uses the period's goal, sales and pace; other rows stay monthly), Tilly, a Goals tab note to leave the December gift goal blank, the tip.
