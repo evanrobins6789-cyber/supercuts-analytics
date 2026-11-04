@@ -11458,7 +11458,7 @@ export default function App() {
         </div>
       </header>
 
-      <TabMenu tabs={visibleTabs} tab={tab} onPick={setTab} />
+      <TabMenu key={currentUser.name} userKey={currentUser.name} tabs={visibleTabs} tab={tab} onPick={setTab} />
       <main className="app-main" key={presenting ? 'main-presenting' : 'main-live'}>
         {needsReport && <div className="empty-state"><p className="empty-title">No data yet</p><p>Go to the Setup tab and either upload this week's Stylist Report, or run a Sales-Accrual/Attendance historical import.</p></div>}
         {tab === 'Homepage' && (
