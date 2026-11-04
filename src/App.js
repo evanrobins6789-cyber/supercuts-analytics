@@ -31,6 +31,7 @@ import { BITMOJI_POOLS } from './bitmoji';
 import { buildPayRows, topTsthRow, payPeriodFor, MIN_HOURS_FOR_TOP, buildRateLookup } from './payTracker';
 import { buildMyNumbers, pickOwnRecords, normalizePersonName, buildPeerStats } from './myNumbers';
 import { buildPayBreakdown, buildCoaching } from './payCoach';
+import { TabMenu } from './TabMenu';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
 import supercutsWordmarkBlue from './assets/branding/supercuts-wordmark-blue.png';
 import gcRobinBadge from './assets/branding/gc-robin-badge.png';
@@ -11457,11 +11458,7 @@ export default function App() {
         </div>
       </header>
 
-      <nav className="tab-nav">
-        {visibleTabs.map(t => (
-          <button key={t} className={`tab-btn ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>{t}</button>
-        ))}
-      </nav>
+      <TabMenu tabs={visibleTabs} tab={tab} onPick={setTab} />
       <main className="app-main" key={presenting ? 'main-presenting' : 'main-live'}>
         {needsReport && <div className="empty-state"><p className="empty-title">No data yet</p><p>Go to the Setup tab and either upload this week's Stylist Report, or run a Sales-Accrual/Attendance historical import.</p></div>}
         {tab === 'Homepage' && (
