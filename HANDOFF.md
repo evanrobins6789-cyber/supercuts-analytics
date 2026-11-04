@@ -9,7 +9,7 @@
 4. **Open shifts and filling them.** Not built. Still to ask: who posts, who can claim, whether a claim needs approval, and whether it ties into Attendance.
 5. ~~"My Ticket / My Money" tab~~ **Built as the "My Numbers" tab** (every role, own numbers only; leadership sees the top-TSTH person or anyone they pick). Group rank (item 2) and open shifts (item 4) aren't in it yet.
 
-**Waiting on the user, as of the end of 2026-11-03 (all code is pushed, through `f8bcb8e`):**
+**Waiting on the user, carried over from the end of 2026-11-03 (all code is pushed, through `4e56fd9` on 2026-11-04):**
 - **Re-upload this pay period's Sales-Accrual files** (at least `Sales-Accrual(475).xlsx`) via Setup → Historical Import, so the "Top extra services" list in My Numbers fills in (extras by name only exist in uploads from 2026-11-03 on).
 - **Upload `Tips(1).xlsx`** under Historical Import → Tips Files, if not done yet. Expect 1,639 tips, $13,415.80, Nov 1–2.
 - **Type "Sammy Allen"** in Samantha Allen's (Emp 1978) "Also in sales as" box in Setup → Employee Access. Then link the other ~27 people whose POS name doesn't match the pay rate report (listed under Pay Rates in Historical Import).
@@ -25,6 +25,8 @@
 - Green = `bonusPerHour > 0`, so against that person's own goal ($56 PA, $60 NJ/DE). A TSTH exactly on goal is red, since bonus pays only above goal. The same $58 can be green in PA and red in NJ, so the colors don't split cleanly at one spot in the list.
 - The list includes everyone with hours, so someone with a short shift can sit above the auto Top TSTH person (who needs `MIN_HOURS_FOR_TOP` = 8 hours). The picker is shared, so My Numbers changed too.
 - **Verified**: build clean; temp test on the real component (order, colors, pick, auto, focus tag, Esc, outside click, arrows, a pick not in the list); mock screenshots with the real CSS at 1280px and 390px. Not checked in the logged-in app or on a real phone.
+- **Open question for the user**: offered moving people under 8 hours to the bottom of the list, or leaving them out. No answer yet.
+- **Tooling on this machine**: Python isn't installed, so use Node for scripted edits. `@testing-library/react` isn't installed either, so temp component tests use `react-dom/client` with `act`.
 
 **Gift card goal runs Nov 1 – Dec 31 (2026-11-04).** User: "the gift card sales goal goes until the end of december." One goal is saved, `giftCardGoal:2026-11` ($500,998, 42 stores), with nothing under December. The Nov 1 start is my assumption (the goal is saved under November); the user gave only the end date.
 - **`GIFT_CARD_GOAL_PERIODS` in `src/goalProgress.js`** holds the dates; add a row for the next long goal. `giftCardPeriodFor`, `giftCardPeriodGoal`, `periodThrough`, `periodPace`.
