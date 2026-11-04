@@ -20,6 +20,13 @@
 
 **Pushing from Claude Code in this repo**: commit with `git commit -m '…'` (single quotes), then a bare `git push origin main` as its own command. Pay/payroll-related pushes are sometimes still denied by auto mode's classifier. Then give the user `! git push origin main` to paste. Never chain the push with `cd`/pipes, or it won't match the allow rule.
 
+**FOCUS STYLIST tag + FOCUS button on the DL tab (2026-11-04).** User: tag this month's focus stylists like MANAGER, visible wherever their name shows, and let leadership pick from the DL tab too.
+- **Tag**: `FocusTag` / `useIsFocusStylist` (`src/App.js`, gold `.focus-tag`), fed by `FocusNamesContext` around the whole app (`currentFocusNames(d.focusStylists)`, so Presenter Mode gets fake names). It matches by **person name via `normalizePersonName`, not store**, so it follows them to other stores; a same-named person elsewhere would also get it. Current month only.
+- **Where**: every `EmployeeTable` (all tabs), New Hires, Gift Card sellers, Reviews Pin List, DL managers table, Homepage shoutout, pay tracker card, Loss Prevention tables, HSA roster, Tillie's Nest points, login counts. Plain-text spots use a star: Top 10 chart labels (` ★`) and the employee picker (` ★ Focus`). Not in PDF exports, Setup → Employee Access, or the Focus Stylist tab itself. **A new screen that shows a person's name should add `<FocusTag name={...} />`.**
+- **Picker**: `useFocusPicker` is shared by Overview and `DLTab` (spread `focusProps(store)` on `EmployeeTable`, render `focusModal`). Owner/DL only (`canFocus`). Retail/Color/Signature tables show the tag but have no button (not asked for).
+- **Server, a visibility change**: managers and employees used to get `{}` for `focus_stylists`. They now get `focusTagsOnly` (`api/scoped-data.js`): name + month for their own `store_codes`, no goals or addedBy. "Wherever you see their name" drove this; confirm the user is happy with stylists being able to see it. Tilly gets names only for those logins.
+- **Verified**: build clean; `focusTagsOnly` tested (no goals, no other stores). Not checked in a browser or with a manager/DL login.
+
 **Correction (user, 2026-11-03): TSTH = (net service + retail) ÷ hours, so it includes color and retail.** The 2026-09-02 and 2026-09-10 entries below that say "service revenue only, excluding retail and color" are wrong. The app's `tsth` already uses total sales incl. retail.
 
 **Leadership employee picker + Tips & Tricks widget (2026-11-03, latest).**

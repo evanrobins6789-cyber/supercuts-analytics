@@ -97,6 +97,20 @@ function filterWeeklyHistory(payload, allowed) {
   return out;
 }
 
+// Focus stylists for managers/employees: their own stores' names and months
+// only, for the FOCUS STYLIST tag. Goals and who added them stay with
+// leadership.
+function focusTagsOnly(payload, allowed) {
+  const out = {};
+  Object.entries(filterCodeKeyedObject(payload, allowed) || {}).forEach(([code, entries]) => {
+    out[code] = {};
+    Object.entries(entries || {}).forEach(([k, e]) => {
+      if (e) out[code][k] = { name: e.name, month: e.month || String(e.addedAt || '').slice(0, 7) };
+    });
+  });
+  return out;
+}
+
 function filterPayload(key, payload, employee) {
   if (employee.role === 'owner') return payload;
   const allowed = new Set(employee.store_codes || []);
@@ -115,7 +129,7 @@ function filterPayload(key, payload, employee) {
     return out;
   }
   if (key === 'store_managers' || key === 'milestone_goals') return filterCodeKeyedObject(payload, allowed);
-  if (key === 'focus_stylists') return employee.role === 'district_leader' ? filterCodeKeyedObject(payload, allowed) : {};
+  if (key === 'focus_stylists') return employee.role === 'district_leader' ? filterCodeKeyedObject(payload, allowed) : focusTagsOnly(payload, allowed);
   if (key === 'salon_checks') return employee.role === 'district_leader' ? filterCodeKeyedObject(payload, allowed) : {};
   // Gift card sales: a DL gets their own stores' days (Gift Cards tab, the
   // user's call 2026-11-03); managers/employees get nothing. Same

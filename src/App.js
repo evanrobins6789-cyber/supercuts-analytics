@@ -823,7 +823,9 @@ function TopTenChart({ title, emoji, rows, metricKey, formatter, color, rankWind
   // District Leader or multi-store manager who also shows up as a stylist
   // at more than one of their own stores), so the store name is appended
   // whenever it's there to tell those rows apart.
-  const rowLabel = r => (r.store ? `${r.name} (${r.store})` : `${r.name}${r.isMine ? ' (you)' : ''}`);
+  // Chart labels are canvas text, so a focus stylist gets a star, not the tag.
+  const isFocus = useIsFocusStylist();
+  const rowLabel = r => (r.store ? `${r.name}${isFocus(r.name) ? ' ★' : ''} (${r.store})` : `${r.name}${r.isMine ? ' (you)' : ''}`);
 
   const data = useMemo(() => ({
     labels: ranked.map((r, i) => `${medal(i)}${rowLabel(r)}`),
@@ -1511,7 +1513,7 @@ const SITE_TIPS = [
   { icon: '🥅', title: 'Setting goals', body: 'On the Goals tab, set your stores’ monthly Retail $, Color $, Bottles, Signature Service and % goals. Sales and Milestone goals are set by leadership. Goals save when you click out of the box.', roles: LEADERS },
   { icon: '🗓️', title: 'Goals by the month', body: 'Every tab compares sales with the full monthly goal, so a week into the month "vs Goal" shows progress toward the whole month.', roles: LEADERS },
   { icon: '✂️', title: 'Shear Check', body: 'Use Shear Check during a salon visit: pick the store, answer each item Yes / No / N/A, add notes, and email it to that store’s DL. Scores are tracked over time.', roles: ['owner', 'district_leader'] },
-  { icon: '⭐', title: 'Focus Stylist', body: 'Pick a stylist to coach each month on the Focus Stylist tab and track their TSTH and cuts-per-hour goals.', roles: ['owner', 'district_leader'] },
+  { icon: '⭐', title: 'Focus Stylist', body: 'Tap FOCUS next to a stylist on the Overview or DL tab to pick them for the month, then track their TSTH and cuts-per-hour goals on the Focus Stylist tab. They get a FOCUS STYLIST tag next to their name.', roles: ['owner', 'district_leader'] },
   { icon: '🎁', title: 'Gift Cards', body: 'The Gift Cards tab shows gift card sales and progress toward the gift card goal for your stores. Tap a store to see who sold them.', roles: ['owner', 'district_leader'] },
   { icon: '👀', title: 'Pick who’s on the pay card', body: 'On the Homepage pay card or the My Numbers tab, use the "Showing" menu to look at any employee. It starts on the top-TSTH person.', roles: ['owner'] },
   { icon: '📥', title: 'Keep the numbers fresh', body: 'Setup › Historical Import takes Sales-Accrual, Attendance, Tips and Pay Rates files. Re-uploading the same dates is safe; those days are replaced, not doubled.', roles: ['owner'] },
@@ -1602,7 +1604,7 @@ function ReviewSpotlightWidget({ report, fallbackEmployeesByStore, reviews, bitm
           <p className="homepage-spotlight-stars">⭐⭐⭐⭐⭐</p>
           <div className="homepage-spotlight-quote-wrap"><p className="homepage-spotlight-quote">“{current.message}”</p></div>
           <p className="homepage-spotlight-mention">
-            💇 Shoutout to <strong>{current.mention}</strong>!
+            💇 Shoutout to <strong>{current.mention}</strong><FocusTag name={current.mention} />!
           </p>
           <p className="homepage-spotlight-meta">
             {current.userName || 'A happy guest'} · {STORE_CODE_TO_NAME[current.code] || current.code}
@@ -1981,10 +1983,11 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
 // person (the default).
 function EmployeePicker({ rows, value, onChange, dark = false }) {
   const options = [...(rows || [])].filter(r => r.hours > 0).sort((a, b) => a.name.localeCompare(b.name));
+  const isFocus = useIsFocusStylist();
   return (
     <select className={`employee-picker ${dark ? 'employee-picker--dark' : ''}`} value={value || ''} onChange={e => onChange(e.target.value || null)} aria-label="Show employee">
       <option value="">⭐ Top TSTH (auto)</option>
-      {options.map(r => <option key={r.name + r.code} value={r.name}>{r.name} · {r.store}</option>)}
+      {options.map(r => <option key={r.name + r.code} value={r.name}>{r.name}{isFocus(r.name) ? ' ★ Focus' : ''} · {r.store}</option>)}
     </select>
   );
 }
@@ -2005,7 +2008,7 @@ function PayTrackerCard({ data, onPick = null, pickedName = null }) {
   return (
     <div className="pay-tracker">
       <div className="pay-tracker-head"><p className="pay-tracker-eyebrow">Pay period {periodLabel} · {data.picked ? 'Selected employee' : 'Top TSTH'}{through ? ` · through ${fmtPayDate(through)}` : ''}</p>{picker}</div>
-      <p className="pay-tracker-name">{top.name} <span>{top.store} ({top.state}) · {top.manager ? 'Manager, 30%' : 'Stylist, 25%'}</span></p>
+      <p className="pay-tracker-name">{top.name}<FocusTag name={top.name} /> <span>{top.store} ({top.state}) · {top.manager ? 'Manager, 30%' : 'Stylist, 25%'}</span></p>
       <TsthBar tsth={top.tsth} goal={top.goal} />
       <div className="pay-tracker-stats">
         <div><span>Hours worked</span><strong>{fmtNum(top.hours, 1)}</strong></div>
@@ -2451,7 +2454,7 @@ function HsaClassCard({ cls, signups, isOwner, canEditAny, currentUserName, onSi
               }
               return (
                 <li key={s.id}>
-                  <strong>{s.name}</strong>{s.store ? ` — ${s.store}` : ''}{s.dl ? ` (DL: ${s.dl})` : ''}{isOwner && s.phone ? ` · 📞 ${s.phone}` : ''}
+                  <strong>{s.name}</strong><FocusTag name={s.name} />{s.store ? ` — ${s.store}` : ''}{s.dl ? ` (DL: ${s.dl})` : ''}{isOwner && s.phone ? ` · 📞 ${s.phone}` : ''}
                   {canEdit && <button className="hsa-roster-edit" onClick={() => setEditingSignupId(s.id)}>✎</button>}
                   {canDelete && <button className="btn-ghost btn-danger hsa-roster-remove" onClick={() => onRemoveSignup(s.id)}>✕</button>}
                 </li>
@@ -3390,7 +3393,7 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews, currentUser, n
 // ─── Overview tab (top-10/bottom-10 leaderboards, plus the full store list) ─
 function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery, managers, isOwner, goals, giftCardHistory, rankToken, focusStylists = {}, onSaveFocus = null }) {
   const [sortBy, setSortBy] = useState('tsth');
-  const [focusTarget, setFocusTarget] = useState(null);
+  const { focusProps, focusModal } = useFocusPicker(focusStylists, onSaveFocus);
   const [expanded, setExpanded] = useState({});
   const [focused, setFocused] = useState(null);
   // No live weekly Stylist Report and no explicit date range picked — fall
@@ -3609,13 +3612,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
                     footer={{ sales: s.sales, avgTicket: s.avgTicket, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, otherServices: s.otherServices, opc: s.opc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                     footerLabel="Store total / weighted avg"
                     focused={focused} onFocus={setFocused}
-                    focusKeys={currentFocusKeys(focusStylists, s.code)}
-                    onFocusStylist={onSaveFocus ? e => {
-                      // Reuse this month's entry if there is one (an older entry may use a bare key).
-                      const month = focusMonthKey();
-                      const found = focusEntriesList({ [s.code]: focusStylists?.[s.code] }).find(x => x.month === month && focusKey(x.name) === focusKey(e.name));
-                      setFocusTarget({ code: s.code, storeName: s.name, name: e.name, tsth: e.tsth, cph: e.cph, month, entryKey: found ? found.entryKey : focusEntryKey(month, e.name) });
-                    } : null}
+                    {...focusProps(s)}
                   />
                 </div>
               )}
@@ -3626,15 +3623,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
 
       {!sorted.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
 
-      {focusTarget && (
-        <FocusGoalModal
-          target={focusTarget}
-          existing={focusStylists?.[focusTarget.code]?.[focusTarget.entryKey] || null}
-          onSubmit={goalsIn => { onSaveFocus(focusTarget, goalsIn); setFocusTarget(null); }}
-          onRemove={() => { onSaveFocus(focusTarget, null); setFocusTarget(null); }}
-          onClose={() => setFocusTarget(null)}
-        />
-      )}
+      {focusModal}
 
       {isOwner && (
         <>
@@ -3662,14 +3651,14 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
 }
 
 // ─── Focus Stylist ──────────────────────────────────────────────────────────
-// DLs and leadership pick stylists to focus on from the Overview tab (FOCUS
+// DLs and leadership pick stylists to focus on from the Overview or DL tab (FOCUS
 // button next to the name), each with a TSTH and CPH goal. Saved through
 // saveScoped as `focus_stylists` → { [storeCode]: { [focusKey(name)]: entry } },
 // so a DL only ever reads/writes their own stores (api/scoped-data.js) and
 // the owner sees everyone. Stylists are matched to their numbers by store +
 // name, the same way the Employees tables list them.
 //
-// A focus lasts one calendar month: FOCUS on Overview always adds to the
+// A focus lasts one calendar month: the FOCUS button always adds to the
 // current month, and the tab shows one month at a time. Entries are stored
 // per store as `${YYYY-MM}:${focusKey(name)}` (a flat key, because the
 // scoped patch merge is only one level deep per store). Entries saved
@@ -3684,6 +3673,48 @@ const focusEntriesList = focusStylists => Object.entries(focusStylists || {}).fl
 // The current month's focus keys (focusKey(name)) at one store, for Overview's ★ FOCUS state.
 const currentFocusKeys = (focusStylists, code) => new Set(
   focusEntriesList({ [code]: focusStylists?.[code] }).filter(e => e.month === focusMonthKey()).map(e => focusKey(e.name)));
+
+// Names on this month's focus list, for the FOCUS STYLIST tag. Matched by
+// person, not store, so the tag follows them to any store and any list. A
+// login only gets its own stores' entries (api/scoped-data.js), and
+// managers/employees get names only, never the goals.
+const FocusNamesContext = React.createContext(new Set());
+const currentFocusNames = focusStylists => new Set(
+  focusEntriesList(focusStylists).filter(e => e.month === focusMonthKey()).map(e => normalizePersonName(e.name)));
+const useIsFocusStylist = () => {
+  const names = React.useContext(FocusNamesContext);
+  return name => names.has(normalizePersonName(name));
+};
+// The tag itself, the Focus Stylist version of MANAGER.
+function FocusTag({ name }) {
+  const isFocus = useIsFocusStylist();
+  return isFocus(name) ? <span className="focus-tag"> FOCUS STYLIST</span> : null;
+}
+
+// The FOCUS button + goal popup, shared by Overview and the DL tab. Spread
+// focusProps(store) onto EmployeeTable and render focusModal once.
+function useFocusPicker(focusStylists, onSaveFocus) {
+  const [target, setTarget] = useState(null);
+  const focusProps = store => ({
+    focusKeys: currentFocusKeys(focusStylists, store.code),
+    onFocusStylist: onSaveFocus ? e => {
+      // Reuse this month's entry if there is one (an older entry may use a bare key).
+      const month = focusMonthKey();
+      const found = focusEntriesList({ [store.code]: focusStylists?.[store.code] }).find(x => x.month === month && focusKey(x.name) === focusKey(e.name));
+      setTarget({ code: store.code, storeName: store.name, name: e.name, tsth: e.tsth, cph: e.cph, month, entryKey: found ? found.entryKey : focusEntryKey(month, e.name) });
+    } : null,
+  });
+  const focusModal = target ? (
+    <FocusGoalModal
+      target={target}
+      existing={focusStylists?.[target.code]?.[target.entryKey] || null}
+      onSubmit={goalsIn => { onSaveFocus(target, goalsIn); setTarget(null); }}
+      onRemove={() => { onSaveFocus(target, null); setTarget(null); }}
+      onClose={() => setTarget(null)}
+    />
+  ) : null;
+  return { focusProps, focusModal };
+}
 
 function FocusGoalModal({ target, existing, onSubmit, onRemove, onClose }) {
   const [tsthGoal, setTsthGoal] = useState(existing?.tsthGoal ?? '');
@@ -3803,7 +3834,7 @@ function FocusStylistTab({ focusStylists, history, weeklyHistory, onSaveFocus, i
       {!total && (
         <div className="empty-state">
           <p className="empty-title">No focus stylists for {fmtMonthLong(month)}</p>
-          {month === thisMonth && <p>Open a store on the Overview tab and click FOCUS next to a stylist's name.</p>}
+          {month === thisMonth && <p>Open a store on the Overview or DL tab and click FOCUS next to a stylist's name.</p>}
         </div>
       )}
       <div className="dl-list">
@@ -3867,7 +3898,7 @@ function FocusStylistTab({ focusStylists, history, weeklyHistory, onSaveFocus, i
 }
 
 // ─── Employees tab ──────────────────────────────────────────────────────────
-// focusKeys/onFocusStylist: the Focus Stylist button (Overview, DLs and
+// focusKeys/onFocusStylist: the Focus Stylist button (Overview and DL tabs, DLs and
 // leadership only). focusKeys is the set of focusKey()s already on this
 // store's focus list, so those stylists show as ★ FOCUS.
 function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel = 'Total / Avg (weighted)', focused = null, onFocus = null, focusKeys = null, onFocusStylist = null }) {
@@ -3891,6 +3922,7 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
               <td className="ledger-name-col">
                 {e.name}
                 {e.isManager && <span className="manager-tag"> MANAGER</span>}
+                {!focusKeys?.has(focusKey(e.name)) && <FocusTag name={e.name} />}
                 {onFocusStylist && (
                   <button
                     type="button"
@@ -4040,7 +4072,7 @@ function EmployeesTab({ report, history, weeklyHistory, dateRange, onDateRangeCh
                   {newHireSorted.map((r, i) => (
                     <tr key={`${r.name}-${i}`}>
                       <td className="ledger-name-col">
-                        {r.name}
+                        {r.name}<FocusTag name={r.name} />
                       </td>
                       <td>{fmtDateLong(r.startDate)}</td>
                       <td>{r.daysAgo}</td>
@@ -4806,7 +4838,8 @@ function BudgetsTab({ query, onQuery, history, weeklyHistory, isOwner }) {
 }
 
 // ─── DL tab ─────────────────────────────────────────────────────────────────
-function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers, milestoneGoals }) {
+function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDateRangeChange, managers, milestoneGoals, focusStylists, onSaveFocus }) {
+  const { focusProps, focusModal } = useFocusPicker(focusStylists, onSaveFocus);
   const [expanded, setExpanded] = useState({});
   const [expandedStore, setExpandedStore] = useState({});
   const [showManagers, setShowManagers] = useState(false);
@@ -4940,7 +4973,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                             return (
                               <tr key={s.code}>
                                 <td className="ledger-name-col">{s.name}</td>
-                                <td className="ledger-name-col">{managerName || <span className="empty-note">not set</span>}</td>
+                                <td className="ledger-name-col">{managerName ? <>{managerName}<FocusTag name={managerName} /></> : <span className="empty-note">not set</span>}</td>
                                 <td colSpan={16} className="empty-note">
                                   {managerName ? `No individual data found for ${managerName} in this period` : '—'}
                                 </td>
@@ -4950,7 +4983,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                           return (
                             <tr key={s.code}>
                               <td className="ledger-name-col">{s.name}</td>
-                              <td className="ledger-name-col">{managerName}</td>
+                              <td className="ledger-name-col">{managerName}<FocusTag name={managerName} /></td>
                               <td>{fmt$(managerEmp.sales)}</td>
                               <td>{fmt$(managerEmp.avgTicket)}</td>
                               <td className={`ledger-rate ${tsthClass(managerEmp.tsth)}`}>{fmtRate(managerEmp.tsth)}</td>
@@ -5094,6 +5127,7 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
                                         footer={{ sales: s.sales, avgTicket: s.avgTicket, colorSales: s.colorSales, retail: s.retail, cpc: s.cpc, rpc: s.rpc, otherServices: s.otherServices, opc: s.opc, tsth: s.tsth, totalHours: s.totalHours, haircuts: s.haircuts, cph: s.cph, signatureS: s.signatureS, signatureSCount: s.signatureSCount }}
                                         footerLabel="Store total / weighted avg"
                                         focused={focused} onFocus={setFocused}
+                                        {...focusProps(s)}
                                       />
                                     </td>
                                   </tr>
@@ -5111,6 +5145,8 @@ function DLTab({ report, query, onQuery, history, weeklyHistory, dateRange, onDa
           </div>
         </div>
       ))}
+
+      {focusModal}
     </div>
   );
 }
@@ -5261,7 +5297,7 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
                   <thead><tr><th className="ledger-name-col">Sold By</th><th>Gift Card $</th><th># Sold</th></tr></thead>
                   <tbody>
                     {s.sellers.map(e => (
-                      <tr key={e.name}><td className="ledger-name-col">{e.name}</td><td>{fmt$(e.giftCards)}</td><td>{fmtInt(e.giftCardCount)}</td></tr>
+                      <tr key={e.name}><td className="ledger-name-col">{e.name}<FocusTag name={e.name} /></td><td>{fmt$(e.giftCards)}</td><td>{fmtInt(e.giftCardCount)}</td></tr>
                     ))}
                   </tbody>
                 </table>
@@ -6877,7 +6913,7 @@ function ReviewsTab({ report, fallbackEmployeesByStore, reviews, query, onQuery,
                     <tbody>
                       {s.employees.map(e => (
                         <tr key={e.name}>
-                          <td className="ledger-name-col">{e.name}</td>
+                          <td className="ledger-name-col">{e.name}<FocusTag name={e.name} /></td>
                           <td>{e.count}</td>
                         </tr>
                       ))}
@@ -7088,7 +7124,7 @@ function LossPreventionTab({ lpData, lpStatus, onImportRegister, onGoToHistoryIm
                   <tbody>
                     {a.review.map(p => (
                       <tr key={p.key} className={p.flags.length > 1 ? 'lp-multi' : ''}>
-                        <td>{p.name}</td><td>{lpStoreName(p.code)}</td><td>{p.flags.length}</td>
+                        <td>{p.name}<FocusTag name={p.name} /></td><td>{lpStoreName(p.code)}</td><td>{p.flags.length}</td>
                         <td className="lp-flags">{p.flags.map(f => <span key={f} className="lp-chip">{f}</span>)}</td>
                       </tr>
                     ))}
@@ -7135,7 +7171,7 @@ function LossPreventionTab({ lpData, lpStatus, onImportRegister, onGoToHistoryIm
             <table className="ledger-table lp-table">
               <thead><tr><th>Person</th><th>Store</th><th>Tickets closed</th><th>With loyalty</th><th>Rate</th></tr></thead>
               <tbody>{a.loyalty.slice(0, 25).map(x => (
-                <tr key={`${x.name}|${x.code}`} className={x.flagged ? 'lp-multi' : ''}><td>{x.name}</td><td>{lpStoreName(x.code)}</td><td>{x.t}</td><td>{x.l}</td><td>{lpPct(x.rate)}</td></tr>
+                <tr key={`${x.name}|${x.code}`} className={x.flagged ? 'lp-multi' : ''}><td>{x.name}<FocusTag name={x.name} /></td><td>{lpStoreName(x.code)}</td><td>{x.t}</td><td>{x.l}</td><td>{lpPct(x.rate)}</td></tr>
               ))}</tbody>
             </table>
           </LpSection>
@@ -7145,7 +7181,7 @@ function LossPreventionTab({ lpData, lpStatus, onImportRegister, onGoToHistoryIm
             <table className="ledger-table lp-table">
               <thead><tr><th>Stylist</th><th>Store</th><th>Tickets</th><th>Cash</th><th>Their share</th><th>Store share</th></tr></thead>
               <tbody>{a.cash.slice(0, 25).map(x => (
-                <tr key={`${x.name}|${x.code}`} className={x.flagged ? 'lp-multi' : ''}><td>{x.name}</td><td>{lpStoreName(x.code)}</td><td>{x.t}</td><td>{x.c}</td><td>{lpPct(x.rate)}</td><td>{lpPct(x.storeRate)}</td></tr>
+                <tr key={`${x.name}|${x.code}`} className={x.flagged ? 'lp-multi' : ''}><td>{x.name}<FocusTag name={x.name} /></td><td>{lpStoreName(x.code)}</td><td>{x.t}</td><td>{x.c}</td><td>{lpPct(x.rate)}</td><td>{lpPct(x.storeRate)}</td></tr>
               ))}</tbody>
             </table>
           </LpSection>
@@ -7156,7 +7192,7 @@ function LossPreventionTab({ lpData, lpStatus, onImportRegister, onGoToHistoryIm
               <thead><tr><th>Submitted by</th><th>Store</th><th>Closures</th><th>Short</th><th>Short $</th><th>No real reason</th><th>Cash paid out</th></tr></thead>
               <tbody>{a.register.filter(x => x.short || x.vague).slice(0, 40).map(x => (
                 <tr key={x.key} className={x.short >= LP_RULES.regShortMin || x.vague >= LP_RULES.regVagueMin ? 'lp-multi' : ''}>
-                  <td>{x.name}</td><td>{lpStoreName(x.code)}</td><td>{x.closures}</td><td>{x.short}</td><td>{fmtRate(Math.abs(x.shortAmt))}</td><td>{x.vague}</td><td>{fmtRate(x.paid)}</td>
+                  <td>{x.name}<FocusTag name={x.name} /></td><td>{lpStoreName(x.code)}</td><td>{x.closures}</td><td>{x.short}</td><td>{fmtRate(Math.abs(x.shortAmt))}</td><td>{x.vague}</td><td>{fmtRate(x.paid)}</td>
                 </tr>
               ))}</tbody>
             </table>
@@ -7185,7 +7221,7 @@ function LossPreventionTab({ lpData, lpStatus, onImportRegister, onGoToHistoryIm
             <table className="ledger-table lp-table">
               <thead><tr><th>Person</th><th>Store</th><th>Missed punches</th></tr></thead>
               <tbody>{a.missed.slice(0, 40).map(x => (
-                <tr key={x.key} className={x.count >= LP_RULES.missedPunchMin ? 'lp-multi' : ''}><td>{x.name}</td><td>{lpStoreName(x.code)}</td><td>{x.count}</td></tr>
+                <tr key={x.key} className={x.count >= LP_RULES.missedPunchMin ? 'lp-multi' : ''}><td>{x.name}<FocusTag name={x.name} /></td><td>{lpStoreName(x.code)}</td><td>{x.count}</td></tr>
               ))}</tbody>
             </table>
           </LpSection>
@@ -7967,9 +8003,13 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
 
   // Focus stylists (DL/leadership picks with TSTH/CPH goals) vs their
   // month-to-date actuals. Already scoped server-side: a DL's list only has
-  // their own stores, managers/employees get none.
+  // their own stores, managers/employees get names only (no goals).
   // A focus lasts one month, so only this month's list is current.
-  const focusEntries = focusEntriesList(focusStylists).filter(e => e.month === focusMonthKey());
+  const focusThisMonth = focusEntriesList(focusStylists).filter(e => e.month === focusMonthKey());
+  const focusEntries = focusThisMonth.filter(e => e.tsthGoal != null);
+  if (focusThisMonth.length && !focusEntries.length) {
+    lines.push(`FOCUS STYLISTS this month (they show a FOCUS STYLIST tag in the app): ${focusThisMonth.map(e => `${e.name} (${STORE_CODE_TO_NAME[e.code] || `Store ${e.code}`})`).join(', ')}`, '');
+  }
   if (focusEntries.length) {
     const { start, end } = getCurrentMonthRange();
     const mtdTotals = getRangeTotals(history, weeklyHistory, start, end);
@@ -8790,7 +8830,7 @@ function EmployeeAccessSetupTab({ token, onRosterChanged }) {
               <tbody>
                 {loginCounts.map(c => (
                   <tr key={c.employeeId}>
-                    <td className="ledger-name-col">{c.employeeName}</td>
+                    <td className="ledger-name-col">{c.employeeName}<FocusTag name={c.employeeName} /></td>
                     <td className="ledger-text-col">{fmtInt(c.count)}</td>
                     <td className="ledger-text-col">{c.lastLogin ? new Date(c.lastLogin).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}</td>
                   </tr>
@@ -9697,7 +9737,7 @@ function RewardsSetupTab({ token, showToast }) {
             <tbody>
               {queue.map(t => (
                 <tr key={t.id}>
-                  <td className="ledger-name-col">{t.employeeName}</td>
+                  <td className="ledger-name-col">{t.employeeName}<FocusTag name={t.employeeName} /></td>
                   <td>{t.rewardName}</td>
                   <td>{Math.abs(t.delta)}</td>
                   <td>{fmtDateLong(t.createdAt)}</td>
@@ -9719,8 +9759,7 @@ function RewardsSetupTab({ token, showToast }) {
                 <React.Fragment key={b.employeeName}>
                   <tr className="store-row-clickable" onClick={() => togglePerson(b.employeeName)}>
                     <td className="ledger-name-col">
-                      <span className={`mini-chevron ${expandedPerson === b.employeeName ? 'mini-chevron--open' : ''}`}>▸</span> {b.employeeName}
-                    </td>
+                      <span className={`mini-chevron ${expandedPerson === b.employeeName ? 'mini-chevron--open' : ''}`}>▸</span> {b.employeeName}<FocusTag name={b.employeeName} />\n                    </td>
                     <td>{b.balance}</td>
                     <td></td>
                   </tr>
@@ -11398,8 +11437,10 @@ export default function App() {
   const d = presenterData
     ? { ...presenterData, fallbackEmployeesByStore: presenterFallbackEmployees }
     : { report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, focusStylists, salonChecks, fallbackEmployeesByStore };
+  const focusNames = currentFocusNames(d.focusStylists);
 
   return (
+    <FocusNamesContext.Provider value={focusNames}>
     <div className="app">
       {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
       {idleWarning && <div className="toast toast-error">You've been idle — you'll be signed out in under a minute. Move the mouse or tap anywhere to stay signed in.</div>}
@@ -11520,7 +11561,7 @@ export default function App() {
           />
         )}
         {!needsReport && tab === 'DL' && (report || hasHistoricalData) && (
-          <DLTab report={d.report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={d.managers} milestoneGoals={d.milestoneGoals} />
+          <DLTab report={d.report} query={queries.DL} onQuery={v => setQuery('DL', v)} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} managers={d.managers} milestoneGoals={d.milestoneGoals} focusStylists={d.focusStylists} onSaveFocus={canFocus ? handleSaveFocus : null} />
         )}
         {tab === 'Reviews' && (
           <ReviewsTab
@@ -11568,6 +11609,7 @@ export default function App() {
       </main>
       <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} payTracker={payTracker} myNumbersSummary={myNumbersSummary} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
     </div>
+    </FocusNamesContext.Provider>
   );
 }
 

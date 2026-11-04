@@ -471,6 +471,7 @@
 .tsth-bad { color: var(--red-deep) !important; }
 
 .manager-tag { font-size: 10px; font-weight: 700; color: var(--red); letter-spacing: 0.03em; }
+.focus-tag { font-size: 10px; font-weight: 700; color: var(--gold); letter-spacing: 0.03em; white-space: nowrap; }
 
 /* ─── Focus Stylist ──────────────────────────────────────────────────── */
 .focus-btn {
