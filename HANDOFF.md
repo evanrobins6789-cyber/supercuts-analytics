@@ -19,6 +19,7 @@
 - **Nothing from 2026-11-03 has been clicked through in a real browser or with an employee login.** Checks were builds, temp jest tests on real data, and headless screenshots of mocks.
 
 **Open from 2026-11-05:**
+- **Click through Presenter Mode on the live site before a real demo**, and ask Tilly a question while it's on; neither has been done.
 - **Try Shear Check add/delete once on the live site**: add a question, save a test visit, delete the question, confirm the test visit still shows it. Not yet done; the deploy of `12f9209` wasn't confirmed from here either.
 - **Thursday agenda fix**: live in the Apps Script (pasted by the user). The first real test is the agenda around midnight Wednesday night into Nov 12. Lauren also showed No reply on Nov 5; whether she replied is unknown. The Nov 5 agenda was not re-sent, as far as I know, and Kendra's topics were given to the user in chat.
 - **Franchisee Dennis Bloss, setup kit login (`Documents/supercuts-dashboard-kit`, not this repo)**: "Invalid path specified in request URL" reproduced with the kit's Supabase library by ending `SUPABASE_URL` in `/rest/v1`; a correct URL doesn't give it. His Vercel value wasn't seen. His SQL also left the placeholder owner row in place with a stray `values` line after it, and he typed his phone number in the PIN box. A reply with all three fixes was drafted for the user to send; outcome unknown.
@@ -26,6 +27,7 @@
 - **Average product price**: $20.62 per unit (49,058 units, $1,011,616, Jan 2025 through Nov 4, 2026), from `daily_history_*` `products`; totals match the Retail field by month. Jul–Oct 2026 ran about $19.90, down about $1. Offered, not done: a by-product breakdown of why. **Read `daily_history_*` with paging**: a single PostgREST list stops at 1,000 rows and silently cuts off at June 2026.
 
 **Good to know (2026-11-05):**
+- **No Haircut Sales tile, on purpose.** Added and removed the same day (`1a6edf6`, reverted in `83acf4d`): the user had missed the existing Cuts tile, so don't re-add it unprompted. That tile is a count, not dollars. If dollars are ever wanted: `service − color − signatureS − otherServices` from Sales-Accrual history, not the Stylist Report (it has no Signature Service column), and add the key to `METRIC_KEYS` in `api/store-rank.js`. Oct 2026 gave $1,160,112 on 45,445 cuts, $25.53 a cut, stores $19.92–$28.53. Why the lowest store is that low wasn't looked into.
 - **Three separate Apps Script projects**, each with its own `RECIPIENTS`: leadership emails (`apps-script/leadership-emails.gs`, Thursday topics/agenda and monthly goals), Weekly Leaderboard (Monday recap, Goal Progress, Finalize emails), and Supercuts Report Forwarder (uploads only). A recipient change has to be made in each.
 - The script account is `supercutsdataai@gmail.com`. The connected Gmail is the user's own inbox, so it shows sent agendas but not the replies people send to the script. Gmail search results hide dots and case in addresses; open the thread to see the real header.
 - In this shell, multi-line `node -e` and long heredocs have failed or hung. Write a script file to the scratchpad and run that.
