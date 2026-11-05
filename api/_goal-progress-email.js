@@ -8,7 +8,7 @@
 //   - leadership gets the company totals, then every group (`allHtml`).
 // Each row shows progress toward the group's Monthly Goals (Goals tab) and the
 // same weekdays a year earlier (52 weeks back). The two sides count different stores: goal
-// progress counts stores with a goal, and the year comparison counts stores
+// progress counts sales at every store (goal or not), and the year comparison counts stores
 // with data in both years, same as the Weekly Recap and Overview.
 //
 // Table-based inline-styled HTML, like api/leaderboard-email.js. Nothing runs
@@ -89,7 +89,7 @@ function goalCell(r, pace, td) {
   const period = r.periodLabel ? ` &middot; goal runs ${r.periodLabel.replace('–', '&ndash;')}` : '';
   const fill = Math.max(1, Math.min(100, Math.round(pct)));
   const bar = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:3px 0;"><tr><td width="${fill}%" height="8" bgcolor="${color}" style="background:${color};font-size:0;line-height:0;">&nbsp;</td>${fill < 100 ? `<td height="8" bgcolor="${BRAND.line}" style="background:${BRAND.line};font-size:0;line-height:0;">&nbsp;</td>` : ''}</tr></table>`;
-  const partial = stores < r.storeCount ? ` &middot; ${stores} of ${r.storeCount} stores` : '';
+  const partial = r.progress.noGoalStores ? ` &middot; ${stores} stores with a goal, plus ${r.fmt(r.progress.noGoalActual)} from ${r.progress.noGoalStores} with none` : stores < r.storeCount ? ` &middot; ${stores} of ${r.storeCount} stores have a goal` : '';
   return `<td style="${td}"><span style="font-weight:700;color:${BRAND.navy};">${Math.round(pct)}%</span>${heat.text ? ` <span style="font-size:10.5px;font-weight:700;color:${heat.status === 'onpace' ? '#8A6D12' : color};">${heat.text}</span>` : ''}${bar}<span style="font-size:10.5px;color:${BRAND.inkSoft};">${r.fmt(actual)} of ${r.fmt(goal)}${partial}${period}</span></td>`;
 }
 
@@ -140,7 +140,7 @@ function shell({ data, intro, sections, siteUrl }) {
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
             <tr><td style="padding:0 2px 2px;font-family:${FONT};font-size:12.5px;color:${BRAND.inkSoft};">${intro}</td></tr>
             ${sections}
-            <tr><td style="padding:12px 2px 0;font-family:${FONT};font-size:11.5px;line-height:1.5;color:${BRAND.inkSoft};">${paceLine}Goal progress counts stores with a goal this month. The ${data.curYear} and ${data.lyYear} columns count stores with data in both years, so ${data.curYear} can differ from the goal figure.</td></tr>
+            <tr><td style="padding:12px 2px 0;font-family:${FONT};font-size:11.5px;line-height:1.5;color:${BRAND.inkSoft};">${paceLine}Goal progress counts sales at every store, including stores with no goal this month. The ${data.curYear} and ${data.lyYear} columns count stores with data in both years, so ${data.curYear} can differ from the goal figure.</td></tr>
           </table>
         </td></tr>
         <tr><td style="padding:16px 24px 22px;border-top:1px solid ${BRAND.line};text-align:center;"><div style="font-family:${FONT};font-size:11px;color:${BRAND.inkSoft};">Sent automatically every Monday &middot; Supercuts Analytics</div></td></tr>
@@ -181,7 +181,7 @@ export async function buildGoalProgressEmails(siteUrl) {
 
   const leaders = LEADER_ROSTER_SECTIONS.flatMap(sec => sec.leaders);
   const assigned = new Set(leaders.flatMap(l => l.storeCodes));
-  const everyCode = [...new Set([...Object.keys(goals || {}), ...Object.keys(data.shapes)])];
+  const everyCode = [...new Set([...Object.keys(goals || {}), ...Object.keys(data.shapes), ...Object.keys(data.gift), ...Object.keys(data.giftPeriodSales)])];
   const unassigned = everyCode.filter(c => !assigned.has(c));
   const groups = unassigned.length ? [...leaders, { name: 'Other Stores', storeCodes: unassigned }] : leaders;
 

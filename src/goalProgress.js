@@ -2,21 +2,30 @@
 // (src/CollectiveGoalBars.js) and the Monday Goal Progress email
 // (api/_goal-progress-email.js). No React here, so the server can import it.
 
-// Adds up stores with a goal. A store with a goal and no sales yet still counts
-// toward the goal, and sales at a store with no goal don't count (they'd
-// inflate progress against a goal that doesn't include them).
+// Adds up every store. A store with a goal and no sales yet still counts toward
+// the goal, and a store with sales but no goal still counts toward the actual
+// (the user, 2026-11-04: trackers show the full amount sold). `noGoalActual` and
+// `noGoalStores` say how much of the actual came from stores with no goal.
+// `codes` must include stores with sales, not only stores with goals.
 export function collectiveGoal(codes, goalOf, actualOf) {
   let goal = 0;
   let actual = 0;
   let stores = 0;
+  let noGoalActual = 0;
+  let noGoalStores = 0;
   [...new Set(codes)].forEach(code => {
     const g = goalOf(code);
-    if (!(g > 0)) return;
-    goal += g;
-    actual += actualOf(code) || 0;
-    stores += 1;
+    const sold = actualOf(code) || 0;
+    actual += sold;
+    if (g > 0) {
+      goal += g;
+      stores += 1;
+    } else if (sold) {
+      noGoalActual += sold;
+      noGoalStores += 1;
+    }
   });
-  return { goal, actual, stores };
+  return { goal, actual, stores, noGoalActual, noGoalStores };
 }
 
 const dayDiff = (a, b) => Math.round((new Date(`${b}T00:00:00Z`) - new Date(`${a}T00:00:00Z`)) / 86400000);

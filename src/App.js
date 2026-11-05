@@ -1504,7 +1504,7 @@ function CoreValuesWidget({ bitmojiImg, bitmojiActive }) {
 // roles: which roles see the tip (omit = everyone).
 const LEADERS = ['owner', 'district_leader', 'manager'];
 const SITE_TIPS = [
-  { icon: '🔥', title: 'Collective goal bars', body: 'The bars at the top of Retail, Color Sales, Signature Service and Gift Cards add up every store with a goal. The line on each bar marks where the company should be by now, based on the days finished so far. The Gift Card goal runs Nov 1 – Dec 31.', roles: ['owner'] },
+  { icon: '🔥', title: 'Collective goal bars', body: 'The bars at the top of Retail, Color Sales, Signature Service and Gift Cards count sales at every store against the goals that are set, so a store with no goal still adds to the total. The line on each bar marks where the company should be by now, based on the days finished so far. The Gift Card goal runs Nov 1 – Dec 31.', roles: ['owner'] },
   { icon: '⭐', title: 'Favorite tabs', body: 'Open the ☰ menu and tap the ☆ next to any tab to keep it at the top of your screen. Your favorites are saved to your login, so they follow you to any phone or computer.' },
   { icon: '📊', title: 'My Numbers', body: 'Open the My Numbers tab to see your own hours, sales, TSTH and tips, split by each store you worked at, plus your base pay, bonus and what you’re making per hour. Only you can see your numbers.' },
   { icon: '🎯', title: 'How the bonus works', body: 'TSTH is your total sales (services, color and product) divided by your hours. Beat the goal (2 × the haircut price: $56 in PA, $60 in NJ/DE) and you earn 25% of everything above it on every hour you work.' },
@@ -4207,9 +4207,9 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
   const goalNote = goalSourceNote(goalStart, goalEnd, Object.keys(goals || {}).some(code =>
     (goalType && goalForRange(goals, code, goalType, goalStart, goalEnd).monthly) || (extraGoal && goalForRange(goals, code, extraGoal.type, goalStart, goalEnd).monthly)));
   const goalHead = goalLabel ? `${goalLabel} Goal` : 'Goal';
-  // Group/company vs Goal only counts stores that have a goal, so a store
-  // with no goal doesn't inflate the total it's compared against.
-  const actualWithGoal = (storesArr, key, getter) => storesArr.reduce((sum, st) => sum + ((getter(st.code) ?? 0) > 0 ? (st[key] || 0) : 0), 0);
+  // Group/company vs Goal counts every store's sales, including stores with no
+  // goal (the user, 2026-11-04: trackers show the full amount sold).
+  const actualAllStores = (storesArr, key) => storesArr.reduce((sum, st) => sum + (st[key] || 0), 0);
   const sumExtraGoal = storesArr => storesArr.reduce((sum, st) => sum + (getExtraGoal(st.code) ?? 0), 0);
   // actual | goal | vs goal cells for extraGoal (goal null/0 shows "—").
   const extraGoalCells = (actual, goal, compareActual = actual) => {
@@ -4366,11 +4366,11 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
 
   const groupGoalTotal = storesArr => storesArr.reduce((s, st) => s + (getGoal(st.code) ?? 0), 0);
   const companyGoalTotal = rows.reduce((s, st) => s + (getGoal(st.code) ?? 0), 0);
-  const companyGoalActual = actualWithGoal(rows, goalKey, getGoal);
+  const companyGoalActual = actualAllStores(rows, goalKey);
   const prevMonthColSum = arr => arr.reduce((s, st) => s + (st.prevMonthColor || 0), 0);
 
-  // Leadership's all-stores bars. Every store with a goal counts, even one
-  // with no sales in these dates (those aren't in `rows`).
+  // Leadership's all-stores bars. Every store counts: one with a goal and no
+  // sales in these dates (not in `rows`) and one with sales and no goal.
   const goalCodes = [...Object.keys(goals || {}), ...rows.map(r => r.code)];
   const rowByCode = Object.fromEntries(rows.map(r => [r.code, r]));
   const collectiveBars = isOwner && showGoals ? [
@@ -4415,7 +4415,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
             const groupTotals = rollupRows(g.stores);
             const sortedStores = sortByMetric(g.stores, sortBy, 'desc');
             const goalTotal = groupGoalTotal(g.stores);
-            const groupDiff = goalTotal > 0 ? actualWithGoal(g.stores, goalKey, getGoal) - goalTotal : null;
+            const groupDiff = goalTotal > 0 ? actualAllStores(g.stores, goalKey) - goalTotal : null;
             const isLeaderOpen = !!expandedLeader[g.leaderName];
             return (
               <div key={g.leaderName} className="dl-card">
@@ -4432,10 +4432,10 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                     {showGoalMetricCol && <div className="dl-stat"><span className="dl-stat-label">{goalMetricLabel}</span><span className="dl-stat-value">{goalFormatter(groupTotals[goalKey])}</span></div>}
                     {showGoals && <div className="dl-stat"><span className="dl-stat-label">Goal</span><span className="dl-stat-value">{goalTotal > 0 ? goalFormatter(goalTotal) : '—'}</span></div>}
                     {showGoals && (
-                      <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={actualWithGoal(g.stores, goalKey, getGoal)} milestone={goalTotal} fmt={goalFmt && goalFormatter} compactFmt={goalFmt && goalFormatter} /></div>
+                      <div className="dl-stat"><span className="dl-stat-label">Progress</span><MilestoneThermometer actual={actualAllStores(g.stores, goalKey)} milestone={goalTotal} fmt={goalFmt && goalFormatter} compactFmt={goalFmt && goalFormatter} /></div>
                     )}
                     {showGoals && extraGoal && sumExtraGoal(g.stores) > 0 && (
-                      <div className="dl-stat"><span className="dl-stat-label">{extraGoal.label} Progress</span><MilestoneThermometer actual={actualWithGoal(g.stores, extraGoal.metricKey, getExtraGoal)} milestone={sumExtraGoal(g.stores)} fmt={extraGoal.fmt} compactFmt={extraGoal.fmt} /></div>
+                      <div className="dl-stat"><span className="dl-stat-label">{extraGoal.label} Progress</span><MilestoneThermometer actual={actualAllStores(g.stores, extraGoal.metricKey)} milestone={sumExtraGoal(g.stores)} fmt={extraGoal.fmt} compactFmt={extraGoal.fmt} /></div>
                     )}
                     {showRef && <div className="dl-stat"><span className="dl-stat-label">{refMetric.label}</span><span className="dl-stat-value">{refFmt(sumRef(g.stores))}</span></div>}
                     {showAttach && <div className="dl-stat"><span className="dl-stat-label">{attachMetric.label}</span><span className="dl-stat-value">{attachFmt(groupAttachActual(g.stores, groupTotals))}</span></div>}
@@ -4519,7 +4519,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                               <td className={vsGoalClass(groupDiff)}>
                                 {groupDiff != null ? `${groupDiff >= 0 ? '+' : ''}${goalFormatter(groupDiff)}` : '—'}
                               </td>
-                              {extraGoal && extraGoalCells(groupTotals[extraGoal.metricKey], sumExtraGoal(g.stores), actualWithGoal(g.stores, extraGoal.metricKey, getExtraGoal))}
+                              {extraGoal && extraGoalCells(groupTotals[extraGoal.metricKey], sumExtraGoal(g.stores), actualAllStores(g.stores, extraGoal.metricKey))}
                             </>
                           )}
                           {showRef && <td>{refFmt(sumRef(g.stores))}</td>}
@@ -4624,7 +4624,7 @@ function StoreMetricTab({ report, query, onQuery, title, metricA, metricB, goalT
                       <td className={companyGoalTotal > 0 ? vsGoalClass(companyGoalActual - companyGoalTotal) : ''}>
                         {companyGoalTotal > 0 ? `${companyGoalActual - companyGoalTotal >= 0 ? '+' : ''}${goalFormatter(companyGoalActual - companyGoalTotal)}` : '—'}
                       </td>
-                      {extraGoal && extraGoalCells(t[extraGoal.metricKey], sumExtraGoal(rows), actualWithGoal(rows, extraGoal.metricKey, getExtraGoal))}
+                      {extraGoal && extraGoalCells(t[extraGoal.metricKey], sumExtraGoal(rows), actualAllStores(rows, extraGoal.metricKey))}
                     </>
                   )}
                   {showRef && <td>{refFmt(sumRef(sortedFlat))}</td>}
@@ -5313,12 +5313,13 @@ function GiftCardsTab({ giftCardHistory, goals, isOwner = false, query, onQuery,
   const getGoal = code => (goalPeriod ? giftCardPeriodGoal(goals, code, goalPeriod) : goalForRange(goals, code, 'giftCardGoal', effectiveRange.start, effectiveRange.end).value);
   const goalThrough = goalPeriod ? periodThrough(goalPeriod) : null;
 
-  // Every store with a sale in range OR a goal set, so a store with a goal
-  // and no sales yet still shows up (as behind goal) instead of vanishing.
+  // Every store with a sale in range, a sale counting toward the goal, or a
+  // goal set, so a store with a goal and no sales yet still shows up (as behind
+  // goal) and the totals include every sale whether or not the store has a goal.
   const rows = useMemo(() => {
     const totals = getGiftCardRangeTotals(giftCardHistory, effectiveRange.start, effectiveRange.end);
     const goalTotals = goalPeriod ? getGiftCardRangeTotals(giftCardHistory, goalPeriod.start, goalThrough) : totals;
-    const codes = new Set([...Object.keys(totals), ...Object.keys(goals || {}).filter(c => getGoal(c) != null)]);
+    const codes = new Set([...Object.keys(totals), ...Object.keys(goalTotals), ...Object.keys(goals || {}).filter(c => getGoal(c) != null)]);
     return [...codes].map(code => {
       const t = totals[code] || { giftCards: 0, giftCardCount: 0, sellers: {} };
       const goal = getGoal(code);
@@ -8194,11 +8195,11 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       ['Signature Services (count)', 'signatureSGoal', c => shapes[c]?.signatureSCount, fmtInt],
       [giftPeriod ? `Gift Cards $ (this goal runs ${giftPeriod.label}, so this counts sales since ${giftPeriod.start}; pace mark ${Math.round((periodPace(giftPeriod, end) || 0) * 100)}% of that period)` : 'Gift Cards $', 'giftCardGoal', c => gifts[c]?.giftCards, fmt$],
     ].map(([label, field, actualOf, f]) => {
-      const c = collectiveGoal(Object.keys(goals), code => (giftPeriod && field === 'giftCardGoal' ? giftCardPeriodGoal(goals, code, giftPeriod) : goalForRange(goals, code, field, start, end).value), actualOf);
-      return c.goal > 0 ? `${label} ${f(c.actual)} of ${f(c.goal)} (${Math.round((c.actual / c.goal) * 100)}%, ${c.stores} stores with a goal)` : null;
+      const c = collectiveGoal([...Object.keys(goals), ...Object.keys(shapes), ...Object.keys(gifts)], code => (giftPeriod && field === 'giftCardGoal' ? giftCardPeriodGoal(goals, code, giftPeriod) : goalForRange(goals, code, field, start, end).value), actualOf);
+      return c.goal > 0 ? `${label} ${f(c.actual)} of ${f(c.goal)} (${Math.round((c.actual / c.goal) * 100)}%, ${c.stores} stores with a goal${c.noGoalStores ? `; the ${f(c.actual)} includes ${f(c.noGoalActual)} from ${c.noGoalStores} stores with no goal` : ''})` : null;
     }).filter(Boolean);
     if (progress.length) {
-      lines.push(`COLLECTIVE GOAL PROGRESS, month-to-date ${start} through ${end}, the stores this login can see added together, counting only stores with a goal${pace != null ? `; pace mark ${Math.round(pace * 100)}% of the month (days finished ÷ days in the month): at or ahead of it is green, within 10% of it is gold, further behind is red` : ''}: ${progress.join('; ')}.`, '');
+      lines.push(`COLLECTIVE GOAL PROGRESS, month-to-date ${start} through ${end}, the stores this login can see added together. Sales count every store, with or without a goal; the goal adds up the stores that have one${pace != null ? `; pace mark ${Math.round(pace * 100)}% of the month (days finished ÷ days in the month): at or ahead of it is green, within 10% of it is gold, further behind is red` : ''}: ${progress.join('; ')}.`, '');
     }
   }
 

@@ -2,11 +2,11 @@ import React from 'react';
 import { goalHeat, goalPace } from './goalProgress';
 
 // Leadership's "all stores" heat bars at the top of the Retail, Color Sales,
-// Signature Service and Gift Cards tabs: every store's actuals against every
-// store's goal, added together. Owner login only, because a DL's data is
+// Signature Service and Gift Cards tabs: every store's actuals (goal or not)
+// against every store's goal, added together. Owner login only, because a DL's data is
 // scoped to their own stores and couldn't show the collective number.
 
-function CollectiveBar({ label, actual, goal, stores, fmt, pace }) {
+function CollectiveBar({ label, actual, goal, stores, noGoalActual, noGoalStores, fmt, pace }) {
   const pct = (actual / goal) * 100;
   const heat = goalHeat(actual, goal, pace);
   return (
@@ -32,6 +32,7 @@ function CollectiveBar({ label, actual, goal, stores, fmt, pace }) {
         {heat.text && ' · '}
         {pace != null && pace < 1 && `pace mark ${Math.round(pace * 100)}% · `}
         {stores} store{stores !== 1 ? 's' : ''} with a goal
+        {noGoalStores > 0 && ` · includes ${fmt(noGoalActual)} from ${noGoalStores} store${noGoalStores !== 1 ? 's' : ''} with no goal`}
       </p>
     </div>
   );
