@@ -22,7 +22,7 @@
 
 **Thursday agenda dropped replies that arrive as their own thread (2026-11-05).** User: Kendra answered the Nov 5 topics ask on Nov 4 at 9:20pm, but the agenda showed No reply. The user's screenshot shows her "Re: Topics for Thursday call - Thu, Nov 5, 2026" as the first message in its conversation, not under the ask. Why it split off is unknown; it quotes her own 8:20pm message, not the ask.
 - **Fix**: `collectReplies_` in `apps-script/leadership-emails.gs` now ignores a leading Re:/Fwd: when matching a thread, and only skips the first message when that message is the ask itself. Applies to the monthly goals summary too.
-- **The live script is a manual paste**: the user must paste the new `collectReplies_` into the project on `supercutsdataai@gmail.com`, keeping their RECIPIENTS. Not confirmed done. Triggers need no change.
+- **The live script is a manual paste**: the user must paste the new `collectReplies_` into the project on `supercutsdataai@gmail.com`, keeping their RECIPIENTS. Pasted by the user 2026-11-05 (whole file). First real test: the Nov 12 agenda. Triggers need no change.
 - **Verified**: Node test with mocked GmailApp using Kendra's text (normal reply, her thread, Re: Fwd:, a [TEST] thread and last week's thread both ignored); syntax and ASCII checks. Not run in Apps Script. Oct 22's split "Kendra" / "kendra Reich" rows were a separate address mismatch, since corrected (RECIPIENTS now has the dotted address).
 
 **Trackers count every store's sales, goal or not (2026-11-04, latest).** User: the Gift Cards bar read about $30k while far more had sold; trackers should show full amounts even when a store with sales has no goal. Overrides "sales at stores with no goal are left out" in the heat bar and email entries below.
