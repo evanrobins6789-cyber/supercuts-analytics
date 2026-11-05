@@ -189,6 +189,7 @@ export function historyTotalsToReportShape(t) {
     signatureSCount: t?.signatureSCount || 0,
     bottles: t?.bottles || 0,
     otherServices: t?.otherServices || 0,
+    haircutSales: haircutSalesOf(t),
     haircuts: haircuts || null,
     tsth: hours > 0 ? sales / hours : null,
     cpc: haircuts > 0 ? (t.color || 0) / haircuts : null,
@@ -214,6 +215,15 @@ export function historyTotalsToReportShape(t) {
     employees: t?.employees || [],
     products: t?.products || {},
   };
+}
+
+// Haircut dollars. The POS sorts every service line into one of color, haircut,
+// Signature Service or other, and only the haircut line has no dollar field of
+// its own (it adds to the `haircuts` count), so it's what's left of `service`.
+// History only: a Stylist Report has no Signature Service column, so the same
+// subtraction there would count SS as haircuts.
+export function haircutSalesOf(t) {
+  return Math.max(0, (t?.service || 0) - (t?.color || 0) - (t?.signatureS || 0) - (t?.otherServices || 0));
 }
 
 // Re-aggregate a set of already-rolled-up rows (stores, or store totals) one
@@ -244,6 +254,7 @@ export function rollupRows(rows) {
     signatureSCount: totalSignatureSCount,
     bottles: totalBottles,
     otherServices: totalOther,
+    haircutSales: sum('haircutSales'),
     tsth: totalHours > 0 ? totalSales / totalHours : null,
     cpc: totalHaircuts > 0 ? totalColor / totalHaircuts : null,
     rpc: totalHaircuts > 0 ? totalRetail / totalHaircuts : null,
