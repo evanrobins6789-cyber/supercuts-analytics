@@ -1,6 +1,6 @@
 # Handoff — Supercuts Analytics
 
-## Where things stand (updated 2026-11-04)
+## Where things stand (updated 2026-11-05)
 
 **The user's 2026-10-28 list:**
 1. ~~Bonus + tips as an hourly figure~~ **Built 2026-11-03.** The rules came from the user (see the TSTH/bonus entries below). Tips come from the new Tips report upload. Base pay comes from the Employee Pay Rate Report (locked `pay_rates` table).
@@ -19,6 +19,11 @@
 - **Nothing from 2026-11-03 has been clicked through in a real browser or with an employee login.** Checks were builds, temp jest tests on real data, and headless screenshots of mocks.
 
 **Pushing from Claude Code in this repo**: commit with `git commit -m '…'` (single quotes), then a bare `git push origin main` as its own command. Pay/payroll-related pushes are sometimes still denied by auto mode's classifier. Then give the user `! git push origin main` to paste. Never chain the push with `cd`/pipes, or it won't match the allow rule.
+
+**Thursday agenda dropped replies that arrive as their own thread (2026-11-05).** User: Kendra answered the Nov 5 topics ask on Nov 4 at 9:20pm, but the agenda showed No reply. The user's screenshot shows her "Re: Topics for Thursday call - Thu, Nov 5, 2026" as the first message in its conversation, not under the ask. Why it split off is unknown; it quotes her own 8:20pm message, not the ask.
+- **Fix**: `collectReplies_` in `apps-script/leadership-emails.gs` now ignores a leading Re:/Fwd: when matching a thread, and only skips the first message when that message is the ask itself. Applies to the monthly goals summary too.
+- **The live script is a manual paste**: the user must paste the new `collectReplies_` into the project on `supercutsdataai@gmail.com`, keeping their RECIPIENTS. Not confirmed done. Triggers need no change.
+- **Verified**: Node test with mocked GmailApp using Kendra's text (normal reply, her thread, Re: Fwd:, a [TEST] thread and last week's thread both ignored); syntax and ASCII checks. Not run in Apps Script. Oct 22's split "Kendra" / "kendra Reich" rows were a separate address mismatch, since corrected (RECIPIENTS now has the dotted address).
 
 **Trackers count every store's sales, goal or not (2026-11-04, latest).** User: the Gift Cards bar read about $30k while far more had sold; trackers should show full amounts even when a store with sales has no goal. Overrides "sales at stores with no goal are left out" in the heat bar and email entries below.
 - **Real cause**: `Gift Cards(8).xlsx` (Nov 1–4) and live history both total $43,117.60 across 54 stores, so the upload was fine. `collectiveGoal` dropped $12,637.60 from 16 stores with no gift goal, leaving $30,480. The user said about $46k; the file says $43.1k.

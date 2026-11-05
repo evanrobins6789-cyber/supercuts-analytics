@@ -230,9 +230,14 @@ function collectReplies_(askSubject, lookbackDays) {
   const threads = GmailApp.search('subject:"' + askSubject + '" newer_than:' + lookbackDays + 'd', 0, 200);
   const byEmail = {};
   threads.forEach(function (thread) {
-    // Only the threads this script started for exactly this ask.
-    if (thread.getFirstMessageSubject() !== askSubject) return;
-    thread.getMessages().slice(1).forEach(function (msg) {
+    // Only threads for exactly this ask. Some replies arrive as their own
+    // thread (first subject "Re: ..."), so ignore a leading Re:/Fwd:.
+    const firstSubject = thread.getFirstMessageSubject();
+    if (String(firstSubject).replace(/^\s*((re|fwd?)\s*:\s*)+/i, '') !== askSubject) return;
+    // Skip the first message only when it's the ask itself. In a thread that
+    // starts with a reply, the first message is an answer.
+    const messages = thread.getMessages();
+    (firstSubject === askSubject ? messages.slice(1) : messages).forEach(function (msg) {
       if (msg.isDraft()) return;
       const sender = parseFrom_(msg.getFrom());
       // A reply sent from this account to someone else's copy isn't an answer.
