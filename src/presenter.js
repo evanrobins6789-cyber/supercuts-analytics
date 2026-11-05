@@ -1,6 +1,10 @@
 // Presenter mode — an owner-only, this-browser-only switch that swaps every
-// number and person's name on screen for made-up ones, so the app can be
-// demoed without showing real data. Nothing here ever touches stored data:
+// number and person's name on screen for made-up ones, so every tab can be
+// demoed without showing real data. Anything a tab shows has to come through
+// presenterView below: a new dataset or field isn't safe until it's faked here.
+// Real by choice: store names, dates, headcounts, review text structure, and
+// company rules like the bonus formula. News keeps its text but loses its PDFs.
+// Nothing here ever touches stored data:
 //   - The fake data is derived on the fly from the real in-memory data
 //     (App.js passes `presenterView(...)` to the tabs instead of the real
 //     state) — the real state itself is never modified.
@@ -15,6 +19,8 @@
 // gets the same fake numbers/name — consistent across tabs and reloads.
 
 import { finalizeEmployee, rollupRows } from './metrics';
+import { buildRateLookup } from './payTracker';
+import { scoreSalonCheck, visitChecklist } from './salonCheck';
 
 // ─── Flag ────────────────────────────────────────────────────────────────
 let presenting = false;
@@ -54,6 +60,18 @@ function hash(str) {
   return (h >>> 0) / 4294967296; // [0, 1)
 }
 const between = (seed, lo, hi) => lo + hash(seed) * (hi - lo);
+// A multiplier close to 1 would leave a number almost real, so keep at least
+// 8% away from it.
+const notOne = f => (Math.abs(f - 1) >= 0.08 ? f : (f < 1 ? 0.92 : 1.08));
+// Plain rounding gives small counts straight back (1 × 1.1 rounds to 1), so
+// totals built from many small days would stay real. This rounds up or down
+// by the fraction instead, so the totals carry the multiplier. Same seed and
+// a smaller number never rounds higher, so "x of y" counts stay in order.
+function fairRound(x, seed) {
+  const low = Math.floor(x);
+  return low + (hash(seed) < x - low ? 1 : 0);
+}
+const cents = n => Math.round(n * 100) / 100;
 
 // ─── Fake names ─────────────────────────────────────────────────────────────
 const FIRST = ['Avery', 'Jordan', 'Riley', 'Casey', 'Morgan', 'Taylor', 'Quinn', 'Harper', 'Rowan', 'Skyler', 'Reese', 'Emerson', 'Dakota', 'Hayden', 'Parker', 'Sawyer', 'Finley', 'Blake', 'Cameron', 'Drew', 'Elliot', 'Jamie', 'Kendall', 'Logan', 'Marley', 'Noel', 'Peyton', 'Remy', 'Sage', 'Tatum', 'Arden', 'Bailey', 'Carmen', 'Delaney', 'Eden', 'Frankie', 'Greer', 'Hollis', 'Indie', 'Jesse', 'Kai', 'Lane', 'Monroe', 'Nico', 'Oakley', 'Presley', 'Rory', 'Shay', 'Toby', 'Val', 'Wren', 'Aspen', 'Brooke', 'Callie', 'Dana', 'Ellis', 'Gemma', 'Hadley', 'Ivy', 'Juno'];
@@ -95,41 +113,75 @@ const fakePhone = real => {
 // the real growth). Every row for a store uses the same factors, so sums,
 // store totals, and derived ratios (TSTH, CPC, CPD...) all stay internally
 // consistent — they're just not the real figures.
+//
+// Ratios are the trap: two fields with the same multiplier give the real
+// ratio. So groups step away from each other on purpose (cuts from hours,
+// service from cuts, and so on), and the "with retail" ticket counts get their
+// own group, so TSTH, CPH, CPC, RPC and attach % can't land on the real value.
+// Store-level shifts average out across 59 stores, so company-wide ratios
+// would still come out nearly real: COMPANY_TILT moves every store the same
+// way. Each store's step then pushes the same direction as the tilt, because
+// a step against it would cancel out and leave that store's ratio real.
 const FIELD_GROUP = {
   sales: 'service', service: 'service', serviceSales: 'service',
   retail: 'retail', giftCards: 'retail', giftCardCount: 'giftCount',
   color: 'color', colorSales: 'color',
-  otherServices: 'other',
+  otherServices: 'other', otherNet: 'other',
+  tips: 'tips', tipCount: 'tipCount',
+  daysWorked: 'days', prodHours: 'hours', nonProdHours: 'hours',
   signatureS: 'sigAmt', signatureSCount: 'sigCount',
   haircuts: 'cuts', bottles: 'bottles',
   hours: 'hours', totalHours: 'hours',
-  colorTicketCount: 'colorTix', colorTicketsWithRetail: 'colorTix',
-  signatureTicketCount: 'sigTix', signatureTicketsWithRetail: 'sigTix',
+  colorTicketCount: 'colorTix', colorTicketsWithRetail: 'colorAttach',
+  signatureTicketCount: 'sigTix', signatureTicketsWithRetail: 'sigAttach',
 };
-const COUNT_FIELDS = new Set(['giftCardCount', 'haircuts', 'bottles', 'signatureSCount', 'colorTicketCount', 'colorTicketsWithRetail', 'signatureTicketCount', 'signatureTicketsWithRetail']);
+const ATTACH_PAIRS = [['colorTicketsWithRetail', 'colorTicketCount'], ['signatureTicketsWithRetail', 'signatureTicketCount']];
+const COUNT_FIELDS = new Set(['tipCount', 'daysWorked', 'giftCardCount', 'haircuts', 'bottles', 'signatureSCount', 'colorTicketCount', 'colorTicketsWithRetail', 'signatureTicketCount', 'signatureTicketsWithRetail']);
 
+const COMPANY_TILT = {
+  hours: 1.1, cuts: 0.8, service: 0.84, retail: 0.7, color: 0.9, other: 1, bottles: 0.7,
+  sigAmt: 1.05, sigCount: 0.72, colorAttach: 1.12, sigAttach: 0.86, giftCount: 0.85, tips: 1.1,
+};
+const tiltOf = group => COMPANY_TILT[group] || 1;
+const sideOf = seed => (hash(seed) < 0.5 ? -1 : 1);
+const step = (seed, side = sideOf(`side|${seed}`)) => 1 + side * between(`step|${seed}`, 0.07, 0.14);
+function jitter(c, group) {
+  const hours = step(`${c}|hours`);
+  if (group === 'hours') return hours;
+  const cuts = hours * step(`${c}|cuts`, -1); // down, like its tilt against hours
+  if (group === 'cuts') return cuts;
+  if (group === 'colorAttach') return jitter(c, 'colorTix') * step(`${c}|colorAttach`, 1);
+  if (group === 'sigAttach') return jitter(c, 'sigTix') * step(`${c}|sigAttach`, -1);
+  return cuts * step(`${c}|${group}`, tiltOf(group) >= tiltOf('cuts') ? 1 : -1);
+}
 function factor(code, group, year) {
   const c = String(code ?? 'all');
-  return between(`size|${c}`, 0.65, 1.45) * between(`jit|${c}|${group}`, 0.82, 1.18) * (year ? between(`yr|${c}|${group}|${year}`, 0.92, 1.08) : 1);
+  if (group === 'days') return notOne(between(`days|${c}`, 0.86, 1.14));
+  const byYear = year ? between(`yr|${c}|${year}`, 0.92, 1.08) * between(`yr|${c}|${group}|${year}`, 0.98, 1.02) : 1;
+  return notOne(between(`size|${c}`, 0.75, 1.3) * jitter(c, group) * byYear * tiltOf(group));
 }
-function scaleVal(v, field, code, year) {
+function scaleVal(v, field, code, year, seed) {
   if (typeof v !== 'number' || !isFinite(v)) return v;
   const group = FIELD_GROUP[field];
   if (!group) return v;
   const out = v * factor(code, group, year);
-  return COUNT_FIELDS.has(field) ? Math.round(out) : Math.round(out * 100) / 100;
+  return COUNT_FIELDS.has(field) ? fairRound(out, `${seed}|${group}`) : cents(out);
 }
-function scaleFields(obj, code, year) {
+// Product and extra-service lines: { [name]: { qty, amount } }.
+function scaleLines(lines, code, year, seed, qtyGroup, amountGroup) {
+  const out = {};
+  Object.entries(lines).forEach(([name, v]) => {
+    out[name] = { ...v, qty: fairRound((v.qty || 0) * factor(code, qtyGroup, year), `${seed}|${name}`), amount: cents((v.amount || 0) * factor(code, amountGroup, year)) };
+  });
+  return out;
+}
+function scaleFields(obj, code, year, seed) {
   if (!obj || typeof obj !== 'object') return obj;
   const out = { ...obj };
-  Object.keys(FIELD_GROUP).forEach(f => { if (f in out) out[f] = scaleVal(out[f], f, code, year); });
-  if (out.products && typeof out.products === 'object') {
-    const p = {};
-    Object.entries(out.products).forEach(([name, v]) => {
-      p[name] = { ...v, qty: Math.round((v.qty || 0) * factor(code, 'bottles', year)), amount: Math.round((v.amount || 0) * factor(code, 'retail', year) * 100) / 100 };
-    });
-    out.products = p;
-  }
+  Object.keys(FIELD_GROUP).forEach(f => { if (f in out) out[f] = scaleVal(out[f], f, code, year, seed); });
+  if (out.products && typeof out.products === 'object') out.products = scaleLines(out.products, code, year, seed, 'bottles', 'retail');
+  if (out.extras && typeof out.extras === 'object') out.extras = scaleLines(out.extras, code, year, seed, 'extraQty', 'other');
+  ATTACH_PAIRS.forEach(([part, whole]) => { if (typeof out[part] === 'number' && typeof out[whole] === 'number') out[part] = Math.min(out[part], out[whole]); });
   return out;
 }
 const yearOf = iso => (iso ? String(iso).slice(0, 4) : null);
@@ -139,10 +191,10 @@ function fakeHistory(history) {
   const out = {};
   Object.entries(history || {}).forEach(([k, r]) => {
     const year = yearOf(r.date);
-    const rec = scaleFields(r, r.code, year);
+    const rec = scaleFields(r, r.code, year, k);
     if (r.employees && typeof r.employees === 'object') {
       const emps = {};
-      Object.entries(r.employees).forEach(([name, v]) => { emps[fakePersonName(name)] = scaleFields(v, r.code, year); });
+      Object.entries(r.employees).forEach(([name, v]) => { emps[fakePersonName(name)] = scaleFields(v, r.code, year, `${k}|${normName(name)}`); });
       rec.employees = emps;
     }
     out[k] = rec;
@@ -156,8 +208,8 @@ function fakeWeeklyHistory(weekly) {
     const year = yearOf(w.startDate);
     const stores = {};
     Object.entries(w.stores || {}).forEach(([code, s]) => {
-      const rec = scaleFields(s, code, year);
-      if (Array.isArray(s.employees)) rec.employees = s.employees.map(e => ({ ...scaleFields(e, code, year), name: fakePersonName(e.name) }));
+      const rec = scaleFields(s, code, year, `${k}|${code}`);
+      if (Array.isArray(s.employees)) rec.employees = s.employees.map(e => ({ ...scaleFields(e, code, year, `${k}|${code}|${normName(e.name)}`), name: fakePersonName(e.name) }));
       stores[code] = rec;
     });
     out[k] = { ...w, stores };
@@ -169,7 +221,7 @@ function fakeReport(report) {
   if (!report) return report;
   const year = yearOf(report.endDateISO);
   const stores = (report.stores || []).map(s => {
-    const employees = (s.employees || []).map(e => finalizeEmployee({ ...scaleFields(e, s.code, year), name: fakePersonName(e.name) }));
+    const employees = (s.employees || []).map(e => finalizeEmployee({ ...scaleFields(e, s.code, year, `${s.code}|${normName(e.name)}`), name: fakePersonName(e.name) }));
     return { ...s, employees, totals: { ...s.totals, ...rollupRows(employees) } };
   });
   const allEmployees = [];
@@ -187,8 +239,8 @@ function fakeGoalsLike(goals) {
     Object.entries(g).forEach(([field, v]) => {
       if (typeof v !== 'number' || !isFinite(v)) { ng[field] = v; return; }
       const isPct = /pct|percent|attach|toColor|toSS/i.test(field);
-      const f = isPct ? between(`gp|${code}|${field}`, 0.85, 1.15) : factor(code, 'service') * between(`gj|${code}|${field}`, 0.9, 1.1);
-      ng[field] = isPct ? Math.round(v * f * 1000) / 1000 : Math.round(v * f);
+      const f = notOne(isPct ? between(`gp|${code}|${field}`, 0.85, 1.15) : factor(code, 'service') * between(`gj|${code}|${field}`, 0.9, 1.1));
+      ng[field] = isPct ? Math.round(v * f * 1000) / 1000 : fairRound(v * f, `g|${code}|${field}`);
     });
     out[code] = ng;
   });
@@ -207,9 +259,22 @@ function fakeManagers(managers) {
 // each focus entry still lines up with its (faked) stylist's numbers. The
 // per-store key is `${month}:` + the lowercased name (focusEntryKey in
 // App.js), so it's rebuilt from the faked name, keeping any month prefix.
-// Goals stay real, like counts elsewhere.
-// Shear Check visits: scores and answers stay real; every name and every
-// free-text note is swapped out.
+// Shear Check visits: some answers change and the score is worked out again
+// from them; every name and free-text note is swapped out.
+function fakeVisitAnswers(v, id) {
+  const answers = {};
+  Object.entries(v.answers || {}).forEach(([item, a]) => {
+    const u = hash(`sc|${id}|${item}`);
+    answers[item] = u < 0.06 ? 'no' : u < 0.1 ? 'na' : u < 0.2 ? 'yes' : a;
+  });
+  const sections = visitChecklist(v);
+  let sc = scoreSalonCheck(answers, sections);
+  if (sc.score === v.score) {
+    const flip = Object.keys(answers).find(item => answers[item] === (sc.no ? 'no' : 'yes'));
+    if (flip) { answers[flip] = sc.no ? 'yes' : 'no'; sc = scoreSalonCheck(answers, sections); }
+  }
+  return { answers, yes: sc.yes, no: sc.no, na: sc.na, score: sc.score };
+}
 function fakeSalonChecks(checks) {
   const names = t => (t ? t.split(',').map(n => n.trim()).filter(Boolean).map(fakePersonName).join(', ') : t);
   const out = {};
@@ -219,6 +284,7 @@ function fakeSalonChecks(checks) {
       if (!v) return;
       out[code][id] = {
         ...v,
+        ...fakeVisitAnswers(v, id),
         manager: names(v.manager), team: names(v.team), by: v.by ? fakePersonName(v.by) : v.by,
         emailedTo: v.emailedTo ? fakePersonName(v.emailedTo) : v.emailedTo,
         notes: Object.fromEntries(Object.keys(v.notes || {}).map(k => [k, 'Sample note.'])),
@@ -237,7 +303,8 @@ function fakeFocusStylists(focus) {
       if (!e) return;
       const name = fakePersonName(e.name);
       const prefix = key.includes(':') ? key.slice(0, key.indexOf(':') + 1) : '';
-      out[code][prefix + name.trim().toLowerCase().replace(/\s+/g, ' ')] = { ...e, name, addedBy: e.addedBy ? fakePersonName(e.addedBy) : e.addedBy };
+      const goal = (field, step) => (typeof e[field] === 'number' ? { [field]: Math.round(e[field] * notOne(between(`fg|${key}|${field}`, 0.85, 1.15)) / step) * step } : {});
+      out[code][prefix + name.trim().toLowerCase().replace(/\s+/g, ' ')] = { ...e, ...goal('tsthGoal', 1), ...goal('cphGoal', 0.1), name, addedBy: e.addedBy ? fakePersonName(e.addedBy) : e.addedBy };
     });
   });
   return out;
@@ -281,31 +348,38 @@ const pick = (list, seed) => list[Math.floor(hash(seed) * list.length)];
 function fakeReviewsData(reviews, realEmployeesByStore) {
   if (!reviews || !Array.isArray(reviews.reviews)) return { reviews, keyMap: {} };
   const keyMap = {};
-  const list = reviews.reviews.map((r, i) => {
+  const list = reviews.reviews.flatMap((r, i) => {
     const seed = `rev|${r.code}|${r.postedAt}|${r.userName}|${i}`;
+    // Leave some out and nudge some stars, so review counts and star averages
+    // aren't the real ones.
+    if (hash(`${seed}|keep`) > between(`revkeep|${r.code}`, 0.7, 0.92)) return [];
+    const nudge = hash(`${seed}|star`);
+    const down = between(`revdown|${r.code}`, 0.1, 0.35);
+    const rating = typeof r.rating === 'number' ? Math.min(5, Math.max(1, r.rating + (nudge < down ? -1 : nudge < down + 0.1 ? 1 : 0))) : r.rating;
     const text = String(r.message || '').toLowerCase();
     let mentioned = null;
     for (const emp of (realEmployeesByStore?.[r.code] || [])) {
       const first = String(emp.name || '').trim().split(/\s+/)[0].replace(/[^a-zA-Z]/g, '');
       if (first.length >= 3 && new RegExp(`\\b${first.toLowerCase()}\\b`).test(text)) { mentioned = emp.name; break; }
     }
-    const positive = (r.rating || 0) >= 4;
+    const positive = (rating || 0) >= 4;
     let message = '';
     if (r.message) {
       message = mentioned
         ? pick(positive ? POSITIVE_WITH_NAME : NEGATIVE_WITH_NAME, seed).replace('{name}', fakeFirstName(mentioned))
         : pick(positive ? POSITIVE_REVIEWS : NEGATIVE_REVIEWS, seed);
     }
-    const fake = { ...r, userName: r.userName ? fakePersonName(r.userName) : r.userName, message, reply: r.reply ? 'Thank you so much for the feedback — we appreciate you!' : r.reply, url: '' };
+    const fake = { ...r, rating, userName: r.userName ? fakePersonName(r.userName) : r.userName, message, reply: r.reply ? 'Thank you so much for the feedback — we appreciate you!' : r.reply, url: '' };
     keyMap[`${r.code}|${r.postedAt}|${r.userName}|${r.rating}`] = `${fake.code}|${fake.postedAt}|${fake.userName}|${fake.rating}`;
-    return fake;
+    return [fake];
   });
   return { reviews: { ...reviews, reviews: list }, keyMap };
 }
 
 function remapKeys(obj, keyMap, mapValue = v => v) {
   const out = {};
-  Object.entries(obj || {}).forEach(([k, v]) => { out[keyMap[k] || k] = mapValue(v); });
+  // A key with no match belongs to a review left out above, so it goes too.
+  Object.entries(obj || {}).forEach(([k, v]) => { if (keyMap[k]) out[keyMap[k]] = mapValue(v); });
   return out;
 }
 
@@ -318,12 +392,12 @@ function fakeLeases(leases) {
       ...rec,
       landlordName: rec.landlordName ? pick(COMPANIES, `ll|${code}`) : rec.landlordName,
       landlordContact: rec.landlordContact ? `${fakePersonName(`contact ${code}`)} · (555) 010-${String(Math.floor(hash(`llp|${code}`) * 10000)).padStart(4, '0')}` : rec.landlordContact,
-      baseRent: rec.baseRent !== '' && rec.baseRent != null && isFinite(rent) ? Math.round(rent * between(`rent|${code}`, 0.7, 1.3)) : rec.baseRent,
+      baseRent: rec.baseRent !== '' && rec.baseRent != null && isFinite(rent) ? Math.round(rent * notOne(between(`rent|${code}`, 0.7, 1.3))) : rec.baseRent,
       rentEscalation: rec.rentEscalation ? `${Math.round(between(`esc|${code}`, 2, 4))}% annually` : rec.rentEscalation,
       notes: rec.notes ? 'Sample lease notes.' : rec.notes,
       renewalOptions: (rec.renewalOptions || []).map(ro => ({ ...ro, notes: ro.notes ? 'Sample note.' : ro.notes })),
       criticalDates: (rec.criticalDates || []).map(cd => ({ ...cd, notes: cd.notes ? 'Sample note.' : cd.notes })),
-      files: (rec.files || []).map((f, i) => ({ ...f, name: `Sample Lease Document ${i + 1}.pdf` })),
+      files: (rec.files || []).map((f, i) => ({ ...f, name: `Sample Lease Document ${i + 1}.pdf`, size: typeof f.size === 'number' ? Math.round(f.size * notOne(between(`fs|${code}|${i}`, 0.7, 1.3))) : f.size })),
     };
   });
   return out;
@@ -335,7 +409,7 @@ function fakeHsaSignups(list) {
 
 function fakePoints(summary) {
   if (!summary) return summary;
-  const out = { ...summary, selfBalance: Math.round((summary.selfBalance || 0) * between('pts|self', 0.6, 1.4)) };
+  const out = { ...summary, selfName: fakePersonName(summary.selfName), selfBalance: Math.round((summary.selfBalance || 0) * between('pts|self', 0.6, 1.4)) };
   if (summary.companyWide) {
     out.companyWide = {
       ...summary.companyWide,
@@ -348,23 +422,32 @@ function fakePoints(summary) {
 
 // Loss Prevention ({ sales, att, reg } day maps, shapes in lossPrevention.js).
 // Names go through the shared name map so staff/guest matching still lines
-// up; dollar amounts are scaled per store; free-text reasons are replaced,
-// except the "vague" ones (".", "idk"...) the checks look for. Counts and
-// hours stay real so the same checks trip.
+// up; dollars, ticket counts, hours and missed punches are all scaled, so the
+// flags that trip are similar to the real ones but not the same. Invoice
+// numbers are swapped. Free-text reasons are replaced, except the "vague"
+// ones (".", "idk"...) the checks look for.
 const LP_VAGUE = /^(|\.+|\?+|idk|i dont know|na|n\/a|none|no|-+|x+|ok|even)$/i;
 const fakeLpReason = r => (!r || LP_VAGUE.test(r.trim()) ? r : 'Sample reason.');
-const fakeNameKeys = obj => Object.fromEntries(Object.entries(obj || {}).map(([n, v]) => [fakePersonName(n), v]));
 function fakeLpData(lp) {
   if (!lp) return lp;
-  const money = (code, v) => Math.round(v * between(`lp|${code}`, 0.7, 1.3) * 100) / 100;
-  const mapDays = (days, fn) => Object.fromEntries(Object.entries(days || {}).map(([d, v]) => [d, fn(v)]));
+  const money = (code, v) => cents(v * notOne(between(`lp|${code}`, 0.7, 1.3)));
+  const mapDays = (days, fn) => Object.fromEntries(Object.entries(days || {}).map(([d, v]) => [d, fn(v, d)]));
+  // The second number is part of the first (cash tickets of all tickets), so
+  // it gets its own multiplier or the real share would show through.
+  const counts = (code, seed, [first, part]) => {
+    const fakeFirst = fairRound(first * notOne(between(`lpn|${code}`, 0.75, 1.25)), seed);
+    return [fakeFirst, Math.min(fakeFirst, fairRound(part * notOne(between(`lpp|${code}`, 0.7, 1.3)), `${seed}|part`))];
+  };
+  const fakeInv = inv => (inv ? String(Math.floor(hash(`inv|${inv}`) * 9000000) + 1000000) : inv);
+  const countKeys = (obj, code, seed) => Object.fromEntries(Object.entries(obj || {}).map(([n, v]) => [fakePersonName(n), counts(code, `${seed}|${normName(n)}`, v)]));
   const mapStores = (stores, fn) => Object.fromEntries(Object.entries(stores || {}).map(([code, v]) => [code, fn(v, code)]));
   return {
-    sales: mapDays(lp.sales, stores => mapStores(stores, (ds, code) => ({
-      s: fakeNameKeys(ds.s),
-      c: fakeNameKeys(ds.c),
+    sales: mapDays(lp.sales, (stores, date) => mapStores(stores, (ds, code) => ({
+      s: countKeys(ds.s, code, `s|${date}`),
+      c: countKeys(ds.c, code, `c|${date}`),
       ev: (ds.ev || []).map(e => ({
         ...e,
+        inv: fakeInv(e.inv),
         n: e.n ? fakePersonName(e.n) : e.n,
         ...(e.g ? { g: fakePersonName(e.g) } : {}),
         ...(e.a != null ? { a: money(code, e.a) } : {}),
@@ -372,10 +455,39 @@ function fakeLpData(lp) {
         ...(e.why ? { why: fakeLpReason(e.why) } : {}),
       })),
     }))),
-    att: mapDays(lp.att, stores => mapStores(stores, people => fakeNameKeys(people))),
+    att: mapDays(lp.att, (stores, date) => mapStores(stores, (people, code) => Object.fromEntries(Object.entries(people || {}).map(([n, [hrs, svcH, mIn, mOut, isStylist]]) => {
+      const f = notOne(between(`lph|${code}`, 0.85, 1.15));
+      const missed = v => fairRound(v * notOne(between(`lpm|${code}`, 0.7, 1.3)), `m|${date}|${normName(n)}`);
+      const [fakeIn, fakeOut] = [missed(mIn), missed(mOut)];
+      return [fakePersonName(n), [cents(hrs * f), cents(svcH * f), fakeIn, fakeOut, isStylist]];
+    })))),
     reg: mapDays(lp.reg, rows => rows.map(([code, adj, reason, by, paid]) => [code, money(code, adj), fakeLpReason(reason), by ? fakePersonName(by) : by, money(code, paid)])),
   };
 }
+
+// Pay rates: one row per fake name, made from whoever the real rate lookup
+// matches (it also handles aliases and middle names, which faking the names
+// separately would break). Rates are nudged and employee numbers swapped.
+function fakePayRates(rows, aliases, history, weekly) {
+  if (!rows?.length) return [];
+  const rateFor = buildRateLookup(rows, aliases);
+  const names = new Set();
+  Object.values(history || {}).forEach(r => Object.keys(r.employees || {}).forEach(n => names.add(n)));
+  Object.values(weekly || {}).forEach(w => Object.values(w.stores || {}).forEach(s => (s.employees || []).forEach(e => names.add(e.name))));
+  const out = new Map();
+  names.forEach(real => {
+    const hit = rateFor(real);
+    const name = fakePersonName(real);
+    if (!hit || out.has(name)) return;
+    const rate = hit.rate == null ? null : cents(hit.rate * notOne(between(`rate|${hit.empNumber}`, 0.85, 1.15)));
+    out.set(name, { emp_number: String(Math.floor(hash(`emp|${hit.empNumber}`) * 900000) + 100000), name, raw_name: name, rate });
+  });
+  return [...out.values()];
+}
+
+// PDFs are real documents (contest standings, memos) that can't be faked, so
+// News shows its posts without them.
+const fakeNews = news => (news || []).map(({ pdf, pdfs, ...post }) => ({ ...post, pdfs: [] }));
 
 // One call from App.js — returns the fake counterpart of every dataset the
 // tabs render. `realEmployeesByStore` is the REAL fallback roster (used only
@@ -386,6 +498,10 @@ export function presenterView(real, realEmployeesByStore) {
     report: fakeReport(real.report),
     history: fakeHistory(real.history),
     giftCardHistory: fakeHistory(real.giftCardHistory),
+    tipsHistory: fakeHistory(real.tipsHistory),
+    payRates: fakePayRates(real.payRates, real.nameAliases, real.history, real.weeklyHistory),
+    nameAliases: {},
+    news: fakeNews(real.news),
     weeklyHistory: fakeWeeklyHistory(real.weeklyHistory),
     goals: fakeGoalsLike(real.goals),
     milestoneGoals: fakeGoalsLike(real.milestoneGoals),

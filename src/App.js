@@ -1874,7 +1874,7 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
     return () => { cancelled = true; };
   }, [token, range.start, range.end, presenting, isOwner]);
   const leaderTop = useMemo(() => {
-    if (!isOwner || presenting || !range.start || !range.end) return null;
+    if (!isOwner || !range.start || !range.end) return null;
     const rateFor = payRates.length ? buildRateLookup(payRates, nameAliases) : null;
     const rows = buildPayRows({ history, weeklyHistory, tipsHistory, start: range.start, end: range.end, rateFor });
     const chosen = payFocusName ? rows.find(r => normalizePersonName(r.name) === normalizePersonName(payFocusName)) : null;
@@ -1886,7 +1886,7 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
     const peers = buildPeerStats({ history, weeklyHistory, names, codes: result.stores.map(st => st.code), start: range.start, end: range.end });
     const lastDate = Object.values(picked.history).map(h => h.date).sort().pop() || null;
     return { top, result, peers, lastDate, rows, picked: !!chosen };
-  }, [isOwner, presenting, history, weeklyHistory, tipsHistory, payRates, nameAliases, payFocusName, range.start, range.end]);
+  }, [isOwner, history, weeklyHistory, tipsHistory, payRates, nameAliases, payFocusName, range.start, range.end]);
   const result = useMemo(() => {
     if (isOwner) return leaderTop?.result || (leaderTop ? { stores: [], total: null } : null);
     return state.data
@@ -1914,8 +1914,6 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
       ? dayCount(per.start, per.end) / dayCount(per.start, lastDate) : 1;
     return { pay: p, coaching: buildCoaching({ stores: result.stores, pay: p, peers, periodFactor }) };
   }, [result, isOwner, leaderTop, state.data, userRole, range.start, range.end]);
-
-  if (presenting) return <div className="empty-state"><p className="empty-title">My Numbers is off in presenter mode</p><p>It shows a real person's numbers.</p></div>;
 
   const prev = previousPayPeriod(today);
   const presets = [
@@ -8681,10 +8679,11 @@ function PresenterSetupTab({ presenting, onToggle }) {
   return (
     <div className="setup-section">
       <p className="chart-title">🎭 Presenter Mode</p>
-      <p className="step-body">Shows made-up numbers and names everywhere in the app so you can demo it without showing real data. Store names stay real; every sales figure, count, goal, rent amount, point balance, and person's name (stylists, managers, DLs, reviewers, HSA sign-ups) is swapped for a fake one. Review text is swapped for sample reviews.</p>
+      <p className="step-body">Shows made-up numbers and names everywhere in the app so you can demo it without showing real data. Store names stay real; every sales figure, count, goal, tip, pay rate, score, star rating, rent amount, point balance, and person's name (stylists, managers, DLs, reviewers, HSA sign-ups) is swapped for a fake one. Review text is swapped for sample reviews.</p>
       <ul className="step-body">
         <li><strong>Nothing is changed or saved.</strong> The fake numbers are generated in this browser from your real data on the fly. While presenter mode is on, every save, upload, import, delete, and redemption is blocked. Anything you type is thrown away when you turn it off.</li>
         <li><strong>Only you, only this browser.</strong> Nobody else who logs in sees fake data or has this option, even on this same computer. It stays on across page reloads for you until you turn it off.</li>
+        <li><strong>Every tab works, including My Numbers and the pay card.</strong> News posts show without their PDFs, since a real document can't be faked. Dates, store names, and company rules like the bonus formula stay real.</li>
         <li>Turning it off reloads the page with your real data.</li>
       </ul>
       <button className={presenting ? 'btn-ghost' : 'btn-primary'} onClick={() => onToggle(!presenting)}>
@@ -11527,19 +11526,20 @@ export default function App() {
   // Presenter mode: every tab gets these made-up stand-ins instead of the
   // real state. The real state itself is never touched, and all writes are
   // blocked (presenter.js), so nothing here can reach stored data.
-  const presenterData = useMemo(() => (presenting ? presenterView({
-    report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, focusStylists, salonChecks,
-  }, fallbackEmployeesByStore) : null), [presenting, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, focusStylists, salonChecks, fallbackEmployeesByStore]);
-  const presenterFallbackEmployees = useMemo(
-    () => (presenterData ? getEmployeesByStoreFromHistory(presenterData.history, presenterData.weeklyHistory) : null),
-    [presenterData]
-  );
-
   // Hourly pay rates (owner only, locked pay_rates table) and the POS-name
   // links from Setup › Employee Access, for base pay in the pay tracker.
   const [payRates, setPayRates] = useState([]);
   const [nameAliases, setNameAliases] = useState({});
   const [payRatesError, setPayRatesError] = useState(null);
+  const presenterData = useMemo(() => (presenting ? presenterView({
+    news, tipsHistory, payRates, nameAliases, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, focusStylists, salonChecks,
+  }, fallbackEmployeesByStore) : null), [presenting, news, tipsHistory, payRates, nameAliases, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, focusStylists, salonChecks, fallbackEmployeesByStore]);
+  const presenterFallbackEmployees = useMemo(
+    () => (presenterData ? getEmployeesByStoreFromHistory(presenterData.history, presenterData.weeklyHistory) : null),
+    [presenterData]
+  );
+
+  // Hourly pay rates: the state is declared above, with the presenter data.
   const refreshPayRates = useCallback(() => {
     if (!currentUser || currentUser.role !== 'owner') { setPayRates([]); setNameAliases({}); return; }
     payRatesLoad(currentUser.token).then(r => { if (r.ok) { setPayRates(r.rows || []); setPayRatesError(null); } else setPayRatesError(r.error); });
@@ -11578,27 +11578,29 @@ export default function App() {
   const [payFocusName, setPayFocusNameState] = useState(() => { try { return window.localStorage.getItem('payFocusName') || null; } catch { return null; } });
   const setPayFocusName = useCallback(name => {
     setPayFocusNameState(name || null);
+    if (isPresenting()) return; // a fake name must not replace the saved real pick
     try { if (name) window.localStorage.setItem('payFocusName', name); else window.localStorage.removeItem('payFocusName'); } catch { /* storage blocked */ }
   }, []);
 
-  // Homepage pay tracker: leadership preview only (owner, never while
-  // presenting, since it shows a real name and pay). Current pay period
+  // Homepage pay tracker: leadership preview only (owner; made-up people and
+  // pay while presenting). Current pay period
   // (1–15 / 16–end) through today; `through` is the last day with Sales-
   // Accrual or Attendance on file, so it's clear how fresh the numbers are.
   const payTracker = useMemo(() => {
-    if (!currentUser || currentUser.role !== 'owner' || presenting) return null;
+    if (!currentUser || currentUser.role !== 'owner') return null;
+    const src = presenterData || { history, weeklyHistory, tipsHistory, payRates, nameAliases };
     const now = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     const period = payPeriodFor(today);
     const end = today < period.end ? today : period.end;
-    const rateFor = payRates.length ? buildRateLookup(payRates, nameAliases) : null;
-    const rows = buildPayRows({ history, weeklyHistory, tipsHistory, start: period.start, end, rateFor });
-    const days = Object.values(history || {}).filter(r => r.date >= period.start && r.date <= end && r.employees && Object.keys(r.employees).length).map(r => r.date).sort();
+    const rateFor = src.payRates.length ? buildRateLookup(src.payRates, src.nameAliases) : null;
+    const rows = buildPayRows({ history: src.history, weeklyHistory: src.weeklyHistory, tipsHistory: src.tipsHistory, start: period.start, end, rateFor });
+    const days = Object.values(src.history || {}).filter(r => r.date >= period.start && r.date <= end && r.employees && Object.keys(r.employees).length).map(r => r.date).sort();
     const noRate = rateFor ? rows.filter(r => !r.rateMatched).map(r => `${r.name} (${r.store})`).sort() : [];
     // Leadership can pick anyone to show instead of the top TSTH person.
     const picked = payFocusName ? rows.find(r => normalizePersonName(r.name) === normalizePersonName(payFocusName)) : null;
     return { period, through: days[days.length - 1] || null, top: picked || topTsthRow(rows), picked: !!picked, rows, ratesLoaded: !!rateFor, noRate };
-  }, [currentUser, presenting, history, weeklyHistory, tipsHistory, payRates, nameAliases, payFocusName]);
+  }, [currentUser, presenterData, history, weeklyHistory, tipsHistory, payRates, nameAliases, payFocusName]);
 
   const handleTogglePresenter = on => {
     if (!currentUser || currentUser.role !== 'owner') return;
@@ -11634,7 +11636,8 @@ export default function App() {
 
   const d = presenterData
     ? { ...presenterData, fallbackEmployeesByStore: presenterFallbackEmployees }
-    : { report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, focusStylists, salonChecks, fallbackEmployeesByStore };
+    : { news, tipsHistory, payRates, nameAliases, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, focusStylists, salonChecks, fallbackEmployeesByStore };
+  const shownUserName = presenting ? fakePersonName(currentUser.name) : currentUser.name;
   const focusNames = currentFocusNames(d.focusStylists);
 
   return (
@@ -11650,7 +11653,7 @@ export default function App() {
         </div>
         <div className="header-right">
           {presenting && <button className="presenter-pill" onClick={() => handleTogglePresenter(false)} title="Presenter mode is on — made-up data. Click to turn off.">🎭 Presenter</button>}
-          <span className="header-user">{currentUser.name} · {ROLE_LABELS[currentUser.role] || currentUser.role}</span>
+          <span className="header-user">{shownUserName} · {ROLE_LABELS[currentUser.role] || currentUser.role}</span>
           <button className="btn-ghost" onClick={handleLogout}>Log Out</button>
         </div>
       </header>
@@ -11659,16 +11662,16 @@ export default function App() {
       <main className="app-main" key={presenting ? 'main-presenting' : 'main-live'}>
         {needsReport && <div className="empty-state"><p className="empty-title">No data yet</p><p>Go to the Setup tab and either upload this week's Stylist Report, or run a Sales-Accrual/Attendance historical import.</p></div>}
         {tab === 'Homepage' && (
-          <HomepageTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} fallbackEmployeesByStore={d.fallbackEmployeesByStore} news={news} events={events} reviews={d.reviews} onOpenNews={handleOpenNews}
+          <HomepageTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} fallbackEmployeesByStore={d.fallbackEmployeesByStore} news={d.news} events={events} reviews={d.reviews} onOpenNews={handleOpenNews}
             canPost={currentUser.role === 'owner' && !presenting} onAddNews={handleAddNews} onAddEvent={handleAddEvent}
             newsGroups={newsGroups} onImageError={msg => showToast(msg, 'error')}
             rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} rankRole={currentUser.role}
             payTracker={payTracker} onPayPick={setPayFocusName} payFocusName={payFocusName}
           />
         )}
-        {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={currentUser.name} userRole={currentUser.role} presenting={presenting} isOwner={currentUser.role === 'owner'} history={history} weeklyHistory={weeklyHistory} tipsHistory={tipsHistory} payRates={payRates} nameAliases={nameAliases} payFocusName={payFocusName} onPayPick={setPayFocusName} />}
+        {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={shownUserName} userRole={currentUser.role} presenting={presenting} isOwner={currentUser.role === 'owner'} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={d.tipsHistory} payRates={d.payRates} nameAliases={d.nameAliases} payFocusName={payFocusName} onPayPick={setPayFocusName} />}
         {tab === 'News' && (
-          <NewsTab news={news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={currentUser} newsReads={d.newsReads} onSignOff={handleSignOffNews} />
+          <NewsTab news={d.news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={currentUser} newsReads={d.newsReads} onSignOff={handleSignOffNews} />
         )}
         {tab === 'HSA' && (
           <HsaTab events={events} hsaSignups={d.hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} onEditSignup={handleEditHsaSignup} onAddClass={handleAddHsaClass} onEditClass={handleEditHsaClass} onDeleteClass={handleDeleteEvent} />
@@ -11778,14 +11781,14 @@ export default function App() {
             managersProps={{ report: d.report, managers: d.managers, onSaveManager: handleSaveManager, onImportManagers: handleImportManagers }}
             milestoneGoalsProps={{ report: d.report, milestoneGoals: d.milestoneGoals, onSaveMilestoneGoal: handleSaveMilestoneGoal, onImportMilestoneGoals: handleImportMilestoneGoals }}
             homepageAdminProps={{
-              news, events, newsGroups, newsReads: d.newsReads,
+              news: d.news, events, newsGroups, newsReads: d.newsReads,
               onAddNews: handleAddNews, onUpdateNews: handleUpdateNews, onDeleteNews: handleDeleteNews,
               onAddEvent: handleAddEvent, onUpdateEvent: handleUpdateEvent, onDeleteEvent: handleDeleteEvent,
               onRenameNewsGroup: handleRenameNewsGroup, onDeleteNewsGroup: handleDeleteNewsGroup,
               onReorderNewsGroup: handleReorderNewsGroup, onSetNewsGroupColor: handleSetNewsGroupColor,
               onImageError: msg => showToast(msg, 'error'),
             }}
-            historyProps={{ history: d.history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory, reviews: d.reviews, onImportReviewsBatch: handleImportReviewsBatch, giftCardHistory: d.giftCardHistory, onImportGiftCardBatch: handleImportGiftCardBatch, tipsHistory, onImportTipsBatch: handleImportTipsBatch, onImportPayRates: handleImportPayRates, payRatesInfo: { count: payRates.length, error: payRatesError, noRate: payTracker?.noRate || [] } }}
+            historyProps={{ history: d.history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory, reviews: d.reviews, onImportReviewsBatch: handleImportReviewsBatch, giftCardHistory: d.giftCardHistory, onImportGiftCardBatch: handleImportGiftCardBatch, tipsHistory: d.tipsHistory, onImportTipsBatch: handleImportTipsBatch, onImportPayRates: handleImportPayRates, payRatesInfo: { count: d.payRates.length, error: payRatesError, noRate: payTracker?.noRate || [] } }}
             uploadProps={{
               report: d.report, uploading, onFile: handleFile, onClear: handleClearAll,
               employeeRoster: d.employeeRoster, uploadingRoster, onRosterFile: handleRosterFile, onClearRoster: handleClearRoster,
@@ -11802,7 +11805,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} salonQuestions={salonQuestions} payTracker={payTracker} myNumbersSummary={myNumbersSummary} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
+      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={d.news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} salonQuestions={salonQuestions} payTracker={payTracker} myNumbersSummary={myNumbersSummary} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
     </div>
     </FocusNamesContext.Provider>
   );
