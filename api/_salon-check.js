@@ -15,21 +15,21 @@
 import { createServiceClient, requireSession } from '../src/serverAuth.js';
 import { getLeaderForStoreCode } from '../src/leaderRoster.js';
 import { STORE_CODE_TO_NAME } from '../src/storeDirectory.js';
-import { SALON_CHECK_SECTIONS, SALON_CHECK_ITEMS, SALON_CHECK_ANSWERS, scoreSalonCheck } from '../src/salonCheck.js';
+import { SALON_CHECK_ANSWERS, activeChecklist, checklistItems, scoreSalonCheck, visitChecklist } from '../src/salonCheck.js';
 import { BRAND, FONT, escapeHtml } from './leaderboard-email.js';
 
-const ITEM_IDS = new Set(SALON_CHECK_ITEMS.map(i => i.id));
 const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-function cleanVisit(id, code, v, employee) {
+function cleanVisit(id, code, v, employee, sections) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return { error: 'A visit must be an object.' };
   if (!ISO_DATE.test(v.date || '')) return { error: 'Pick the visit date.' };
+  const itemIds = new Set(checklistItems(sections).map(i => i.id));
   const answers = {};
-  Object.entries(v.answers || {}).forEach(([k, a]) => { if (ITEM_IDS.has(k) && SALON_CHECK_ANSWERS.includes(a)) answers[k] = a; });
+  Object.entries(v.answers || {}).forEach(([k, a]) => { if (itemIds.has(k) && SALON_CHECK_ANSWERS.includes(a)) answers[k] = a; });
   const notes = {};
-  Object.entries(v.notes || {}).forEach(([k, n]) => { const t = str(n, 1000); if (ITEM_IDS.has(k) && t) notes[k] = t; });
-  const sc = scoreSalonCheck(answers);
+  Object.entries(v.notes || {}).forEach(([k, n]) => { const t = str(n, 1000); if (itemIds.has(k) && t) notes[k] = t; });
+  const sc = scoreSalonCheck(answers, sections);
   if (sc.answered < sc.total) {
     const left = sc.total - sc.answered;
     return { error: `Answer every item first (${left} still blank).` };
@@ -41,6 +41,9 @@ function cleanVisit(id, code, v, employee) {
       team: str(v.team, 400),
       followUp: str(v.followUp, 3000),
       answers, notes,
+      // This visit's own copy of the questions, so adding or deleting one
+      // later never changes this report.
+      checklist: sections.filter(s => s.items.length),
       yes: sc.yes, no: sc.no, na: sc.na, total: sc.total, score: sc.score,
       by: str(v.by, 120) || employee.name || '',
       savedAt: str(v.savedAt, 40) || new Date().toISOString(),
@@ -51,8 +54,11 @@ function cleanVisit(id, code, v, employee) {
 
 // patch: { [storeCode]: { [visitId]: visit | null } }. Returns { patch } or
 // { error, status }. Store scoping (a DL only their own codes) is checked
-// afterward by the caller, same as every other patchable key.
-export function cleanSalonCheckPatch(patch, employee) {
+// afterward by the caller, same as every other patchable key. `config` is the
+// `salon_check_questions` row: visits are checked and scored against the
+// questions in use now, not what the browser sent.
+export function cleanSalonCheckPatch(patch, employee, config) {
+  const sections = activeChecklist(config);
   if (!patch || typeof patch !== 'object') return { error: 'Nothing to save.' };
   const out = {};
   for (const [code, visits] of Object.entries(patch)) {
@@ -65,7 +71,7 @@ export function cleanSalonCheckPatch(patch, employee) {
         out[code][id] = null;
         continue;
       }
-      const { visit, error } = cleanVisit(id, code, v, employee);
+      const { visit, error } = cleanVisit(id, code, v, employee, sections);
       if (error) return { error };
       out[code][id] = visit;
     }
@@ -87,7 +93,8 @@ const MARK = {
 
 export function buildSalonCheckEmail({ visit, storeName, siteUrl }) {
   const td = `padding:7px 9px;font-family:${FONT};font-size:13px;border-bottom:1px solid ${BRAND.line};vertical-align:top;`;
-  const sections = SALON_CHECK_SECTIONS.map(sec => {
+  const checklist = visitChecklist(visit);
+  const sections = checklist.map(sec => {
     const rows = sec.items.map(i => {
       const a = visit.answers?.[i.id];
       const m = MARK[a] || { text: '&mdash;', color: BRAND.inkSoft, bg: BRAND.card };
@@ -99,7 +106,7 @@ export function buildSalonCheckEmail({ visit, storeName, siteUrl }) {
     }).join('');
     return `<tr><td colspan="2" style="padding:9px 9px 6px;font-family:${FONT};font-size:13px;font-weight:700;color:#fff;background:${BRAND.navy2};">${escapeHtml(sec.title)}</td></tr>${rows}`;
   }).join('');
-  const noItems = SALON_CHECK_ITEMS.filter(i => visit.answers?.[i.id] === 'no');
+  const noItems = checklistItems(checklist).filter(i => visit.answers?.[i.id] === 'no');
   const info = [
     ['Visit date', fmtDate(visit.date)],
     ['Manager', visit.manager || '&mdash;'],
@@ -143,6 +150,58 @@ export function buildSalonCheckEmail({ visit, storeName, siteUrl }) {
     </table>
   </td></tr></table></body></html>`;
   return { subject: `Shear Check: ${storeName} scored ${visit.score == null ? 'n/a' : `${Math.round(visit.score * 100)}%`} (${fmtDate(visit.date)})`, html };
+}
+
+// Add or delete a checklist question (owner only). Body: { op: 'add',
+// sectionId, label } or { op: 'remove', itemId }. Saved visits aren't touched.
+export async function handleSalonCheckQuestion(req, res) {
+  const supabase = createServiceClient();
+  if (!supabase) {
+    res.status(500).json({ error: 'Login is not configured on this deployment.' });
+    return;
+  }
+  const { token, op, sectionId, label, itemId } = req.body || {};
+  const { employee, error: sessionError } = await requireSession(supabase, token);
+  if (!employee) {
+    res.status(401).json({ error: sessionError });
+    return;
+  }
+  if (employee.role !== 'owner') {
+    res.status(403).json({ error: 'Only leadership can change the checklist questions.' });
+    return;
+  }
+  try {
+    const { data: row, error: loadError } = await supabase.from('weekly_report').select('payload').eq('report_id', 'salon_check_questions').maybeSingle();
+    if (loadError) throw new Error(loadError.message);
+    const config = { added: row?.payload?.added || [], removed: row?.payload?.removed || [] };
+    const sections = activeChecklist(config);
+    let next;
+    if (op === 'add') {
+      const section = sections.find(s => s.id === sectionId);
+      const text = str(label, 200);
+      if (!section) { res.status(400).json({ error: 'That section does not exist.' }); return; }
+      if (!text) { res.status(400).json({ error: 'Type the question first.' }); return; }
+      if (section.items.some(i => i.label.toLowerCase() === text.toLowerCase())) {
+        res.status(400).json({ error: 'That question is already in this section.' });
+        return;
+      }
+      const id = `q-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      next = { ...config, added: [...config.added, { id, sectionId, label: text, by: employee.name || '', at: new Date().toISOString() }] };
+    } else if (op === 'remove') {
+      const items = checklistItems(sections);
+      if (!items.some(i => i.id === itemId)) { res.status(400).json({ error: 'That question is already gone.' }); return; }
+      if (items.length === 1) { res.status(400).json({ error: 'The checklist needs at least one question.' }); return; }
+      next = { ...config, removed: [...config.removed, itemId] };
+    } else {
+      res.status(400).json({ error: 'Unknown question change.' });
+      return;
+    }
+    const { error: saveError } = await supabase.from('weekly_report').upsert({ report_id: 'salon_check_questions', payload: next }, { onConflict: 'report_id' });
+    if (saveError) throw new Error(saveError.message);
+    res.status(200).json({ ok: true, data: next });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 }
 
 export async function handleSalonCheckEmail(req, res) {

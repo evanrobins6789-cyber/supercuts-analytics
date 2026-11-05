@@ -12,9 +12,9 @@ import {
   loadScoped, loadScopedByPrefix, saveScoped, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
   pointsBalance, pointsAllBalances, pointsTransactions, pointsDeleteTransaction, finalizeGoals,
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled,
-  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank, lpLoad, lpSave, emailSalonCheck, myNumbers, payRatesLoad, payRatesUpload,
+  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank, lpLoad, lpSave, emailSalonCheck, changeSalonCheckQuestion, myNumbers, payRatesLoad, payRatesUpload,
 } from './auth';
-import { SALON_CHECK_SECTIONS, SALON_CHECK_ITEMS, scoreSalonCheck, salonCheckList } from './salonCheck';
+import { activeChecklist, checklistItems, visitChecklist, scoreSalonCheck, salonCheckList } from './salonCheck';
 import { LP_RULES, parseLpSalesFile, parseLpAttendanceFile, parseLpRegisterFile, mergeLpDays, lpMonthPayload, analyzeLp, lpDefaultRange } from './lossPrevention';
 import { LEADER_ROSTER_SECTIONS as REAL_LEADER_ROSTER_SECTIONS, getLeaderForStoreCode as realGetLeaderForStoreCode } from './leaderRoster';
 import { isPresenting, initPresenterMode, setPresenterMode, presenterView, fakeLeaderSections, fakePersonName } from './presenter';
@@ -1518,6 +1518,7 @@ const SITE_TIPS = [
   { icon: '🥅', title: 'Setting goals', body: 'On the Goals tab, set your stores’ monthly Retail $, Color $, Bottles, Signature Service and % goals. Sales and Milestone goals are set by leadership. Goals save when you click out of the box.', roles: LEADERS },
   { icon: '🗓️', title: 'Goals by the month', body: 'Every tab compares sales with the full monthly goal, so a week into the month "vs Goal" shows progress toward the whole month.', roles: LEADERS },
   { icon: '✂️', title: 'Shear Check', body: 'Use Shear Check during a salon visit: pick the store, answer each item Yes / No / N/A, add notes, and email it to that store’s DL. Scores are tracked over time.', roles: ['owner', 'district_leader'] },
+  { icon: '✂️', title: 'Change the Shear Check', body: 'Use Add question or Delete question in any Shear Check section to change the checklist for every future visit. Saved reports keep the questions and score they were filled out with.', roles: ['owner'] },
   { icon: '⭐', title: 'Focus Stylist', body: 'Tap FOCUS next to a stylist on the Overview or DL tab to pick them for the month, then track their TSTH and cuts-per-hour goals on the Focus Stylist tab. They get a FOCUS STYLIST tag next to their name.', roles: ['owner', 'district_leader'] },
   { icon: '🎁', title: 'Gift Cards', body: 'The Gift Cards tab shows gift card sales and progress toward the gift card goal for your stores. Tap a store to see who sold them.', roles: ['owner', 'district_leader'] },
   { icon: '👀', title: 'Pick who’s on the pay card', body: 'On the Homepage pay card or the My Numbers tab, use the "Showing" menu to look at any employee. It lists everyone by TSTH, highest first: green is bonusing, red is not. It starts on the top-TSTH person.', roles: ['owner'] },
@@ -5833,9 +5834,10 @@ const scLoadDraft = () => { try { const d = JSON.parse(window.localStorage.getIt
 const scSaveDraft = f => { try { window.localStorage.setItem(SC_DRAFT_KEY, JSON.stringify(f)); } catch { /* storage off: the draft just isn't kept */ } };
 const scClearDraft = () => { try { window.localStorage.removeItem(SC_DRAFT_KEY); } catch { /* ignore */ } };
 
-function ShearCheckTab({ stores, salonChecks, managers, onSave, onEmail, onDelete, isOwner, userName }) {
+function ShearCheckTab({ stores, salonChecks, questions, managers, onSave, onEmail, onDelete, onChangeQuestion, canEditQuestions, isOwner, userName }) {
   const [view, setView] = useState('new'); // 'new' | 'scores' | 'visits'
   const visits = useMemo(() => salonCheckList(salonChecks), [salonChecks]);
+  const sections = useMemo(() => activeChecklist(questions), [questions]);
   return (
     <div className="tab-content">
       <div className="sc-head">
@@ -5849,21 +5851,27 @@ function ShearCheckTab({ stores, salonChecks, managers, onSave, onEmail, onDelet
           <button type="button" className={`view-toggle-btn ${view === 'visits' ? 'active' : ''}`} onClick={() => setView('visits')}>Past Visits ({visits.length})</button>
         </div>
       </div>
-      {view === 'new' && <ShearCheckForm stores={stores} visits={visits} managers={managers} onSave={onSave} onEmail={onEmail} userName={userName} onSaved={() => setView('visits')} />}
+      {view === 'new' && <ShearCheckForm stores={stores} visits={visits} sections={sections} managers={managers} onSave={onSave} onEmail={onEmail} onChangeQuestion={onChangeQuestion} canEditQuestions={canEditQuestions} userName={userName} onSaved={() => setView('visits')} />}
       {view === 'scores' && <ShearCheckScores stores={stores} visits={visits} />}
       {view === 'visits' && <ShearCheckVisits stores={stores} visits={visits} onEmail={onEmail} onDelete={onDelete} isOwner={isOwner} />}
     </div>
   );
 }
 
-function ShearCheckForm({ stores, visits, managers, onSave, onEmail, userName, onSaved }) {
+function ShearCheckForm({ stores, visits, sections, managers, onSave, onEmail, onChangeQuestion, canEditQuestions, userName, onSaved }) {
   const [form, setForm] = useState(() => scLoadDraft() || scEmptyForm());
   const [busy, setBusy] = useState(null); // 'save' | 'email' | null
   const [openNotes, setOpenNotes] = useState({}); // phone only: note boxes opened with ✎
+  const [addingTo, setAddingTo] = useState(null); // section id with the Add question box open
+  const [newQuestion, setNewQuestion] = useState('');
+  const [deletingIn, setDeletingIn] = useState(null); // section id showing delete buttons
+  const [questionBusy, setQuestionBusy] = useState(false);
   useEffect(() => { scSaveDraft(form); }, [form]);
   const groups = useMemo(() => groupStoresByLeader(stores), [stores]);
   const leader = form.code ? getLeaderForStoreCode(form.code) : null;
-  const score = scoreSalonCheck(form.answers);
+  // Always the questions in use now, so a draft's answers to a deleted
+  // question don't count and a newly added one has to be answered.
+  const score = scoreSalonCheck(form.answers, sections);
   const left = score.total - score.answered;
   const lastVisit = form.code ? visits.find(v => v.code === form.code) : null;
 
@@ -5893,6 +5901,20 @@ function ShearCheckForm({ stores, visits, managers, onSave, onEmail, userName, o
     setBusy(null);
   };
   const startOver = () => { if (window.confirm('Clear this checklist and start over?')) { scClearDraft(); setForm(scEmptyForm()); } };
+  const openAdd = id => { setAddingTo(addingTo === id ? null : id); setNewQuestion(''); setDeletingIn(null); };
+  const saveQuestion = async sectionId => {
+    if (!newQuestion.trim() || questionBusy) return;
+    setQuestionBusy(true);
+    const r = await onChangeQuestion({ op: 'add', sectionId, label: newQuestion });
+    setQuestionBusy(false);
+    if (r?.ok) { setAddingTo(null); setNewQuestion(''); }
+  };
+  const removeQuestion = async item => {
+    if (questionBusy || !window.confirm(`Delete "${item.label}" from the checklist?\n\nFuture visits won't ask it, and scores will be out of the remaining questions. Saved reports stay exactly as they are.`)) return;
+    setQuestionBusy(true);
+    await onChangeQuestion({ op: 'remove', itemId: item.id });
+    setQuestionBusy(false);
+  };
 
   return (
     <div className="sc-form">
@@ -5925,11 +5947,15 @@ function ShearCheckForm({ stores, visits, managers, onSave, onEmail, userName, o
           with the note on the same line. On a phone the note box stays
           hidden until the item is marked No, has text, or ✎ is tapped. */}
       <div className="sc-card sc-checklist">
-        {SALON_CHECK_SECTIONS.map((sec, si) => (
+        {sections.filter(sec => sec.items.length || canEditQuestions).map((sec, si) => (
           <React.Fragment key={sec.id}>
             <div className="sc-sec-bar">
               <span>{si + 1}. {sec.title}</span>
-              <button type="button" className="sc-sec-yes" onClick={() => markSection(sec, 'yes')}>Mark rest Yes</button>
+              <div className="sc-sec-btns">
+                {canEditQuestions && <button type="button" className="sc-sec-yes" onClick={() => openAdd(sec.id)}>Add question</button>}
+                {canEditQuestions && <button type="button" className="sc-sec-yes" onClick={() => { setDeletingIn(deletingIn === sec.id ? null : sec.id); setAddingTo(null); }}>{deletingIn === sec.id ? 'Done deleting' : 'Delete question'}</button>}
+                <button type="button" className="sc-sec-yes" onClick={() => markSection(sec, 'yes')}>Mark rest Yes</button>
+              </div>
             </div>
             {sec.items.map(item => {
               const a = form.answers[item.id];
@@ -5942,12 +5968,24 @@ function ShearCheckForm({ stores, visits, managers, onSave, onEmail, userName, o
                       <button key={k} type="button" className={`sc-ans sc-ans-${k} ${a === k ? 'on' : ''}`} onClick={() => answer(item.id, k)}>{label}</button>
                     ))}
                   </div>
-                  <span className="sc-item-label">{item.label}</span>
+                  <span className="sc-item-label">
+                    {deletingIn === sec.id && <button type="button" className="sc-q-delete" aria-label={`Delete ${item.label}`} disabled={questionBusy} onClick={() => removeQuestion(item)}>✕</button>}
+                    {item.label}
+                  </span>
                   <button type="button" className="sc-note-toggle" aria-label="Add a note" onClick={() => setOpenNotes(prev => ({ ...prev, [item.id]: !prev[item.id] }))}>✎</button>
                   <input type="text" className="sc-note" placeholder={a === 'no' ? 'What needs fixing?' : 'Note'} value={noteText} onChange={e => note(item.id, e.target.value)} />
                 </div>
               );
             })}
+            {addingTo === sec.id && (
+              <div className="sc-q-add">
+                <input type="text" className="text-input" autoFocus maxLength={200} placeholder={`New question for ${sec.title}`} value={newQuestion}
+                  onChange={e => setNewQuestion(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); saveQuestion(sec.id); } else if (e.key === 'Escape') setAddingTo(null); }} />
+                <button type="button" className="sc-btn-save" disabled={!newQuestion.trim() || questionBusy} onClick={() => saveQuestion(sec.id)}>{questionBusy ? 'Saving…' : 'Save question'}</button>
+                <button type="button" className="link-btn" onClick={() => setAddingTo(null)}>Cancel</button>
+              </div>
+            )}
           </React.Fragment>
         ))}
       </div>
@@ -6063,7 +6101,7 @@ function ShearCheckVisits({ stores, visits, onEmail, onDelete, isOwner }) {
             {isOpen && (
               <div className="sc-visit-body">
                 <p className="sc-visit-meta">Manager: {v.manager || '—'} · Team: {v.team || '—'}</p>
-                {SALON_CHECK_SECTIONS.map(sec => (
+                {visitChecklist(v).map(sec => (
                   <div key={sec.id} className="sc-visit-sec">
                     <p className="sc-visit-sec-title">{sec.title}</p>
                     {sec.items.map(i => {
@@ -7944,7 +7982,7 @@ function topEmployeeLine(employees, n = 5) {
     .map(e => `${e.name} $${Math.round(e[key] || 0)}`).join(', ');
   return `Sales: ${topBy('sales')} | Retail: ${topBy('retail')} | Color: ${topBy('colorSales')}`;
 }
-function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, salonChecks, payTracker = null, myNumbersSummary = null) {
+function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, salonChecks, payTracker = null, myNumbersSummary = null, salonQuestions = null) {
   const employeesForCodeCtx = code => {
     if (report && !isReportStale(report)) return report.stores.find(st => st.code === code)?.employees || null;
     return fallbackEmployeesByStore?.[code] || null;
@@ -8110,12 +8148,12 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   if (scVisits.length) {
     const pctStr = x => (x == null ? 'n/a' : `${Math.round(x * 100)}%`);
     const avgOf = list => { const v = list.filter(x => x.score != null); return v.length ? v.reduce((a, x) => a + x.score, 0) / v.length : null; };
-    lines.push(`SHEAR CHECK SALON VISITS (the Shear Check tab: an in-person salon checklist of ${SALON_CHECK_ITEMS.length} items across ${SALON_CHECK_SECTIONS.length} areas, each marked Yes/No/N/A; score = Yes ÷ (Yes + No), N/A not counted; saved visits are emailed to the store's DL). ${scVisits.length} visit(s) on file, all-time average ${pctStr(avgOf(scVisits))}.`);
+    lines.push(`SHEAR CHECK SALON VISITS (the Shear Check tab: an in-person salon checklist, currently ${checklistItems(activeChecklist(salonQuestions)).length} items across ${activeChecklist(salonQuestions).filter(s => s.items.length).length} areas, each marked Yes/No/N/A; leadership can add or delete questions, and each saved visit keeps the questions and score it was filled out with, so older visits may have a different number of questions; score = Yes ÷ (Yes + No), N/A not counted; saved visits are emailed to the store's DL). ${scVisits.length} visit(s) on file, all-time average ${pctStr(avgOf(scVisits))}.`);
     const byCode = {};
     scVisits.forEach(v => { (byCode[v.code] = byCode[v.code] || []).push(v); });
     Object.entries(byCode).forEach(([code, list]) => {
       const last = list[0];
-      const noItems = SALON_CHECK_ITEMS.filter(i => last.answers?.[i.id] === 'no').map(i => `${i.label}${last.notes?.[i.id] ? ` (${last.notes[i.id]})` : ''}`);
+      const noItems = checklistItems(visitChecklist(last)).filter(i => last.answers?.[i.id] === 'no').map(i => `${i.label}${last.notes?.[i.id] ? ` (${last.notes[i.id]})` : ''}`);
       lines.push(`${STORE_CODE_TO_NAME[code] || `Store ${code}`} (DL ${getLeaderForStoreCode(code)?.leaderName || 'none'}): ${list.length} visit(s), average ${pctStr(avgOf(list))}; last visit ${last.date} by ${last.by || '?'} scored ${pctStr(last.score)}${noItems.length ? `; marked No: ${noItems.join('; ')}` : ''}${last.followUp ? `; follow-up for next visit: ${last.followUp}` : ''}. Earlier scores: ${list.slice(1, 6).map(v => `${v.date} ${pctStr(v.score)}`).join(', ') || 'none'}.`);
     });
     lines.push('');
@@ -8565,7 +8603,7 @@ async function buildRankContext(rankToken) {
   return lines.join('\n');
 }
 
-function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, salonChecks, rankToken, payTracker = null, myNumbersSummary = null }) {
+function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, salonChecks, salonQuestions, rankToken, payTracker = null, myNumbersSummary = null }) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -8578,7 +8616,7 @@ function AIChatWidget({ report, fallbackEmployeesByStore, history, weeklyHistory
     setInput('');
     setLoading(true);
     try {
-      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, salonChecks, payTracker, myNumbersSummary)
+      const context = buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory, goals, reviews, employeeRoster, reviewNotes, goldCombs, managers, milestoneGoals, news, events, points, hsaSignups, leases, newsReads, giftCardHistory, lpData, focusStylists, salonChecks, payTracker, myNumbersSummary, salonQuestions)
         + await buildRankContext(rankToken);
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -9949,6 +9987,7 @@ export default function App() {
   const [milestoneGoals, setMilestoneGoals] = useState({});
   const [focusStylists, setFocusStylists] = useState({});
   const [salonChecks, setSalonChecks] = useState({});
+  const [salonQuestions, setSalonQuestions] = useState({}); // leadership's added/deleted Shear Check questions
   const [leases, setLeases] = useState({}); // owner-only: { [storeCode]: LeaseRecord }, see LeasesTab
   const [reviews, setReviews] = useState(null);
   const [reviewNotes, setReviewNotes] = useState({});
@@ -10042,9 +10081,11 @@ export default function App() {
       loadScoped('daily_history', token), loadScoped('weekly_history', token), // legacy single-row format, if anything was saved before chunking
       loadScoped('focus_stylists', token),
       loadScoped('salon_checks', token),
-    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, newsReadsRes, hsaSignupsRes, leasesRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes, focusStylistsRes, salonChecksRes]) => {
+      loadScoped('salon_check_questions', token),
+    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, newsReadsRes, hsaSignupsRes, leasesRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes, focusStylistsRes, salonChecksRes, salonQuestionsRes]) => {
       if (focusStylistsRes.data) setFocusStylists(focusStylistsRes.data);
       if (salonChecksRes.data) setSalonChecks(salonChecksRes.data);
+      if (salonQuestionsRes.data) setSalonQuestions(salonQuestionsRes.data);
       if (reportRes.data) setReport(ensureReportDerivedFields(reportRes.data)); else if (currentUser.role === 'owner') { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
@@ -10533,6 +10574,20 @@ export default function App() {
       showToast(`Salon check saved for ${STORE_CODE_TO_NAME[visit.code] || visit.code}.`);
     } else {
       showToast(`Salon check not saved: ${r.error}`, 'error');
+      // Leadership may have changed the questions since this page loaded:
+      // refresh them so any new one appears on the form.
+      const fresh = await loadScoped('salon_check_questions', currentUser.token);
+      if (fresh.data) setSalonQuestions(fresh.data);
+    }
+    return r;
+  }, [currentUser]);
+  const handleChangeSalonQuestion = useCallback(async change => {
+    const r = await changeSalonCheckQuestion(currentUser.token, change);
+    if (r.ok) {
+      setSalonQuestions(r.data || {});
+      showToast(change.op === 'add' ? 'Question added. Future visits will include it.' : 'Question deleted. Saved reports keep it.');
+    } else {
+      showToast(`Question not changed: ${r.error}`, 'error');
     }
     return r;
   }, [currentUser]);
@@ -11628,8 +11683,9 @@ export default function App() {
         {tab === 'Shear Check' && canSalonCheck && (
           <ShearCheckTab
             stores={(d.report ? d.report.stores.map(s => ({ name: s.name, code: s.code })) : Object.keys(d.fallbackEmployeesByStore || {}).map(code => ({ code, name: STORE_CODE_TO_NAME[code] || `Store ${code}` }))).sort((a, b) => a.name.localeCompare(b.name))}
-            salonChecks={d.salonChecks} managers={d.managers}
+            salonChecks={d.salonChecks} questions={salonQuestions} managers={d.managers}
             onSave={handleSaveSalonCheck} onEmail={handleEmailSalonCheck} onDelete={handleDeleteSalonCheck}
+            onChangeQuestion={handleChangeSalonQuestion} canEditQuestions={currentUser.role === 'owner' && !presenting}
             isOwner={currentUser.role === 'owner'} userName={currentUser.name} />
         )}
         {!needsReport && tab === 'Employees' && (report || hasHistoricalData) && (
@@ -11746,7 +11802,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} payTracker={payTracker} myNumbersSummary={myNumbersSummary} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
+      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} salonQuestions={salonQuestions} payTracker={payTracker} myNumbersSummary={myNumbersSummary} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
     </div>
     </FocusNamesContext.Provider>
   );

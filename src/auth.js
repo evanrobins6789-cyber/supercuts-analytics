@@ -239,6 +239,11 @@ export function pointsMarkFulfilled(token, id, fulfilled) {
 }
 
 // Shear Check: email one saved salon visit to that store's DL (api/_salon-check.js).
+// Shear Check: add or delete a checklist question (owner only). `change` is
+// { op: 'add', sectionId, label } or { op: 'remove', itemId }.
+export function changeSalonCheckQuestion(token, change) {
+  return postWrite('/api/scoped-data', { action: 'salon-check-question', token, ...change });
+}
 export function emailSalonCheck(token, code, id) {
   return postWrite('/api/scoped-data', { action: 'salon-check-email', token, code, id });
 }

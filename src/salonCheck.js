@@ -3,8 +3,14 @@
 // the DL email (api/_salon-check.js), so the items and the score math can't
 // drift apart.
 //
-// Item ids are stored with every saved visit. Never reuse or renumber an id:
-// add new items with new ids, and old visits keep reading correctly.
+// Item ids are stored with every saved visit. Never reuse or renumber an id.
+//
+// Leadership adds and deletes questions on the tab, stored separately in the
+// `salon_check_questions` row as { added: [{ id, sectionId, label }], removed:
+// [itemId] }. Don't edit SALON_CHECK_SECTIONS to change the checklist: it's the
+// base list, and visits saved before 2026-11-05 have no copy of their own
+// questions, so they display from it. Every later visit stores its own
+// `checklist` copy, so a saved report never changes (visitChecklist).
 //
 // Score = Yes ÷ (Yes + No). N/A items are left out. The printed sheet says
 // "÷ 21", but it actually has 32 items and an N/A column, so dividing by the
@@ -73,21 +79,41 @@ export const SALON_CHECK_SECTIONS = [
   },
 ];
 
-export const SALON_CHECK_ITEMS = SALON_CHECK_SECTIONS.flatMap(s => s.items.map(i => ({ ...i, sectionId: s.id, sectionTitle: s.title })));
 export const SALON_CHECK_ANSWERS = ['yes', 'no', 'na'];
+
+export const checklistItems = sections => sections.flatMap(s => s.items);
+
+// The questions in use today: the base list, plus added ones at the end of
+// their section, minus deleted ones. Empty sections stay, so leadership can
+// still add to them.
+export function activeChecklist(config) {
+  const removed = new Set(config?.removed || []);
+  const added = config?.added || [];
+  return SALON_CHECK_SECTIONS.map(s => ({
+    id: s.id,
+    title: s.title,
+    items: [...s.items, ...added.filter(q => q.sectionId === s.id).map(({ id, label }) => ({ id, label }))].filter(i => !removed.has(i.id)),
+  }));
+}
+
+// The questions a saved visit was filled out with.
+export function visitChecklist(visit) {
+  return Array.isArray(visit?.checklist) ? visit.checklist : SALON_CHECK_SECTIONS;
+}
 
 // { yes, no, na, answered, total, score } — score is 0–1, or null when
 // nothing counted (every item N/A or unanswered).
-export function scoreSalonCheck(answers) {
+export function scoreSalonCheck(answers, sections = SALON_CHECK_SECTIONS) {
+  const items = checklistItems(sections);
   let yes = 0; let no = 0; let na = 0;
-  SALON_CHECK_ITEMS.forEach(i => {
+  items.forEach(i => {
     const a = answers?.[i.id];
     if (a === 'yes') yes++;
     else if (a === 'no') no++;
     else if (a === 'na') na++;
   });
   const counted = yes + no;
-  return { yes, no, na, answered: yes + no + na, total: SALON_CHECK_ITEMS.length, score: counted ? yes / counted : null };
+  return { yes, no, na, answered: yes + no + na, total: items.length, score: counted ? yes / counted : null };
 }
 
 // Flattens { [storeCode]: { [visitId]: visit } } into a list, newest first.

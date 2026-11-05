@@ -12,12 +12,12 @@ import { createServiceClient, requireSession } from '../src/serverAuth.js';
 import { rollup } from '../src/parser.js';
 import { getCodeForStoreName } from '../src/storeDirectory.js';
 import { handleFinalizeGoals } from './_finalize-goals.js';
-import { handleSalonCheckEmail, cleanSalonCheckPatch } from './_salon-check.js';
+import { handleSalonCheckEmail, handleSalonCheckQuestion, cleanSalonCheckPatch } from './_salon-check.js';
 import { handleMyNumbers } from './_my-numbers.js';
 import { handlePayRates } from './_pay-rates.js';
 import { handleTabFavorites } from './_tab-favorites.js';
 
-const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases', 'focus_stylists', 'salon_checks', 'employee_name_aliases']);
+const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases', 'focus_stylists', 'salon_checks', 'salon_check_questions', 'employee_name_aliases']);
 const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_', 'gift_card_history_', 'tips_history_'];
 
 // Gift card sales and the gift card goal: the owner sees all, a DL sees their
@@ -132,6 +132,7 @@ function filterPayload(key, payload, employee) {
   if (key === 'store_managers' || key === 'milestone_goals') return filterCodeKeyedObject(payload, allowed);
   if (key === 'focus_stylists') return employee.role === 'district_leader' ? filterCodeKeyedObject(payload, allowed) : focusTagsOnly(payload, allowed);
   if (key === 'salon_checks') return employee.role === 'district_leader' ? filterCodeKeyedObject(payload, allowed) : {};
+  if (key === 'salon_check_questions') return employee.role === 'district_leader' ? payload : {};
   // Gift card sales: a DL gets their own stores' days (Gift Cards tab, the
   // user's call 2026-11-03); managers/employees get nothing. Same
   // { key: { code, date, ... } } shape as daily_history, so same filter.
@@ -188,6 +189,11 @@ export default async function handler(req, res) {
     await handleSalonCheckEmail(req, res);
     return;
   }
+  // Shear Check add/delete a question (owner only, same file).
+  if (req.body?.action === 'salon-check-question') {
+    await handleSalonCheckQuestion(req, res);
+    return;
+  }
 
   const supabase = createServiceClient();
   if (!supabase) {
@@ -235,7 +241,7 @@ export default async function handler(req, res) {
         }
         // Validates every visit and recomputes its score server-side, so a
         // stored score always matches its answers.
-        const checked = cleanSalonCheckPatch(patch, employee);
+        const checked = cleanSalonCheckPatch(patch, employee, await loadRow(supabase, 'salon_check_questions'));
         if (checked.error) {
           res.status(checked.status || 400).json({ error: checked.error });
           return;
