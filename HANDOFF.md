@@ -9,7 +9,7 @@
 4. **Open shifts and filling them.** Not built. Still to ask: who posts, who can claim, whether a claim needs approval, and whether it ties into Attendance.
 5. ~~"My Ticket / My Money" tab~~ **Built as the "My Numbers" tab** (every role, own numbers only; leadership sees the top-TSTH person or anyone they pick). Group rank (item 2) and open shifts (item 4) aren't in it yet.
 
-**Waiting on the user, carried over from the end of 2026-11-03 (all code is pushed, through `4e56fd9` on 2026-11-04):**
+**Waiting on the user, carried over from the end of 2026-11-03:**
 - **Re-upload this pay period's Sales-Accrual files** (at least `Sales-Accrual(475).xlsx`) via Setup → Historical Import, so the "Top extra services" list in My Numbers fills in (extras by name only exist in uploads from 2026-11-03 on).
 - **Upload `Tips(1).xlsx`** under Historical Import → Tips Files, if not done yet. Expect 1,639 tips, $13,415.80, Nov 1–2.
 - **Type "Sammy Allen"** in Samantha Allen's (Emp 1978) "Also in sales as" box in Setup → Employee Access. Then link the other ~27 people whose POS name doesn't match the pay rate report (listed under Pay Rates in Historical Import).
@@ -17,6 +17,18 @@
 - **Leadership roll-up email**: the user pasted the new Apps Script `doPost`. Their first test still hit the old code (needs Deploy → Manage deployments → edit → **New version**). Not confirmed fixed.
 - **Open questions**: do DLs get the 30% management bonus rate? (Today 30% = role `manager` or the Tips report Job "Manager".) Should Possible pay project the whole pay period instead of "so far"? (Offered; coaching already projects to the end of the period.)
 - **Nothing from 2026-11-03 has been clicked through in a real browser or with an employee login.** Checks were builds, temp jest tests on real data, and headless screenshots of mocks.
+
+**Open from 2026-11-05:**
+- **Try Shear Check add/delete once on the live site**: add a question, save a test visit, delete the question, confirm the test visit still shows it. Not yet done; the deploy of `12f9209` wasn't confirmed from here either.
+- **Thursday agenda fix**: live in the Apps Script (pasted by the user). The first real test is the agenda around midnight Wednesday night into Nov 12. Lauren also showed No reply on Nov 5; whether she replied is unknown. The Nov 5 agenda was not re-sent, as far as I know, and Kendra's topics were given to the user in chat.
+- **Franchisee Dennis Bloss, setup kit login (`Documents/supercuts-dashboard-kit`, not this repo)**: "Invalid path specified in request URL" reproduced with the kit's Supabase library by ending `SUPABASE_URL` in `/rest/v1`; a correct URL doesn't give it. His Vercel value wasn't seen. His SQL also left the placeholder owner row in place with a stray `values` line after it, and he typed his phone number in the PIN box. A reply with all three fixes was drafted for the user to send; outcome unknown.
+- **Kit fixes offered, not made**: strip any path after `.supabase.co` in `app/src/serverAuth.js`; add "nothing after .co" at `SETUP-GUIDE.md:184` plus a troubleshooting row; clearer "replace these values" wording in the SQL step. The guide PDF and the zip would need regenerating.
+- **Average product price**: $20.62 per unit (49,058 units, $1,011,616, Jan 2025 through Nov 4, 2026), from `daily_history_*` `products`; totals match the Retail field by month. Jul–Oct 2026 ran about $19.90, down about $1. Offered, not done: a by-product breakdown of why. **Read `daily_history_*` with paging**: a single PostgREST list stops at 1,000 rows and silently cuts off at June 2026.
+
+**Good to know (2026-11-05):**
+- **Three separate Apps Script projects**, each with its own `RECIPIENTS`: leadership emails (`apps-script/leadership-emails.gs`, Thursday topics/agenda and monthly goals), Weekly Leaderboard (Monday recap, Goal Progress, Finalize emails), and Supercuts Report Forwarder (uploads only). A recipient change has to be made in each.
+- The script account is `supercutsdataai@gmail.com`. The connected Gmail is the user's own inbox, so it shows sent agendas but not the replies people send to the script. Gmail search results hide dots and case in addresses; open the thread to see the real header.
+- In this shell, multi-line `node -e` and long heredocs have failed or hung. Write a script file to the scratchpad and run that.
 
 **Pushing from Claude Code in this repo**: commit with `git commit -m '…'` (single quotes), then a bare `git push origin main` as its own command. Pay/payroll-related pushes are sometimes still denied by auto mode's classifier. Then give the user `! git push origin main` to paste. Never chain the push with `cd`/pipes, or it won't match the allow rule.
 
