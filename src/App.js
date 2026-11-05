@@ -23,7 +23,7 @@ import { LEASE_STORE_CODE_TO_NAME, LEASE_INACTIVE_CODES, leaseStoreName, matchSt
 import { exportReviewsToPDF, exportPinListToPDF } from './reviewExport';
 import {
   EMPTY_RANGE_TOTALS, addRangeInto, expandDateRangeDays, mergeEmployeesInto, finalizeEmployee,
-  getRangeTotals, historyTotalsToReportShape, haircutSalesOf, rollupRows, addDaysISO, isoWeekStart, getLastFullWeekRange, sortByMetric,
+  getRangeTotals, historyTotalsToReportShape, rollupRows, addDaysISO, isoWeekStart, getLastFullWeekRange, sortByMetric,
   shiftYearISO, getStoreCutsPerDay, cpdOf,
   shiftMonthKey, salesGoalBreakdown, monthlyReference as sharedMonthlyReference, openDaysInRange, closedDaysInMonth,
 } from './metrics';
@@ -358,16 +358,14 @@ const STORE_METRICS = [
 // period last year", e.g. "34|33". Whole numbers, per the ask.
 const fmtCPD = (cur, ly) => `${cur == null ? '—' : Math.round(cur)}|${ly == null ? '—' : Math.round(ly)}`;
 const CPD_METRIC = { key: 'cpd', label: 'CPD', fmt: (v, row) => fmtCPD(v, row?.cpdLY) };
-// Haircut Sales — Overview only too, for the same reason. Sits beside Cuts.
-const HAIRCUT_SALES_METRIC = { key: 'haircutSales', label: 'Haircut Sales', fmt: fmt$ };
-const OVERVIEW_METRICS = [...STORE_METRICS.flatMap(m => (m.key === 'haircuts' ? [HAIRCUT_SALES_METRIC, m] : [m])), CPD_METRIC];
+const OVERVIEW_METRICS = [...STORE_METRICS, CPD_METRIC];
 // Overview tiles' change vs the same dates last year: how to print the raw
 // difference for each metric (the % is computed the same way for all).
 // Metrics not listed here (gift cards) get no comparison.
 const YOY_DIFF_FMT = {
   sales: fmt$, avgTicket: fmtRate, tsth: fmtRate, totalHours: n => fmtInt(Math.round(n)),
   colorSales: fmt$, cpc: n => fmtNum(n), retail: fmt$, rpc: n => fmtNum(n),
-  otherServices: fmt$, opc: n => fmtNum(n), haircutSales: fmt$, haircuts: fmtInt, cph: n => fmtNum(n, 2),
+  otherServices: fmt$, opc: n => fmtNum(n), haircuts: fmtInt, cph: n => fmtNum(n, 2),
   signatureS: fmt$, cpd: n => fmtNum(n, 1),
 };
 function yoyChange(key, cur, ly) {
@@ -3490,12 +3488,6 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
       ly: getStoreCutsPerDay(history, weeklyHistory, shiftYearISO(cpdStart, -1), shiftYearISO(cpdEnd, -1)),
     };
   }, [history, weeklyHistory, cpdStart, cpdEnd]);
-  // Haircut Sales always comes from Sales-Accrual history over this same
-  // range, even with a live Stylist Report showing (see haircutSalesOf).
-  const haircutTotals = useMemo(
-    () => (cpdStart && cpdEnd ? getRangeTotals(history, weeklyHistory, cpdStart, cpdEnd) : null),
-    [history, weeklyHistory, cpdStart, cpdEnd]
-  );
   // Gift cards come from their own history (never daily_history, whose
   // giftCards field is always 0 — Sales-Accrual doesn't carry them), over the
   // same range CPD uses.
@@ -3522,10 +3514,9 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
   const rowsWithCpd = useMemo(
     () => storeRows.map(r => ({
       ...r, cpd: cpdOf(cpdData?.cur?.[r.code]), cpdLY: cpdOf(cpdData?.ly?.[r.code]),
-      haircutSales: haircutSalesOf(haircutTotals?.[r.code]),
       giftCards: giftData?.[r.code]?.giftCards || 0, giftCardCount: giftData?.[r.code]?.giftCardCount || 0,
     })),
-    [storeRows, cpdData, giftData, haircutTotals]
+    [storeRows, cpdData, giftData]
   );
 
   const isSearching = !!query.trim();
@@ -3546,7 +3537,6 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
   const storeCodes = storeRows.map(r => r.code);
   const t = {
     ...baseTotals, cpd: companyCpd(cpdData?.cur, storeCodes), cpdLY: companyCpd(cpdData?.ly, storeCodes),
-    haircutSales: rowsWithCpd.reduce((sum, r) => sum + r.haircutSales, 0),
     giftCards: rowsWithCpd.reduce((sum, r) => sum + r.giftCards, 0), giftCardCount: rowsWithCpd.reduce((sum, r) => sum + r.giftCardCount, 0),
   };
   // Year-over-year on each tile: same range as CPD shifted back a year, from
@@ -3659,7 +3649,6 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
                   <div className="dl-stat"><span className="dl-stat-label">Retail</span><span className="dl-stat-value">{fmt$(s.retail)}</span></div>
                   {s.rpc != null && <div className="dl-stat"><span className="dl-stat-label">RPC</span><span className="dl-stat-value">{fmtNum(s.rpc)}</span></div>}
                   <div className="dl-stat"><span className="dl-stat-label">Other Svcs</span><span className="dl-stat-value">{fmt$(s.otherServices)}</span></div>
-                  <div className="dl-stat"><span className="dl-stat-label">Haircut Sales</span><span className="dl-stat-value">{fmt$(s.haircutSales)}</span></div>
                   {s.opc != null && <div className="dl-stat"><span className="dl-stat-label">OPC</span><span className="dl-stat-value">{fmtNum(s.opc)}</span></div>}
                   <div className="dl-stat"><span className="dl-stat-label">Cuts</span><span className="dl-stat-value">{fmtInt(s.haircuts)}</span></div>
                   {s.cph != null && <div className="dl-stat"><span className="dl-stat-label">CPH</span><span className="dl-stat-value">{fmtNum(s.cph)}</span></div>}
@@ -8101,7 +8090,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     const lyT = getRangeTotals(history, weeklyHistory, shiftYearISO(start, -1), shiftYearISO(end, -1));
     const codes = Object.keys(curT).filter(c => lyT[c]);
     if (codes.length) {
-      const keys = [['sales', 'Net Sales'], ['haircuts', 'Cuts'], ['haircutSales', 'Haircut Sales'], ['colorSales', 'Color Sales'], ['retail', 'Retail'], ['signatureS', 'SS $'], ['otherServices', 'Other Svcs'], ['tsth', 'TSTH'], ['avgTicket', 'Avg Ticket'], ['totalHours', 'Total Hours']];
+      const keys = [['sales', 'Net Sales'], ['haircuts', 'Cuts'], ['colorSales', 'Color Sales'], ['retail', 'Retail'], ['signatureS', 'SS $'], ['otherServices', 'Other Svcs'], ['tsth', 'TSTH'], ['avgTicket', 'Avg Ticket'], ['totalHours', 'Total Hours']];
       const line = (cur, ly) => keys.map(([k, label]) => {
         const ch = yoyChange(k, cur[k], ly[k]);
         return ch ? `${label} ${YOY_DIFF_FMT[k](cur[k])} vs ${YOY_DIFF_FMT[k](ly[k])} (${ch.pct}, ${ch.diff})` : null;

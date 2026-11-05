@@ -32,13 +32,6 @@
 
 **Pushing from Claude Code in this repo**: commit with `git commit -m '…'` (single quotes), then a bare `git push origin main` as its own command. Pay/payroll-related pushes are sometimes still denied by auto mode's classifier. Then give the user `! git push origin main` to paste. Never chain the push with `cd`/pipes, or it won't match the allow rule.
 
-**Overview: Haircut Sales tile (2026-11-05).** User: add a haircut sales tile. It sits just before Cuts, with the year comparison, Top/Bottom 10, a sort option and a line in each store card.
-- **No haircut dollar field exists.** `haircutSalesOf` (`src/metrics.js`) = `service − color − signatureS − otherServices`. Each service line lands in exactly one bucket when the export has Item Category, so it needs no re-upload and covers all history. Older exports without categories use name matching, so those months are less exact.
-- **Always read from Sales-Accrual history**, even with a live Stylist Report showing, because that report has no Signature Service column and the subtraction would count SS as haircuts. So in the Overview, `haircutTotals` overrides the row value (same range as CPD).
-- Overview only, like CPD: `HAIRCUT_SALES_METRIC` is in `OVERVIEW_METRICS`, not `STORE_METRICS`, so Homepage Top 10 is unchanged. Added to `METRIC_KEYS` in `api/store-rank.js` for managers' rank view, `YOY_DIFF_FMT`, and Tilly's year-over-year list.
-- **Real check, Oct 2026**: $1,160,112 on 45,445 cuts = $25.53 a cut (store range $19.92–$28.53, median $25.08), against $28/$30 list prices. It's 82.9% of $1,399,542 service sales. No negative store-days out of 1,808. The lowest stores weren't looked into.
-- **Verified**: build clean; temp jest tests on the real `OverviewTab` (value, order, Top 10, sort, live-report case, year comparison); presenter on real October data: company 14.6% off, median store 17.4%, closest store 2.5%, none at $0. Not checked in the logged-in app or as a manager.
-
 **Presenter Mode shows every tab now, with no real numbers (2026-11-05).** User: presenter mode should let them view and show all tabs, with none of their real numbers shown. This overrides "My Numbers is off in presenter mode", "PayTrackerCard hidden in Presenter Mode", and the "counts/hours/goals/scores stay real" notes in older entries.
 - **Rule for new work**: anything a tab shows must come through `presenterView` in `src/presenter.js`, via `d` in App.js. A new dataset or field is real on screen until it's faked there.
 - **Newly on**: My Numbers and the Homepage pay card, from `d.tipsHistory`, `d.payRates`, `d.nameAliases`. `fakePayRates` builds rows from the real lookup, so aliases and middle names still match. A pick made while presenting isn't written to `payFocusName` in localStorage.

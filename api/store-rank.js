@@ -23,8 +23,8 @@ import { createServiceClient, requireSession } from '../src/serverAuth.js';
 import { STORE_CODE_TO_NAME } from '../src/storeDirectory.js';
 import { getRangeTotals, historyTotalsToReportShape, sortByMetric, shiftYearISO, getStoreCutsPerDay, cpdOf } from '../src/metrics.js';
 
-// STORE_METRICS keys in src/App.js, plus the Overview-only Haircut Sales and CPD.
-const METRIC_KEYS = ['sales', 'avgTicket', 'tsth', 'totalHours', 'colorSales', 'cpc', 'retail', 'rpc', 'otherServices', 'opc', 'haircutSales', 'haircuts', 'cph', 'signatureS', 'cpd'];
+// STORE_METRICS keys in src/App.js, plus the Overview-only CPD.
+const METRIC_KEYS = ['sales', 'avgTicket', 'tsth', 'totalHours', 'colorSales', 'cpc', 'retail', 'rpc', 'otherServices', 'opc', 'haircuts', 'cph', 'signatureS', 'cpd'];
 const NEIGHBORS = 5;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
