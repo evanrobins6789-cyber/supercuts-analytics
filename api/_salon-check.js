@@ -11,15 +11,51 @@
 //   reuses that script's `goals` action, which sends emails[leaderName] to
 //   whichever RECIPIENTS addresses are mapped to that leader, so the script
 //   needed no changes for this.
+// - handleSalonCheckPhoto: section photos, in the private `salon-check-photos`
+//   Storage bucket. Same pattern as api/lease-files.js: the bytes go straight
+//   from the browser to Storage on a signed URL, never through this function.
+//   A visit stores only paths, under visit.photos[sectionId]. The email shows
+//   them through long-lived signed links, which is why the Apps Script needed
+//   no change for photos either.
 
 import { createServiceClient, requireSession } from '../src/serverAuth.js';
 import { getLeaderForStoreCode } from '../src/leaderRoster.js';
 import { STORE_CODE_TO_NAME } from '../src/storeDirectory.js';
-import { SALON_CHECK_ANSWERS, activeChecklist, checklistItems, scoreSalonCheck, visitChecklist } from '../src/salonCheck.js';
+import { SALON_CHECK_ANSWERS, SALON_CHECK_MAX_PHOTOS, activeChecklist, checklistItems, salonCheckPhotoPaths, scoreSalonCheck, visitChecklist } from '../src/salonCheck.js';
 import { BRAND, FONT, escapeHtml } from './leaderboard-email.js';
 
 const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+const PHOTO_BUCKET = 'salon-check-photos';
+const PHOTO_VIEW_SECONDS = 60 * 60;
+// A DL may open the email long after the visit, so its links last a year. The
+// photos stay on the site for good; only old emails stop showing them.
+const PHOTO_EMAIL_SECONDS = 60 * 60 * 24 * 365;
+const STORE_CODE = /^[A-Za-z0-9_-]{1,20}$/;
+const isPhotoPath = (code, p) => typeof p === 'string' && p.startsWith(`${code}/`) && /^[a-z0-9]{8,40}\.jpg$/.test(p.slice(code.length + 1));
+let photoBucketEnsured = false;
+
+async function ensurePhotoBucket(supabase) {
+  if (photoBucketEnsured) return;
+  const { data: buckets, error } = await supabase.storage.listBuckets();
+  if (error) throw new Error(error.message);
+  if (!buckets.some(b => b.name === PHOTO_BUCKET)) {
+    const { error: createError } = await supabase.storage.createBucket(PHOTO_BUCKET, { public: false, allowedMimeTypes: ['image/jpeg'], fileSizeLimit: 5 * 1024 * 1024 });
+    if (createError && !/already exists/i.test(createError.message)) throw new Error(createError.message);
+  }
+  photoBucketEnsured = true;
+}
+
+// Only photos in a section this visit keeps, and only under its own store.
+function cleanPhotos(code, photos, sections) {
+  const out = {};
+  sections.filter(s => s.items.length).forEach(s => {
+    const list = Array.isArray(photos?.[s.id]) ? [...new Set(photos[s.id])].filter(p => isPhotoPath(code, p)).slice(0, SALON_CHECK_MAX_PHOTOS) : [];
+    if (list.length) out[s.id] = list;
+  });
+  return out;
+}
 
 function cleanVisit(id, code, v, employee, sections) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return { error: 'A visit must be an object.' };
@@ -34,6 +70,7 @@ function cleanVisit(id, code, v, employee, sections) {
     const left = sc.total - sc.answered;
     return { error: `Answer every item first (${left} still blank).` };
   }
+  const photos = cleanPhotos(code, v.photos, sections);
   return {
     visit: {
       id, code, date: v.date,
@@ -41,6 +78,7 @@ function cleanVisit(id, code, v, employee, sections) {
       team: str(v.team, 400),
       followUp: str(v.followUp, 3000),
       answers, notes,
+      ...(Object.keys(photos).length ? { photos } : {}),
       // This visit's own copy of the questions, so adding or deleting one
       // later never changes this report.
       checklist: sections.filter(s => s.items.length),
@@ -91,7 +129,7 @@ const MARK = {
   na: { text: 'N/A', color: BRAND.inkSoft, bg: BRAND.paper },
 };
 
-export function buildSalonCheckEmail({ visit, storeName, siteUrl }) {
+export function buildSalonCheckEmail({ visit, storeName, siteUrl, photoUrls = {} }) {
   const td = `padding:7px 9px;font-family:${FONT};font-size:13px;border-bottom:1px solid ${BRAND.line};vertical-align:top;`;
   const checklist = visitChecklist(visit);
   const sections = checklist.map(sec => {
@@ -104,7 +142,15 @@ export function buildSalonCheckEmail({ visit, storeName, siteUrl }) {
         <td style="${td}text-align:center;width:56px;"><span style="display:inline-block;min-width:38px;padding:2px 6px;border-radius:10px;background:${m.bg};color:${m.color};font-weight:700;font-size:12px;">${m.text}</span></td>
       </tr>`;
     }).join('');
-    return `<tr><td colspan="2" style="padding:9px 9px 6px;font-family:${FONT};font-size:13px;font-weight:700;color:#fff;background:${BRAND.navy2};">${escapeHtml(sec.title)}</td></tr>${rows}`;
+    const paths = visit.photos?.[sec.id] || [];
+    const shown = paths.filter(p => photoUrls[p]);
+    const imgs = shown.map(p => {
+      const url = escapeHtml(photoUrls[p]);
+      return `<a href="${url}" style="display:inline-block;margin:0 6px 6px 0;"><img src="${url}" width="180" alt="${escapeHtml(sec.title)} photo" style="display:block;width:180px;max-width:100%;height:auto;border:0;border-radius:6px;"></a>`;
+    }).join('');
+    const missing = paths.length - shown.length;
+    const photoRow = paths.length ? `<tr><td colspan="2" style="padding:8px 9px 2px;background:${BRAND.card};border-bottom:1px solid ${BRAND.line};">${imgs}${missing ? `<div style="font-family:${FONT};font-size:12px;color:${BRAND.inkSoft};padding-bottom:6px;">${missing} photo${missing === 1 ? '' : 's'} could not be loaded.</div>` : ''}</td></tr>` : '';
+    return `<tr><td colspan="2" style="padding:9px 9px 6px;font-family:${FONT};font-size:13px;font-weight:700;color:#fff;background:${BRAND.navy2};">${escapeHtml(sec.title)}</td></tr>${rows}${photoRow}`;
   }).join('');
   const noItems = checklistItems(checklist).filter(i => visit.answers?.[i.id] === 'no');
   const info = [
@@ -204,6 +250,84 @@ export async function handleSalonCheckQuestion(req, res) {
   }
 }
 
+// Section photos. Body: { op: 'upload', code } for a one-time upload URL,
+// { op: 'view', code, paths } for signed read links, or { op: 'delete', code,
+// path } to take a photo off an unsaved visit. A photo on a saved visit can't
+// be removed this way, so a saved report never changes.
+export async function handleSalonCheckPhoto(req, res) {
+  const supabase = createServiceClient();
+  if (!supabase) {
+    res.status(500).json({ error: 'Login is not configured on this deployment.' });
+    return;
+  }
+  const { token, op, code, paths, path } = req.body || {};
+  const { employee, error: sessionError } = await requireSession(supabase, token);
+  if (!employee) {
+    res.status(401).json({ error: sessionError });
+    return;
+  }
+  if (typeof code !== 'string' || !STORE_CODE.test(code)) {
+    res.status(400).json({ error: 'Pick a salon first.' });
+    return;
+  }
+  if (employee.role !== 'owner' && !(employee.role === 'district_leader' && (employee.store_codes || []).includes(code))) {
+    res.status(403).json({ error: 'You can only use salon check photos for your own stores.' });
+    return;
+  }
+  try {
+    await ensurePhotoBucket(supabase);
+    if (op === 'upload') {
+      const objectPath = `${code}/${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}.jpg`;
+      const { data, error } = await supabase.storage.from(PHOTO_BUCKET).createSignedUploadUrl(objectPath);
+      if (error) throw new Error(error.message);
+      res.status(200).json({ ok: true, path: objectPath, uploadToken: data.token });
+      return;
+    }
+    if (op === 'view') {
+      const list = Array.isArray(paths) ? paths.slice(0, 100) : [];
+      if (!list.every(p => isPhotoPath(code, p))) {
+        res.status(400).json({ error: 'Bad photo path.' });
+        return;
+      }
+      const { data, error } = await supabase.storage.from(PHOTO_BUCKET).createSignedUrls(list, PHOTO_VIEW_SECONDS);
+      if (error) throw new Error(error.message);
+      res.status(200).json({ ok: true, urls: Object.fromEntries((data || []).filter(d => d.signedUrl).map(d => [d.path, d.signedUrl])) });
+      return;
+    }
+    if (op === 'delete') {
+      if (!isPhotoPath(code, path)) {
+        res.status(400).json({ error: 'Bad photo path.' });
+        return;
+      }
+      const { data: row, error: loadError } = await supabase.from('weekly_report').select('payload').eq('report_id', 'salon_checks').maybeSingle();
+      if (loadError) throw new Error(loadError.message);
+      if (Object.values(row?.payload?.[code] || {}).some(v => salonCheckPhotoPaths(v).includes(path))) {
+        res.status(400).json({ error: 'That photo is part of a saved report.' });
+        return;
+      }
+      const { error } = await supabase.storage.from(PHOTO_BUCKET).remove([path]);
+      if (error) throw new Error(error.message);
+      res.status(200).json({ ok: true });
+      return;
+    }
+    res.status(400).json({ error: 'Unknown photo action.' });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+}
+
+// After leadership deletes a visit: its photos go too. Best effort, since the
+// visit is already gone and a leftover file harms nothing.
+export async function removeDeletedVisitPhotos(supabase, before, patch) {
+  const paths = Object.entries(patch).flatMap(([code, visits]) => Object.entries(visits || {})
+    .filter(([, v]) => v === null)
+    .flatMap(([id]) => salonCheckPhotoPaths(before?.[code]?.[id])));
+  if (!paths.length) return;
+  try {
+    await supabase.storage.from(PHOTO_BUCKET).remove(paths);
+  } catch { /* see above */ }
+}
+
 export async function handleSalonCheckEmail(req, res) {
   const supabase = createServiceClient();
   if (!supabase) {
@@ -242,7 +366,14 @@ export async function handleSalonCheckEmail(req, res) {
     const proto = (req.headers['x-forwarded-proto'] || 'https').split(',')[0];
     const siteUrl = req.headers.host ? `${proto}://${req.headers.host}` : null;
     const storeName = STORE_CODE_TO_NAME[code] || `Store ${code}`;
-    const email = buildSalonCheckEmail({ visit, storeName, siteUrl });
+    const photoPaths = salonCheckPhotoPaths(visit);
+    let photoUrls = {};
+    if (photoPaths.length) {
+      const { data: signed, error: signError } = await supabase.storage.from(PHOTO_BUCKET).createSignedUrls(photoPaths, PHOTO_EMAIL_SECONDS);
+      if (signError) throw new Error(signError.message);
+      photoUrls = Object.fromEntries((signed || []).filter(d => d.signedUrl).map(d => [d.path, d.signedUrl]));
+    }
+    const email = buildSalonCheckEmail({ visit, storeName, siteUrl, photoUrls });
 
     const scriptRes = await fetch(webAppUrl, {
       method: 'POST',

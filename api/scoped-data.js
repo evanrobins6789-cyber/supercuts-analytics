@@ -12,7 +12,7 @@ import { createServiceClient, requireSession } from '../src/serverAuth.js';
 import { rollup } from '../src/parser.js';
 import { getCodeForStoreName } from '../src/storeDirectory.js';
 import { handleFinalizeGoals } from './_finalize-goals.js';
-import { handleSalonCheckEmail, handleSalonCheckQuestion, cleanSalonCheckPatch } from './_salon-check.js';
+import { handleSalonCheckEmail, handleSalonCheckPhoto, handleSalonCheckQuestion, cleanSalonCheckPatch, removeDeletedVisitPhotos } from './_salon-check.js';
 import { handleMyNumbers } from './_my-numbers.js';
 import { handlePayRates } from './_pay-rates.js';
 import { handleTabFavorites } from './_tab-favorites.js';
@@ -194,6 +194,11 @@ export default async function handler(req, res) {
     await handleSalonCheckQuestion(req, res);
     return;
   }
+  // Shear Check section photos (same file).
+  if (req.body?.action === 'salon-check-photo') {
+    await handleSalonCheckPhoto(req, res);
+    return;
+  }
 
   const supabase = createServiceClient();
   if (!supabase) {
@@ -300,6 +305,7 @@ export default async function handler(req, res) {
       });
       const { error: upsertError } = await supabase.from('weekly_report').upsert({ report_id: key, payload: merged }, { onConflict: 'report_id' });
       if (upsertError) throw new Error(upsertError.message);
+      if (key === 'salon_checks') await removeDeletedVisitPhotos(supabase, current, patch);
       res.status(200).json({ ok: true, data: filterPayload(key, merged, employee) });
       return;
     }

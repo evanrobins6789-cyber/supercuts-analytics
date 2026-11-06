@@ -244,6 +244,18 @@ export function pointsMarkFulfilled(token, id, fulfilled) {
 export function changeSalonCheckQuestion(token, change) {
   return postWrite('/api/scoped-data', { action: 'salon-check-question', token, ...change });
 }
+// Shear Check section photos (private bucket, see api/_salon-check.js). Like
+// the lease files, the bytes go straight to Storage on the signed upload URL.
+// All three use postWrite, so presenter mode can't reach real photos.
+export function salonCheckPhotoUploadUrl(token, code) {
+  return postWrite('/api/scoped-data', { action: 'salon-check-photo', op: 'upload', token, code });
+}
+export function salonCheckPhotoUrls(token, code, paths) {
+  return postWrite('/api/scoped-data', { action: 'salon-check-photo', op: 'view', token, code, paths });
+}
+export function salonCheckPhotoDelete(token, code, path) {
+  return postWrite('/api/scoped-data', { action: 'salon-check-photo', op: 'delete', token, code, path });
+}
 export function emailSalonCheck(token, code, id) {
   return postWrite('/api/scoped-data', { action: 'salon-check-email', token, code, id });
 }

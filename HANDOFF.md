@@ -18,6 +18,19 @@
 - **Open questions**: do DLs get the 30% management bonus rate? (Today 30% = role `manager` or the Tips report Job "Manager".) Should Possible pay project the whole pay period instead of "so far"? (Offered; coaching already projects to the end of the period.)
 - **Nothing from 2026-11-03 has been clicked through in a real browser or with an employee login.** Checks were builds, temp jest tests on real data, and headless screenshots of mocks.
 
+**Shear Check photos, by section, sent with the email (2026-11-06).** User: upload photos on the different categories of questions, and clicking send also sends the photos.
+- **Flow**: each section bar has 📷 Add photos (phone camera or library, computer files), once a salon is picked. Each photo is shrunk in the browser to 1600px JPEG (`scShrinkPhoto` in `src/App.js`), then uploaded straight to Storage on a signed URL, same pattern as lease files. Save is disabled until uploads finish.
+- **Storage**: private bucket `salon-check-photos`, made by the first upload (`ensurePhotoBucket`), JPEG only, 5MB cap. Files are `{code}/{random}.jpg`. A visit stores only paths, in `visit.photos[sectionId]`. Limit: `SALON_CHECK_MAX_PHOTOS` = 6 per section (my pick, not the user's). The draft keeps paths, so a refresh or dropped signal keeps the photos.
+- **Email**: `handleSalonCheckEmail` signs one-year links and `buildSalonCheckEmail` shows the images under their section, each linking to full size. They are links, not attachments, so **no Apps Script paste was needed**. After a year old emails lose the pictures; the site keeps them. Anyone holding the email can open its links, as with a forwarded photo.
+- **Rules**: `handleSalonCheckPhoto` (action `salon-check-photo`, ops `upload`/`view`/`delete`) allows owner or the store's own DL. A photo on a saved visit can't be deleted through it, so saved reports don't change; deleting a visit removes its files (`removeDeletedVisitPhotos`). Changing the salon on a draft asks, then drops its photos, because paths are filed by store.
+- **Presenter**: real photos can't be faked, so `fakeSalonChecks` strips them, the button and strip are hidden (`canPhotos`), and the calls are blocked by `postWrite`.
+- **Tilly** gets the photo count and sections on a store's last visit, not the pictures. New `SITE_TIPS` entry.
+- **Not handled**: two overlapping picks in one section can exceed 6, and the server keeps the first 6. No storage cleanup for files abandoned by a closed draft. HEIC on a computer browser fails with a "try a JPG or PNG" message.
+- **Verified**: build clean; 19 temp jest tests on the real server code and the real `ShearCheckTab` with Supabase, auth and image APIs mocked; headless screenshots of the form (1280px, 390px) and the email HTML. **Not verified**: a real upload, bucket creation, the logged-in site, a real email in Gmail, or a real phone. The service key isn't local, so none of the Storage calls have run for real.
+
+**Open from 2026-11-06:**
+- **Try one real Shear Check with photos on the live site**: add photos on a phone, Save & email, confirm they show in Past Visits and in the DL's email. The first upload creates the bucket, so that's the first real test of the Storage calls.
+
 **Open from 2026-11-05:**
 - **Click through Presenter Mode on the live site before a real demo**, and ask Tilly a question while it's on; neither has been done.
 - **Try Shear Check add/delete once on the live site**: add a question, save a test visit, delete the question, confirm the test visit still shows it. Not yet done; the deploy of `12f9209` wasn't confirmed from here either.

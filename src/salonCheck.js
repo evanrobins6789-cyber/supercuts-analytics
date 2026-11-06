@@ -81,6 +81,12 @@ export const SALON_CHECK_SECTIONS = [
 
 export const SALON_CHECK_ANSWERS = ['yes', 'no', 'na'];
 
+// Photos a person can add to one section of a visit.
+export const SALON_CHECK_MAX_PHOTOS = 6;
+
+// Every photo path on a visit (or on the in-progress form).
+export const salonCheckPhotoPaths = visit => Object.values(visit?.photos || {}).flat();
+
 export const checklistItems = sections => sections.flatMap(s => s.items);
 
 // The questions in use today: the base list, plus added ones at the end of

@@ -289,6 +289,7 @@ function fakeSalonChecks(checks) {
         emailedTo: v.emailedTo ? fakePersonName(v.emailedTo) : v.emailedTo,
         notes: Object.fromEntries(Object.keys(v.notes || {}).map(k => [k, 'Sample note.'])),
         followUp: v.followUp ? 'Sample follow-up for next visit.' : v.followUp,
+        photos: undefined, // real photos can't be faked, so they're left out
       };
     });
   });

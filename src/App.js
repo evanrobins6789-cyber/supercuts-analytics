@@ -12,9 +12,9 @@ import {
   loadScoped, loadScopedByPrefix, saveScoped, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
   pointsBalance, pointsAllBalances, pointsTransactions, pointsDeleteTransaction, finalizeGoals,
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled,
-  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank, lpLoad, lpSave, emailSalonCheck, changeSalonCheckQuestion, myNumbers, payRatesLoad, payRatesUpload,
+  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank, lpLoad, lpSave, emailSalonCheck, changeSalonCheckQuestion, salonCheckPhotoUploadUrl, salonCheckPhotoUrls, salonCheckPhotoDelete, myNumbers, payRatesLoad, payRatesUpload,
 } from './auth';
-import { activeChecklist, checklistItems, visitChecklist, scoreSalonCheck, salonCheckList } from './salonCheck';
+import { SALON_CHECK_MAX_PHOTOS, activeChecklist, checklistItems, visitChecklist, scoreSalonCheck, salonCheckList, salonCheckPhotoPaths } from './salonCheck';
 import { LP_RULES, parseLpSalesFile, parseLpAttendanceFile, parseLpRegisterFile, mergeLpDays, lpMonthPayload, analyzeLp, lpDefaultRange } from './lossPrevention';
 import { LEADER_ROSTER_SECTIONS as REAL_LEADER_ROSTER_SECTIONS, getLeaderForStoreCode as realGetLeaderForStoreCode } from './leaderRoster';
 import { isPresenting, initPresenterMode, setPresenterMode, presenterView, fakeLeaderSections, fakePersonName } from './presenter';
@@ -1518,6 +1518,7 @@ const SITE_TIPS = [
   { icon: '🥅', title: 'Setting goals', body: 'On the Goals tab, set your stores’ monthly Retail $, Color $, Bottles, Signature Service and % goals. Sales and Milestone goals are set by leadership. Goals save when you click out of the box.', roles: LEADERS },
   { icon: '🗓️', title: 'Goals by the month', body: 'Every tab compares sales with the full monthly goal, so a week into the month "vs Goal" shows progress toward the whole month.', roles: LEADERS },
   { icon: '✂️', title: 'Shear Check', body: 'Use Shear Check during a salon visit: pick the store, answer each item Yes / No / N/A, add notes, and email it to that store’s DL. Scores are tracked over time.', roles: ['owner', 'district_leader'] },
+  { icon: '📷', title: 'Shear Check photos', body: 'Tap Add photos on any Shear Check section to attach pictures from your phone or computer. They go out with the email to the DL and stay with the visit in Past Visits.', roles: ['owner', 'district_leader'] },
   { icon: '✂️', title: 'Change the Shear Check', body: 'Use Add question or Delete question in any Shear Check section to change the checklist for every future visit. Saved reports keep the questions and score they were filled out with.', roles: ['owner'] },
   { icon: '⭐', title: 'Focus Stylist', body: 'Tap FOCUS next to a stylist on the Overview or DL tab to pick them for the month, then track their TSTH and cuts-per-hour goals on the Focus Stylist tab. They get a FOCUS STYLIST tag next to their name.', roles: ['owner', 'district_leader'] },
   { icon: '🎁', title: 'Gift Cards', body: 'The Gift Cards tab shows gift card sales and progress toward the gift card goal for your stores. Tap a store to see who sold them.', roles: ['owner', 'district_leader'] },
@@ -5825,14 +5826,81 @@ function scRangeStart(key) {
   if (key === '90') { const d = new Date(); d.setDate(d.getDate() - 89); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
   return '';
 }
-const scEmptyForm = () => ({ code: '', date: scLocalToday(), manager: '', team: '', answers: {}, notes: {}, followUp: '' });
+const scEmptyForm = () => ({ code: '', date: scLocalToday(), manager: '', team: '', answers: {}, notes: {}, photos: {}, followUp: '' });
 // The in-progress checklist is kept in this browser so a refresh or a
 // dropped phone signal mid-visit doesn't lose it. Cleared once saved.
 const scLoadDraft = () => { try { const d = JSON.parse(window.localStorage.getItem(SC_DRAFT_KEY) || 'null'); return d && typeof d === 'object' ? { ...scEmptyForm(), ...d } : null; } catch { return null; } };
 const scSaveDraft = f => { try { window.localStorage.setItem(SC_DRAFT_KEY, JSON.stringify(f)); } catch { /* storage off: the draft just isn't kept */ } };
 const scClearDraft = () => { try { window.localStorage.removeItem(SC_DRAFT_KEY); } catch { /* ignore */ } };
 
-function ShearCheckTab({ stores, salonChecks, questions, managers, onSave, onEmail, onDelete, onChangeQuestion, canEditQuestions, isOwner, userName }) {
+// Phone photos run 3–10MB, so each is shrunk in the browser first. Everything
+// stored is a JPEG. Throws if the browser can't read the file (HEIC on a
+// computer, for one).
+const SC_PHOTO_MAX_SIDE = 1600;
+async function scShrinkPhoto(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error(`${file.name} couldn't be read. Try a JPG or PNG.`));
+      i.src = url;
+    });
+    const scale = Math.min(1, SC_PHOTO_MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.naturalWidth * scale);
+    canvas.height = Math.round(img.naturalHeight * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+    if (!blob) throw new Error(`${file.name} couldn't be read. Try a JPG or PNG.`);
+    return blob;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+async function scUploadPhoto(token, code, file) {
+  const blob = await scShrinkPhoto(file);
+  const r = await salonCheckPhotoUploadUrl(token, code);
+  if (!r.ok) throw new Error(r.error || 'Could not get an upload link.');
+  const { error } = await supabase.storage.from('salon-check-photos').uploadToSignedUrl(r.path, r.uploadToken, blob, { contentType: 'image/jpeg' });
+  if (error) throw new Error(error.message);
+  return { path: r.path, preview: URL.createObjectURL(blob) };
+}
+// Signed links for private photos. `paths` must be memoized. A path that
+// can't be loaded gets '', so it isn't asked for again.
+function useScPhotoUrls(token, code, paths, enabled) {
+  const [urls, setUrls] = useState({});
+  useEffect(() => {
+    const missing = enabled && code ? paths.filter(p => urls[p] === undefined) : [];
+    if (!missing.length) return undefined;
+    let live = true;
+    salonCheckPhotoUrls(token, code, missing).then(r => {
+      if (live) setUrls(prev => ({ ...Object.fromEntries(missing.map(p => [p, r.urls?.[p] || ''])), ...prev }));
+    });
+    return () => { live = false; };
+  }, [token, code, paths, enabled, urls]);
+  return [urls, setUrls];
+}
+function ScPhotoStrip({ paths, urls, onRemove }) {
+  if (!paths.length) return null;
+  return (
+    <div className="sc-photos">
+      {paths.map(p => (
+        <span key={p} className="sc-photo">
+          {urls[p]
+            ? <a href={urls[p]} target="_blank" rel="noopener noreferrer"><img src={urls[p]} alt="" /></a>
+            : <span className="sc-photo sc-photo-wait">{urls[p] === '' ? 'Not available' : 'Loading…'}</span>}
+          {onRemove && <button type="button" className="sc-photo-x" aria-label="Remove photo" onClick={() => onRemove(p)}>✕</button>}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ShearCheckTab({ stores, salonChecks, questions, managers, onSave, onEmail, onDelete, onChangeQuestion, canEditQuestions, canPhotos, token, notify, isOwner, userName }) {
   const [view, setView] = useState('new'); // 'new' | 'scores' | 'visits'
   const visits = useMemo(() => salonCheckList(salonChecks), [salonChecks]);
   const sections = useMemo(() => activeChecklist(questions), [questions]);
@@ -5849,14 +5917,14 @@ function ShearCheckTab({ stores, salonChecks, questions, managers, onSave, onEma
           <button type="button" className={`view-toggle-btn ${view === 'visits' ? 'active' : ''}`} onClick={() => setView('visits')}>Past Visits ({visits.length})</button>
         </div>
       </div>
-      {view === 'new' && <ShearCheckForm stores={stores} visits={visits} sections={sections} managers={managers} onSave={onSave} onEmail={onEmail} onChangeQuestion={onChangeQuestion} canEditQuestions={canEditQuestions} userName={userName} onSaved={() => setView('visits')} />}
+      {view === 'new' && <ShearCheckForm stores={stores} visits={visits} sections={sections} managers={managers} onSave={onSave} onEmail={onEmail} onChangeQuestion={onChangeQuestion} canEditQuestions={canEditQuestions} canPhotos={canPhotos} token={token} notify={notify} userName={userName} onSaved={() => setView('visits')} />}
       {view === 'scores' && <ShearCheckScores stores={stores} visits={visits} />}
-      {view === 'visits' && <ShearCheckVisits stores={stores} visits={visits} onEmail={onEmail} onDelete={onDelete} isOwner={isOwner} />}
+      {view === 'visits' && <ShearCheckVisits stores={stores} visits={visits} onEmail={onEmail} onDelete={onDelete} isOwner={isOwner} canPhotos={canPhotos} token={token} />}
     </div>
   );
 }
 
-function ShearCheckForm({ stores, visits, sections, managers, onSave, onEmail, onChangeQuestion, canEditQuestions, userName, onSaved }) {
+function ShearCheckForm({ stores, visits, sections, managers, onSave, onEmail, onChangeQuestion, canEditQuestions, canPhotos, token, notify, userName, onSaved }) {
   const [form, setForm] = useState(() => scLoadDraft() || scEmptyForm());
   const [busy, setBusy] = useState(null); // 'save' | 'email' | null
   const [openNotes, setOpenNotes] = useState({}); // phone only: note boxes opened with ✎
@@ -5864,7 +5932,11 @@ function ShearCheckForm({ stores, visits, sections, managers, onSave, onEmail, o
   const [newQuestion, setNewQuestion] = useState('');
   const [deletingIn, setDeletingIn] = useState(null); // section id showing delete buttons
   const [questionBusy, setQuestionBusy] = useState(false);
+  const [uploading, setUploading] = useState(0); // photos still on their way up
   useEffect(() => { scSaveDraft(form); }, [form]);
+  const formPhotos = form.photos;
+  const photoPaths = useMemo(() => salonCheckPhotoPaths({ photos: formPhotos }), [formPhotos]);
+  const [photoUrls, setPhotoUrls] = useScPhotoUrls(token, form.code, photoPaths, canPhotos);
   const groups = useMemo(() => groupStoresByLeader(stores), [stores]);
   const leader = form.code ? getLeaderForStoreCode(form.code) : null;
   // Always the questions in use now, so a draft's answers to a deleted
@@ -5874,7 +5946,35 @@ function ShearCheckForm({ stores, visits, sections, managers, onSave, onEmail, o
   const lastVisit = form.code ? visits.find(v => v.code === form.code) : null;
 
   const set = patch => setForm(prev => ({ ...prev, ...patch }));
-  const pickStore = code => setForm(prev => ({ ...prev, code, manager: prev.manager || managers?.[code] || '' }));
+  // Photos are filed under their store, so they can't follow a store change.
+  const dropAllPhotos = () => photoPaths.forEach(p => salonCheckPhotoDelete(token, form.code, p));
+  const pickStore = code => {
+    if (photoPaths.length) {
+      if (!window.confirm('Changing the salon removes the photos added so far. Continue?')) return;
+      dropAllPhotos();
+    }
+    setForm(prev => ({ ...prev, code, photos: {}, manager: prev.manager || managers?.[code] || '' }));
+  };
+  const addPhotos = async (sectionId, fileList) => {
+    const room = SALON_CHECK_MAX_PHOTOS - (form.photos[sectionId] || []).length;
+    const files = Array.from(fileList).slice(0, Math.max(room, 0));
+    if (files.length < fileList.length) notify(`Each section holds ${SALON_CHECK_MAX_PHOTOS} photos, so ${fileList.length - files.length} ${fileList.length - files.length === 1 ? 'was' : 'were'} left out.`, 'error');
+    setUploading(n => n + files.length);
+    for (const file of files) {
+      try {
+        const { path, preview } = await scUploadPhoto(token, form.code, file);
+        setPhotoUrls(prev => ({ ...prev, [path]: preview }));
+        setForm(prev => ({ ...prev, photos: { ...prev.photos, [sectionId]: [...(prev.photos[sectionId] || []), path] } }));
+      } catch (err) {
+        notify(`Photo not added: ${err.message}`, 'error');
+      }
+      setUploading(n => n - 1);
+    }
+  };
+  const removePhoto = (sectionId, path) => {
+    salonCheckPhotoDelete(token, form.code, path);
+    setForm(prev => ({ ...prev, photos: { ...prev.photos, [sectionId]: (prev.photos[sectionId] || []).filter(p => p !== path) } }));
+  };
   const answer = (id, a) => setForm(prev => ({ ...prev, answers: { ...prev.answers, [id]: prev.answers[id] === a ? undefined : a } }));
   const note = (id, text) => setForm(prev => ({ ...prev, notes: { ...prev.notes, [id]: text } }));
   const markSection = (sec, a) => setForm(prev => {
@@ -5888,7 +5988,7 @@ function ShearCheckForm({ stores, visits, sections, managers, onSave, onEmail, o
     setBusy(withEmail ? 'email' : 'save');
     const id = scNewId();
     const answers = Object.fromEntries(Object.entries(form.answers).filter(([, a]) => a));
-    const visit = { id, code: form.code, date: form.date, manager: form.manager, team: form.team, answers, notes: form.notes, followUp: form.followUp, by: userName, savedAt: new Date().toISOString() };
+    const visit = { id, code: form.code, date: form.date, manager: form.manager, team: form.team, answers, notes: form.notes, photos: form.photos, followUp: form.followUp, by: userName, savedAt: new Date().toISOString() };
     const saved = await onSave(visit);
     if (saved?.ok) {
       if (withEmail) await onEmail(form.code, id);
@@ -5898,7 +5998,7 @@ function ShearCheckForm({ stores, visits, sections, managers, onSave, onEmail, o
     }
     setBusy(null);
   };
-  const startOver = () => { if (window.confirm('Clear this checklist and start over?')) { scClearDraft(); setForm(scEmptyForm()); } };
+  const startOver = () => { if (window.confirm('Clear this checklist and start over?')) { dropAllPhotos(); scClearDraft(); setForm(scEmptyForm()); } };
   const openAdd = id => { setAddingTo(addingTo === id ? null : id); setNewQuestion(''); setDeletingIn(null); };
   const saveQuestion = async sectionId => {
     if (!newQuestion.trim() || questionBusy) return;
@@ -5919,7 +6019,7 @@ function ShearCheckForm({ stores, visits, sections, managers, onSave, onEmail, o
       <div className="sc-card sc-info">
         <label className="sc-field sc-field-store">
           <span>Salon</span>
-          <select className="text-input" value={form.code} onChange={e => pickStore(e.target.value)}>
+          <select className="text-input" value={form.code} disabled={uploading > 0} onChange={e => pickStore(e.target.value)}>
             <option value="">Pick a store…</option>
             {groups.map(g => (
               <optgroup key={g.leaderName} label={g.leaderName}>
@@ -5952,6 +6052,12 @@ function ShearCheckForm({ stores, visits, sections, managers, onSave, onEmail, o
               <div className="sc-sec-btns">
                 {canEditQuestions && <button type="button" className="sc-sec-yes" onClick={() => openAdd(sec.id)}>Add question</button>}
                 {canEditQuestions && <button type="button" className="sc-sec-yes" onClick={() => { setDeletingIn(deletingIn === sec.id ? null : sec.id); setAddingTo(null); }}>{deletingIn === sec.id ? 'Done deleting' : 'Delete question'}</button>}
+                {canPhotos && (
+                  <label className="sc-sec-yes sc-sec-photo" onClick={e => { if (!form.code) { e.preventDefault(); notify('Pick a salon first, then add photos.', 'error'); } }}>
+                    <input type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={e => { if (e.target.files.length) addPhotos(sec.id, e.target.files); e.target.value = ''; }} />
+                    📷 Add photos
+                  </label>
+                )}
                 <button type="button" className="sc-sec-yes" onClick={() => markSection(sec, 'yes')}>Mark rest Yes</button>
               </div>
             </div>
@@ -5975,6 +6081,7 @@ function ShearCheckForm({ stores, visits, sections, managers, onSave, onEmail, o
                 </div>
               );
             })}
+            {canPhotos && <ScPhotoStrip paths={form.photos[sec.id] || []} urls={photoUrls} onRemove={p => removePhoto(sec.id, p)} />}
             {addingTo === sec.id && (
               <div className="sc-q-add">
                 <input type="text" className="text-input" autoFocus maxLength={200} placeholder={`New question for ${sec.title}`} value={newQuestion}
@@ -6000,11 +6107,11 @@ function ShearCheckForm({ stores, visits, sections, managers, onSave, onEmail, o
           <span className="sc-footer-counts">{score.yes} Yes · {score.no} No · {score.na} N/A{left > 0 ? ` · ${left} left` : ''}</span>
         </div>
         <div className="sc-footer-btns">
-          <button type="button" className="link-btn" onClick={startOver} disabled={!!busy}>Start over</button>
-          <button type="button" className="sc-btn-save" disabled={!form.code || left > 0 || !!busy} onClick={() => submit(false)}>{busy === 'save' ? 'Saving…' : 'Save'}</button>
-          <button type="button" className="sc-btn-email" disabled={!form.code || left > 0 || !!busy || !leader} onClick={() => submit(true)}>{busy === 'email' ? 'Sending…' : `Save & email ${leader ? leader.leaderName.split(' ')[0] : 'DL'}`}</button>
+          <button type="button" className="link-btn" onClick={startOver} disabled={!!busy || uploading > 0}>Start over</button>
+          <button type="button" className="sc-btn-save" disabled={!form.code || left > 0 || !!busy || uploading > 0} onClick={() => submit(false)}>{busy === 'save' ? 'Saving…' : 'Save'}</button>
+          <button type="button" className="sc-btn-email" disabled={!form.code || left > 0 || !!busy || !leader || uploading > 0} onClick={() => submit(true)}>{busy === 'email' ? 'Sending…' : `Save & email ${leader ? leader.leaderName.split(' ')[0] : 'DL'}`}</button>
         </div>
-        {(!form.code || left > 0) && <p className="sc-footer-hint">{!form.code ? 'Pick a salon at the top.' : `Answer every item to save (${left} left).`}</p>}
+        {(!form.code || left > 0 || uploading > 0) && <p className="sc-footer-hint">{!form.code ? 'Pick a salon at the top.' : left > 0 ? `Answer every item to save (${left} left).` : `Uploading ${uploading} photo${uploading === 1 ? '' : 's'}…`}</p>}
       </div>
     </div>
   );
@@ -6069,13 +6176,16 @@ function ShearCheckScores({ stores, visits }) {
   );
 }
 
-function ShearCheckVisits({ stores, visits, onEmail, onDelete, isOwner }) {
+function ShearCheckVisits({ stores, visits, onEmail, onDelete, isOwner, canPhotos, token }) {
   const [code, setCode] = useState('');
   const [open, setOpen] = useState(null);
   const [sending, setSending] = useState(null);
   const groups = useMemo(() => groupStoresByLeader(stores), [stores]);
   const list = visits.filter(v => !code || v.code === code);
   const send = async v => { setSending(v.id); await onEmail(v.code, v.id); setSending(null); };
+  const openVisit = visits.find(v => v.id === open);
+  const openPhotos = useMemo(() => salonCheckPhotoPaths(openVisit), [openVisit]);
+  const [photoUrls] = useScPhotoUrls(token, openVisit?.code, openPhotos, canPhotos);
   return (
     <div className="sc-visits">
       <select className="text-input sc-range" value={code} onChange={e => setCode(e.target.value)}>
@@ -6111,6 +6221,7 @@ function ShearCheckVisits({ stores, visits, onEmail, onDelete, isOwner }) {
                         </div>
                       );
                     })}
+                    {canPhotos && <ScPhotoStrip paths={v.photos?.[sec.id] || []} urls={photoUrls} />}
                   </div>
                 ))}
                 {v.followUp && <div className="sc-last-follow"><strong>Follow up for next visit:</strong> {v.followUp}</div>}
@@ -8152,7 +8263,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     Object.entries(byCode).forEach(([code, list]) => {
       const last = list[0];
       const noItems = checklistItems(visitChecklist(last)).filter(i => last.answers?.[i.id] === 'no').map(i => `${i.label}${last.notes?.[i.id] ? ` (${last.notes[i.id]})` : ''}`);
-      lines.push(`${STORE_CODE_TO_NAME[code] || `Store ${code}`} (DL ${getLeaderForStoreCode(code)?.leaderName || 'none'}): ${list.length} visit(s), average ${pctStr(avgOf(list))}; last visit ${last.date} by ${last.by || '?'} scored ${pctStr(last.score)}${noItems.length ? `; marked No: ${noItems.join('; ')}` : ''}${last.followUp ? `; follow-up for next visit: ${last.followUp}` : ''}. Earlier scores: ${list.slice(1, 6).map(v => `${v.date} ${pctStr(v.score)}`).join(', ') || 'none'}.`);
+      lines.push(`${STORE_CODE_TO_NAME[code] || `Store ${code}`} (DL ${getLeaderForStoreCode(code)?.leaderName || 'none'}): ${list.length} visit(s), average ${pctStr(avgOf(list))}; last visit ${last.date} by ${last.by || '?'} scored ${pctStr(last.score)}${noItems.length ? `; marked No: ${noItems.join('; ')}` : ''}${salonCheckPhotoPaths(last).length ? `; ${salonCheckPhotoPaths(last).length} photo(s) attached, in ${visitChecklist(last).filter(s => last.photos?.[s.id]?.length).map(s => s.title).join(', ')} (you can't see the pictures, only that they exist; they're in Past Visits and the DL email)` : ''}${last.followUp ? `; follow-up for next visit: ${last.followUp}` : ''}. Earlier scores: ${list.slice(1, 6).map(v => `${v.date} ${pctStr(v.score)}`).join(', ') || 'none'}.`);
     });
     lines.push('');
   }
@@ -11689,6 +11800,7 @@ export default function App() {
             salonChecks={d.salonChecks} questions={salonQuestions} managers={d.managers}
             onSave={handleSaveSalonCheck} onEmail={handleEmailSalonCheck} onDelete={handleDeleteSalonCheck}
             onChangeQuestion={handleChangeSalonQuestion} canEditQuestions={currentUser.role === 'owner' && !presenting}
+            canPhotos={!presenting} token={currentUser.token} notify={showToast}
             isOwner={currentUser.role === 'owner'} userName={currentUser.name} />
         )}
         {!needsReport && tab === 'Employees' && (report || hasHistoricalData) && (
