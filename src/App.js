@@ -542,11 +542,35 @@ function ensureReportDerivedFields(report) {
 // Sales-Accrual/Attendance historical imports instead. Used by every main
 // tab's `usingDefaultRange` fallback, and by Tilly's mirrored context, so
 // opening a tab never requires manually picking a date range first.
+//
+// The end is the latest day with uploaded data, not today: a day's numbers
+// are uploaded after the stores close, so until then "today" has nothing in
+// it, and every same-dates-last-year comparison (shiftYearISO of this end)
+// would count a full day last year against an empty day this year. The App
+// sets latestDataISO from history on every render (setLatestDataDate) before
+// any tab renders. Dates are local, not toISOString (UTC), which reads as
+// tomorrow from ~7–8pm Eastern on.
+let latestDataISO = null;
+const localISO = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function setLatestDataDate(history, weeklyHistory) {
+  let max = null;
+  Object.values(history || {}).forEach(r => {
+    // Sales or cuts, not hours alone: Attendance by itself isn't a finished day.
+    if (r?.date && (r.service || r.retail || r.haircuts) && (!max || r.date > max)) max = r.date;
+  });
+  Object.values(weeklyHistory || {}).forEach(w => { if (w?.endDate && (!max || w.endDate > max)) max = w.endDate; });
+  latestDataISO = max;
+}
 function getCurrentMonthRange() {
   const now = new Date();
-  const first = new Date(now.getFullYear(), now.getMonth(), 1);
-  const toISO = d => d.toISOString().slice(0, 10);
-  return { start: toISO(first), end: toISO(now) };
+  const start = localISO(new Date(now.getFullYear(), now.getMonth(), 1));
+  const today = localISO(now);
+  let end = latestDataISO && latestDataISO < today ? latestDataISO : today;
+  // Nothing uploaded yet this month (e.g. the 1st, before close): a one-day
+  // range on the 1st, which has no data, so tabs show empty and the
+  // last-year comparison hides itself (it needs stores with data both years).
+  if (end < start) end = start;
+  return { start, end };
 }
 
 // Company-level CPD = average per store per day (total cuts ÷ total
@@ -10161,6 +10185,9 @@ export default function App() {
   const [weeklyHistory, setWeeklyHistory] = useState({});
   const [dateRange, setDateRangeState] = useState({ start: null, end: null });
   const setDateRange = (start, end) => setDateRangeState({ start, end });
+  // Before any tab renders: month-to-date ends on the last day with data
+  // (see getCurrentMonthRange), so last-year comparisons stop on that date too.
+  useMemo(() => setLatestDataDate(history, weeklyHistory), [history, weeklyHistory]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('Homepage');
   const [setupSection, setSetupSection] = useState('guide');
