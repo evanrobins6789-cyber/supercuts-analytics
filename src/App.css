@@ -1544,3 +1544,18 @@
 .team-tsth-row { cursor: pointer; }
 .team-tsth-row:hover td, .team-tsth-row:focus-visible td { background: var(--paper); }
 .team-tsth-link { text-decoration: underline; text-underline-offset: 2px; }
+
+/* ─── Goals tab: DL bands (2026-11-09: much bluer, more distinct) ────────── */
+.monthly-goals-table tbody tr.mg-dl-row td,
+.monthly-goals-table tbody tr.mg-dl-row td.ledger-name-col,
+.monthly-goals-table tbody tr.mg-dl-row:hover td.ledger-name-col {
+  background: #1F5FBF; color: #fff; border-top: 10px solid var(--card);
+  font-family: 'Barlow Condensed', sans-serif; font-size: 16px; font-weight: 700; letter-spacing: 0.3px;
+  padding-top: 9px; padding-bottom: 9px;
+}
+.monthly-goals-table tbody tr.mg-dl-row:first-child td { border-top: 0; }
+.monthly-goals-table tbody tr.mg-dl-row td.mg-dl-total { text-align: center; font-family: 'Inter', sans-serif; font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; background: #174C9A; }
+.monthly-goals-table tbody tr.mg-dl-row td.mg-dl-label { text-align: right; font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600; color: #D6E4F8; }
+.mg-dl-count { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 10px; background: rgba(255,255,255,0.2); font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 600; vertical-align: middle; }
+.mg-export-btn { margin-left: auto; background: var(--navy); }
+.mg-export-btn:hover { background: var(--navy-2); }

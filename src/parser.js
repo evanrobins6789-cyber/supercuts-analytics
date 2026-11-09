@@ -540,6 +540,17 @@ export function downloadGoalTemplate(rows) {
   XLSX.writeFile(wb, 'goal-sheet-template.xlsx');
 }
 
+// Any table out to .xlsx: sheets = [{ name, rows (array of arrays), widths? }].
+export function downloadWorkbook(fileName, sheets) {
+  const wb = XLSX.utils.book_new();
+  sheets.forEach(s => {
+    const ws = XLSX.utils.aoa_to_sheet(s.rows);
+    if (s.widths) ws['!cols'] = s.widths.map(wch => ({ wch }));
+    XLSX.utils.book_append_sheet(wb, ws, s.name.slice(0, 31));
+  });
+  XLSX.writeFile(wb, fileName);
+}
+
 // ─── Manager roster (STORE | Manager) ──────────────────────────────────────
 // A simple two-column list — store name, manager name ("Open" for a vacant
 // position, kept as-is rather than treated as empty since it's meaningful).

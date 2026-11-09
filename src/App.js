@@ -5,7 +5,7 @@ import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDat
 import {
   parseStylistReport, parseEmployeeStartDates, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
   parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory, parseGiftCardFile, mergeGiftCardsIntoHistory, parseTipsFile, mergeTipsIntoHistory, parsePayRateFile,
-  buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile, parseMasterSalonListFile, parseHsaScheduleFile,
+  buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile, parseMasterSalonListFile, parseHsaScheduleFile, downloadWorkbook,
 } from './parser';
 import {
   getSession, setSession, clearSession, checkEligible, signUp, logIn, logOut,
@@ -5887,6 +5887,51 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
     onApplySalesGoals(patch, `${fmtMonthLong(month)} Sales goals set to ${fmtMonthLong(prevMonth)} + ${fmt$(amount)} for ${count} store${count === 1 ? '' : 's'}.`);
   };
 
+  // A DL's total for one goal: money and counts add up across their stores;
+  // a % goal is the average of the stores that have one. null = none set.
+  const groupTotal = (storeList, field) => {
+    const vals = storeList.map(s => (field === 'milestone' ? milestoneVal(s.code) : getVal(s.code, field))).filter(v => v !== '' && v != null && !isNaN(Number(v))).map(Number);
+    if (!vals.length) return null;
+    const sum = vals.reduce((a, v) => a + v, 0);
+    return MONTHLY_GOAL_FIELDS.find(f => f.key === field)?.pct ? sum / vals.length : sum;
+  };
+  const fmtTotal = (f, v) => (v == null ? '—' : f.pct ? `${fmtNum(v, 1)}% avg` : fmtGoalValue(f, v));
+
+  // Whole tab out to Excel: one sheet with each DL's total per goal (plus
+  // the company), one with every store as shown, a DL total under each group.
+  // Always every store, whatever the search box says.
+  const exportGoals = () => {
+    const allGroups = groupStoresByLeader(allStores);
+    const goalHead = fields.map(f => (f.pct ? `${f.label} (avg)` : f.label));
+    const nums = list => [...fields.map(f => groupTotal(list, f.key)), groupTotal(list, 'milestone')].map(v => (v == null ? '' : Math.round(v * 100) / 100));
+    const byDl = [
+      [`${fmtMonthLong(month)} Goals by DL`],
+      [],
+      ['DL', 'Role', 'Stores', ...goalHead, 'Milestone'],
+      ...allGroups.map(g => [g.leaderName, g.role === 'Area Supervisors' ? 'Area Supervisor' : g.role === 'District Leaders' ? 'District Leader' : g.role, g.stores.length, ...nums(g.stores)]),
+      ['Company total', '', allStores.length, ...nums(allStores)],
+      [],
+      ['Money and count goals are added up across the DL\'s stores. % goals are the average of the stores that have one. Blank = no store has that goal set.'],
+    ];
+    const refHead = month => MONTHLY_REF_METRICS.map(m => `${fmtMonthLong(month)} ${m.label}`);
+    const refNums = (ref, code) => MONTHLY_REF_METRICS.map(m => { const v = ref[code]?.[m.key]; return v == null ? '' : Math.round(v * 100) / 100; });
+    const storeGoalNums = code => [...fields.map(f => getVal(code, f.key)), milestoneVal(code)].map(v => (v === '' || v == null ? '' : Number(v)));
+    const blankRef = MONTHLY_REF_METRICS.map(() => '');
+    const byStore = [
+      ['DL', 'Store', ...refHead(lyMonth), ...refHead(prevMonth).map(h => (prevIsPartial ? `${h} (so far)` : h)), ...goalHead.map(h => `${fmtMonthLong(month)} ${h}`), 'Milestone'],
+      ...allGroups.flatMap(g => [
+        ...g.stores.map(s => [g.leaderName, s.name, ...refNums(lyRef, s.code), ...refNums(prevRef, s.code), ...storeGoalNums(s.code)]),
+        [`${g.leaderName} total`, `${g.stores.length} stores`, ...blankRef, ...blankRef, ...nums(g.stores)],
+        [],
+      ]),
+      ['Company total', `${allStores.length} stores`, ...blankRef, ...blankRef, ...nums(allStores)],
+    ];
+    downloadWorkbook(`goals-${month}.xlsx`, [
+      { name: 'By DL', rows: byDl, widths: [24, 16, 8, ...fields.map(() => 14), 12] },
+      { name: 'By Store', rows: byStore, widths: [22, 22, ...MONTHLY_REF_METRICS.map(() => 12), ...MONTHLY_REF_METRICS.map(() => 12), ...fields.map(() => 14), 12] },
+    ]);
+  };
+
   const goalCell = (code, f, i) => {
     const cls = `mg-goal-col ${i === 0 ? 'mg-first' : ''}`;
     const value = getVal(code, f.key);
@@ -5921,6 +5966,7 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
             <option key={m} value={m}>{fmtMonthLong(m)}{m === thisMonth ? ' (this month)' : ''}</option>
           ))}
         </select>
+        <button type="button" className="mg-bump-btn mg-export-btn" onClick={exportGoals}>⬇ Export to Excel</button>
       </div>
       {isOwner && (
         <div className="mg-bump-row">
@@ -5973,7 +6019,12 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
           <tbody>
             {groups.map(g => (
               <React.Fragment key={g.leaderName}>
-                <tr className="mg-dl-row"><td className="ledger-name-col">{g.leaderName}</td><td colSpan={MONTHLY_REF_METRICS.length * 2 + fields.length + 1}></td></tr>
+                <tr className="mg-dl-row">
+                  <td className="ledger-name-col">{g.leaderName}<span className="mg-dl-count">{g.stores.length} store{g.stores.length === 1 ? '' : 's'}</span></td>
+                  <td colSpan={MONTHLY_REF_METRICS.length * 2} className="mg-dl-label">{g.leaderName.split(' ')[0]}'s total →</td>
+                  {fields.map((f, i) => <td key={f.key} className={`mg-dl-total ${i === 0 ? 'mg-first' : ''}`}>{fmtTotal(f, groupTotal(g.stores, f.key))}</td>)}
+                  <td className="mg-dl-total">{fmtTotal({ money: true }, groupTotal(g.stores, 'milestone'))}</td>
+                </tr>
                 {g.stores.map(s => (
                   <tr key={s.code}>
                     <td className="ledger-name-col">{s.name}</td>
