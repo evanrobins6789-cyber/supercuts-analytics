@@ -1559,3 +1559,26 @@
 .mg-dl-count { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 10px; background: rgba(255,255,255,0.2); font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 600; vertical-align: middle; }
 .mg-export-btn { margin-left: auto; background: var(--navy); }
 .mg-export-btn:hover { background: var(--navy-2); }
+
+/* ─── Pay period dropdown (My Numbers, Team TSTH) ────────────────────────── */
+.pay-period-picker { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 0 12px; }
+.pay-period-label { font-weight: 700; color: var(--navy); font-size: 13px; margin-right: 2px; }
+.pay-period-select { width: auto; min-width: 230px; max-width: 100%; font-weight: 600; }
+.pay-period-step { min-width: 36px; min-height: 36px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--navy); font-size: 18px; font-weight: 700; line-height: 1; cursor: pointer; }
+.pay-period-step:hover:not(:disabled) { border-color: var(--navy); }
+.pay-period-step:disabled { opacity: 0.35; cursor: default; }
+.pay-period-note { font-size: 12px; color: var(--ink-soft); }
+.pay-period-custom { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+@media (max-width: 520px) { .pay-period-select { flex: 1 1 160px; min-width: 0; } }
+
+/* ─── Team TSTH: where-you-are + moving between people ───────────────────── */
+.team-tsth-top { scroll-margin-top: 64px; }
+.team-tsth-crumbs { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; font-size: 14px; color: var(--ink-soft); }
+.team-tsth-crumb { border: 0; background: none; padding: 6px 2px; color: #1F5FBF; font: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; min-height: 36px; }
+.team-tsth-crumb-here { font-weight: 700; color: var(--navy); }
+.team-tsth-switch { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 10px; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); }
+.team-tsth-switch-select { width: auto; min-width: 220px; max-width: 100%; font-weight: 700; }
+@media (max-width: 520px) { .team-tsth-switch-select { flex: 1 1 150px; min-width: 0; } }
+.team-tsth-bottom { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin: 18px 0 8px; }
+.ledger-table tbody tr.team-tsth-row--last td { background: #E3ECFA; }
+.team-tsth-row:focus-visible { outline: 2px solid #1F5FBF; outline-offset: -2px; }

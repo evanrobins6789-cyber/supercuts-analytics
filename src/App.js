@@ -1757,6 +1757,74 @@ const previousPayPeriod = iso => {
   return payPeriodFor(`${py}-${String(pm).padStart(2, '0')}-16`);
 };
 
+// Pay period dropdown (My Numbers, Team TSTH; 2026-11-09): every pay period
+// (1st–15th, 16th–end) from PAY_HISTORY_START to now, newest first, plus
+// "This month" and custom dates. ‹ › step one pay period. The current period
+// ends today, the way the tabs already treat it.
+const PAY_HISTORY_START = '2025-01-01';
+function payPeriodList(today) {
+  const out = [];
+  let p = payPeriodFor(today);
+  while (p.end >= PAY_HISTORY_START) {
+    out.push({ start: p.start, end: p.end < today ? p.end : today, fullEnd: p.end });
+    p = previousPayPeriod(p.start);
+  }
+  return out;
+}
+const payPeriodLabel = p => {
+  const s = new Date(`${p.start}T00:00:00`);
+  const e = new Date(`${p.fullEnd}T00:00:00`);
+  return `${s.toLocaleDateString('en-US', { month: 'short' })} ${s.getDate()}–${e.getDate()}, ${s.getFullYear()}`;
+};
+function PayPeriodPicker({ range, onChange }) {
+  const today = localTodayISO();
+  const periods = useMemo(() => payPeriodList(today), [today]);
+  const month = getCurrentMonthRange();
+  const idx = periods.findIndex(p => p.start === range.start && p.end === range.end);
+  const isMonth = idx < 0 && range.start === month.start && range.end === month.end;
+  const [customOpen, setCustomOpen] = useState(false);
+  const value = idx >= 0 ? String(idx) : isMonth ? 'month' : 'custom';
+  const showCustom = customOpen || value === 'custom';
+  const pick = v => {
+    if (v === 'custom') { setCustomOpen(true); return; }
+    setCustomOpen(false);
+    if (v === 'month') onChange(month.start, month.end);
+    else onChange(periods[Number(v)].start, periods[Number(v)].end);
+  };
+  const byYear = [];
+  periods.forEach((p, i) => {
+    const y = p.start.slice(0, 4);
+    if (!byYear.length || byYear[byYear.length - 1].year !== y) byYear.push({ year: y, items: [] });
+    byYear[byYear.length - 1].items.push({ ...p, i });
+  });
+  return (
+    <div className="pay-period-picker">
+      <span className="pay-period-label">Pay period</span>
+      <button type="button" className="pay-period-step" aria-label="Older pay period" disabled={idx < 0 || idx >= periods.length - 1} onClick={() => pick(String(idx + 1))}>‹</button>
+      <select className="text-input pay-period-select" value={value} onChange={e => pick(e.target.value)}>
+        {byYear.map(g => (
+          <optgroup key={g.year} label={g.year}>
+            {g.items.map(p => <option key={p.start} value={String(p.i)}>{payPeriodLabel(p)}{p.i === 0 ? ' (this pay period)' : p.i === 1 ? ' (last pay period)' : ''}</option>)}
+          </optgroup>
+        ))}
+        <optgroup label="Other">
+          <option value="month">This month so far</option>
+          <option value="custom">Custom dates…</option>
+        </optgroup>
+      </select>
+      <button type="button" className="pay-period-step" aria-label="Newer pay period" disabled={idx <= 0} onClick={() => pick(String(idx - 1))}>›</button>
+      {idx === 0 && range.end < periods[0].fullEnd && <span className="pay-period-note">through today</span>}
+      {showCustom && (
+        <span className="pay-period-custom">
+          <input type="date" className="date-range-input" value={range.start || ''} max={range.end || undefined} onChange={e => e.target.value && onChange(e.target.value, range.end)} />
+          <span className="date-range-to">to</span>
+          <input type="date" className="date-range-input" value={range.end || ''} min={range.start || undefined} onChange={e => e.target.value && onChange(range.start, e.target.value)} />
+        </span>
+      )}
+    </div>
+  );
+}
+
 // TSTH progress bar with the goal line labeled and the bonus zone marked.
 // Scale runs to 1.5× the goal (further if their TSTH is past that).
 function TsthBar({ tsth, goal, dark = true }) {
@@ -1941,12 +2009,6 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
     return { pay: p, coaching: buildCoaching({ stores: result.stores, pay: p, peers, periodFactor }) };
   }, [result, isOwner, leaderTop, state.data, userRole, range.start, range.end]);
 
-  const prev = previousPayPeriod(today);
-  const presets = [
-    { label: 'This pay period', start: cur.start, end: today < cur.end ? today : cur.end },
-    { label: 'Last pay period', start: prev.start, end: prev.end },
-    { label: 'This month', ...getCurrentMonthRange() },
-  ];
   const cols = [
     { key: 'hours', label: 'Hours', fmt: v => fmtNum(v, 1) },
     { key: 'haircuts', label: 'Haircuts', fmt: fmtInt },
@@ -1979,12 +2041,7 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
       ) : (
         <p className="section-hint">Your own numbers{userName ? `, ${userName}` : ''}, by the store where you did the work (as the POS recorded it). TSTH is total sales (service, color and retail) ÷ hours. Only you can see this.</p>
       )}
-      <div className="view-toggle">
-        {presets.map(p => (
-          <button key={p.label} className={`view-toggle-btn ${range.start === p.start && range.end === p.end ? 'active' : ''}`} onClick={() => setRange({ start: p.start, end: p.end })}>{p.label}</button>
-        ))}
-      </div>
-      <DateRangeBar start={range.start} end={range.end} onChange={(s, e) => setRange({ start: s, end: e })} />
+      <PayPeriodPicker range={range} onChange={(st, en) => setRange({ start: st, end: en })} />
       {loading && <span className="spinner small" />}
       {!isOwner && state.error && <p className="password-error">Couldn't load your numbers: {state.error}</p>}
       {!loading && result && (result.stores.length ? (
@@ -2042,6 +2099,19 @@ function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHi
   const [range, setRange] = useState({ start: cur.start, end: today < cur.end ? today : cur.end });
   const [openCode, setOpenCode] = useState(null);
   const [person, setPerson] = useState(null);
+  // The last person opened, so going back to the store's list lands on
+  // (and highlights) their row instead of the top.
+  const [lastPerson, setLastPerson] = useState(null);
+  const topRef = useRef(null);
+  const lastRowRef = useRef(null);
+  const openPerson = name => { setPerson(name); setLastPerson(name); };
+  // A new screen (store, person) starts at its top; back to a store's list
+  // scrolls to the person just viewed.
+  useEffect(() => {
+    if (!person && openCode && lastRowRef.current) { lastRowRef.current.scrollIntoView({ block: 'center' }); lastRowRef.current.focus({ preventScroll: true }); return; }
+    const el = topRef.current;
+    if (el && el.getBoundingClientRect().top < 0) el.scrollIntoView({ block: 'start' });
+  }, [person, openCode]);
   const [server, setServer] = useState({ loading: !isOwner, data: null, error: null });
   useEffect(() => {
     if (isOwner || !range.start || !range.end) return undefined;
@@ -2103,16 +2173,26 @@ function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHi
     return { result, pay, coaching, peers };
   }, [person, history, weeklyHistory, tipsSrc, range, isOwner, server.data, rowsByName]);
 
-  const prev = previousPayPeriod(today);
-  const presets = [
-    { label: 'This pay period', start: cur.start, end: today < cur.end ? today : cur.end },
-    { label: 'Last pay period', start: prev.start, end: prev.end },
-    { label: 'This month', ...getCurrentMonthRange() },
-  ];
   const openStore = stores.find(s => s.code === openCode) || null;
   const money2 = v => (v == null ? '—' : `$${v.toFixed(2)}`);
   const tsthClass = (tsth, goal) => (tsth == null ? '' : tsth >= goal ? 'employee-picker-tsth--bonus' : 'employee-picker-tsth--none');
-  const goBack = () => { if (person) setPerson(null); else setOpenCode(null); };
+  const toAllStores = () => { setPerson(null); setOpenCode(null); setLastPerson(null); };
+  const toStore = () => setPerson(null);
+  // Prev / next through the open store's people, in the list's order
+  // (highest TSTH first).
+  const people = openStore?.people || [];
+  const pIdx = person ? people.findIndex(p => normalizePersonName(p.name) === normalizePersonName(person)) : -1;
+  const switcher = person && people.length > 0 && (
+    <div className="team-tsth-switch">
+      <button type="button" className="pay-period-step" aria-label="Previous employee" disabled={pIdx <= 0} onClick={() => openPerson(people[pIdx - 1].name)}>‹</button>
+      <select className="text-input team-tsth-switch-select" aria-label={`Employees at ${openStore.name}`} value={pIdx >= 0 ? people[pIdx].name : ''} onChange={e => openPerson(e.target.value)}>
+        {pIdx < 0 && <option value="">{person}</option>}
+        {people.map(p => <option key={p.name} value={p.name}>{p.name} · ${p.tsth.toFixed(2)}</option>)}
+      </select>
+      <button type="button" className="pay-period-step" aria-label="Next employee" disabled={pIdx < 0 || pIdx >= people.length - 1} onClick={() => openPerson(people[pIdx + 1].name)}>›</button>
+      {pIdx >= 0 && <span className="pay-period-note">{pIdx + 1} of {people.length} at {openStore.name}</span>}
+    </div>
+  );
   const groups = [];
   stores.forEach(s => {
     const last = groups[groups.length - 1];
@@ -2126,21 +2206,19 @@ function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHi
       <p className="section-hint">
         TSTH for {isOwner ? 'every store, grouped by DL' : role === 'manager' ? 'your store' : 'your stores'}: total sales (service, color and retail) ÷ hours. The goal is 2 × the store's haircut price (PA $56, NJ/DE $60). <b className="employee-picker-tsth--bonus">Green</b> is at or over goal, <b className="employee-picker-tsth--none">red</b> is under. Open a store, then a person, to see what their My Numbers tab shows them, pay included.
       </p>
-      <div className="view-toggle">
-        {presets.map(p => (
-          <button key={p.label} className={`view-toggle-btn ${range.start === p.start && range.end === p.end ? 'active' : ''}`} onClick={() => setRange({ start: p.start, end: p.end })}>{p.label}</button>
-        ))}
-      </div>
-      <DateRangeBar start={range.start} end={range.end} onChange={(s, e) => setRange({ start: s, end: e })} />
+      <PayPeriodPicker range={range} onChange={(st, en) => setRange({ start: st, end: en })} />
       {server.loading && <span className="spinner small" />}
       {server.error && <p className="password-error">Couldn't load tips and pay rates: {server.error}. Sales, hours and TSTH below are still right.</p>}
 
+      <div ref={topRef} className="team-tsth-top" />
       {(openStore || person) && (
-        <div className="team-tsth-crumbs">
-          <button type="button" className="view-toggle-btn" onClick={goBack}>← {person ? (openStore ? openStore.name : 'Back') : 'All stores'}</button>
-          <span>{openStore ? openStore.name : ''}{person ? ` › ${person}` : ''}</span>
-        </div>
+        <nav className="team-tsth-crumbs" aria-label="Where you are">
+          <button type="button" className="team-tsth-crumb" onClick={toAllStores}>All stores</button>
+          {openStore && <><span aria-hidden="true">›</span>{person ? <button type="button" className="team-tsth-crumb" onClick={toStore}>{openStore.name}</button> : <span className="team-tsth-crumb-here">{openStore.name}</span>}</>}
+          {person && <><span aria-hidden="true">›</span><span className="team-tsth-crumb-here">{person}</span></>}
+        </nav>
       )}
+      {switcher}
 
       {person && detail ? (
         detail.result.stores.length ? (
@@ -2158,15 +2236,21 @@ function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHi
               </table>
             </div>
             <PayExplainer pay={detail.pay} coaching={detail.coaching} leaderName={person} stores={detail.result.stores} peers={detail.peers} />
+            {/* The same controls at the bottom, so a long page doesn't mean
+                scrolling back up to move on. */}
+            <div className="team-tsth-bottom">
+              {openStore && <button type="button" className="view-toggle-btn" onClick={toStore}>← Everyone at {openStore.name}</button>}
+              {pIdx >= 0 && pIdx < people.length - 1 && <button type="button" className="view-toggle-btn active" onClick={() => openPerson(people[pIdx + 1].name)}>Next: {people[pIdx + 1].name} ›</button>}
+            </div>
           </>
-        ) : <p className="empty-note">{person} has no hours or sales on file for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}.</p>
+        ) : <p className="empty-note">{person} has no hours or sales on file for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}. Pick another pay period or another person above.</p>
       ) : openStore ? (
         <div className="ledger-scroll">
           <table className="ledger-table team-tsth-table">
             <thead><tr><th className="ledger-name-col">Employee</th><th>Hours here</th><th>Sales here</th><th>TSTH here</th><th>Bonus / hr</th><th>Tips</th><th>Possible pay</th></tr></thead>
             <tbody>
               {openStore.people.map(p => (
-                <tr key={p.name} className="team-tsth-row" tabIndex={0} role="button" onClick={() => setPerson(p.name)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPerson(p.name); } }}>
+                <tr key={p.name} ref={p.name === lastPerson ? lastRowRef : undefined} className={`team-tsth-row ${p.name === lastPerson ? 'team-tsth-row--last' : ''}`} tabIndex={0} role="button" onClick={() => openPerson(p.name)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPerson(p.name); } }}>
                   <td className="ledger-name-col"><span className="team-tsth-link">{p.name}</span><FocusTag name={p.name} /></td>
                   <td>{fmtNum(p.hours, 1)}</td>
                   <td>{fmt$(p.sales)}</td>
@@ -2187,7 +2271,7 @@ function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHi
             {isOwner && <p className="section-label team-tsth-group">{g.leader || 'No DL listed'}</p>}
             <div className="team-tsth-grid">
               {g.stores.map(s => (
-                <button type="button" key={s.code} className="team-tsth-card" onClick={() => { setOpenCode(s.code); setPerson(null); }}>
+                <button type="button" key={s.code} className="team-tsth-card" onClick={() => { setOpenCode(s.code); setPerson(null); setLastPerson(null); }}>
                   <span className="team-tsth-card-name">{s.name}</span>
                   <span className={`team-tsth-card-tsth ${tsthClass(s.tsth, s.goal)}`}>{money2(s.tsth)}</span>
                   <span className="team-tsth-card-meta">goal ${s.goal} · {s.bonusing} of {s.people.length} bonusing · {fmtNum(s.hours, 0)} hrs</span>
