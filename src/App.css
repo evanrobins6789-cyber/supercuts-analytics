@@ -1582,3 +1582,25 @@
 .team-tsth-bottom { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin: 18px 0 8px; }
 .ledger-table tbody tr.team-tsth-row--last td { background: #E3ECFA; }
 .team-tsth-row:focus-visible { outline: 2px solid #1F5FBF; outline-offset: -2px; }
+
+/* Team TSTH: who's bonusing heat bar (green bonusing, amber close, red under). */
+.bonus-heat { display: block; width: 100%; }
+.bonus-heat--big { margin: 10px 0 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.bonus-heat-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; margin-bottom: 8px; }
+.bonus-heat-title { font-size: 14px; font-weight: 700; color: var(--navy); }
+.bonus-heat-big-num { font-size: 13px; color: var(--ink-soft); }
+.bonus-heat-big-num b { font-size: 20px; color: var(--green); font-variant-numeric: tabular-nums; }
+.bonus-heat-bar { display: flex; width: 100%; height: 8px; border-radius: 4px; overflow: hidden; background: var(--line); }
+.bonus-heat--big .bonus-heat-bar { height: 22px; border-radius: 6px; }
+.bonus-heat-seg { display: flex; align-items: center; justify-content: center; height: 100%; color: #fff; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.bonus-heat-seg + .bonus-heat-seg { border-left: 2px solid var(--card); }
+.bonus-heat-seg--bonus { background: var(--green); }
+.bonus-heat-seg--close { background: #D99A1E; }
+.bonus-heat-seg--under { background: var(--red); }
+.bonus-heat-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 12px; color: var(--ink-soft); }
+.bonus-heat-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.bonus-heat-dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+.bonus-heat-table td.bonus-heat-table-bar, .bonus-heat-table th.bonus-heat-table-bar { min-width: 140px; }
+.team-tsth-group .section-label { margin-bottom: 6px; }
+.team-tsth-group-count { font-weight: 500; font-size: 12px; color: var(--ink-soft); margin-left: 6px; text-transform: none; letter-spacing: 0; }
+.team-tsth-card .bonus-heat { margin: 2px 0; }

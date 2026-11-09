@@ -2092,6 +2092,56 @@ function payPeriodFactor(range, lastDate) {
     ? dayCount(per.start, per.end) / dayCount(per.start, lastDate) : 1;
 }
 
+// How many people are bonusing, close (within $5/hr under their goal) or
+// under, counting each person once. Uses their pay row (TSTH across every
+// store they worked, as pay is figured) and falls back to this store's TSTH.
+const BONUS_CLOSE_GAP = 5;
+function bonusSplit(people) {
+  const seen = new Map();
+  people.forEach(p => {
+    const key = normalizePersonName(p.name);
+    if (seen.has(key)) return;
+    const tsth = p.row ? p.row.tsth : p.tsth;
+    const goal = p.row ? p.row.goal : p.goal;
+    const gap = goal - tsth;
+    seen.set(key, p.row ? (p.row.bonusPerHour > 0 ? 'bonus' : gap <= BONUS_CLOSE_GAP ? 'close' : 'under')
+      : (tsth > goal ? 'bonus' : gap <= BONUS_CLOSE_GAP ? 'close' : 'under'));
+  });
+  const out = { bonus: 0, close: 0, under: 0, total: seen.size };
+  seen.forEach(v => { out[v] += 1; });
+  return out;
+}
+
+function BonusHeatBar({ split, title, big = false }) {
+  if (!split || !split.total) return null;
+  const pct = n => (n / split.total) * 100;
+  const segs = [
+    { key: 'bonus', n: split.bonus },
+    { key: 'close', n: split.close },
+    { key: 'under', n: split.under },
+  ];
+  return (
+    <span className={`bonus-heat ${big ? 'bonus-heat--big' : ''}`}>
+      {title && (
+        <span className="bonus-heat-head">
+          <span className="bonus-heat-title">{title}</span>
+          <span className="bonus-heat-big-num"><b>{split.bonus}</b> of {split.total} bonusing · {Math.round(pct(split.bonus))}%</span>
+        </span>
+      )}
+      <span className="bonus-heat-bar" role="img" aria-label={`${split.bonus} bonusing, ${split.close} within $${BONUS_CLOSE_GAP} of goal, ${split.under} further under, of ${split.total}`}>
+        {segs.map(s => s.n > 0 && (
+          <span key={s.key} className={`bonus-heat-seg bonus-heat-seg--${s.key}`} style={{ width: `${pct(s.n)}%` }}>{big && pct(s.n) >= 8 ? s.n : ''}</span>
+        ))}
+      </span>
+      {big && <span className="bonus-heat-legend">
+        <span><i className="bonus-heat-dot bonus-heat-seg--bonus" />{split.bonus} bonusing</span>
+        <span><i className="bonus-heat-dot bonus-heat-seg--close" />{split.close} close (under goal by ${BONUS_CLOSE_GAP}/hr or less)</span>
+        <span><i className="bonus-heat-dot bonus-heat-seg--under" />{split.under} further under</span>
+      </span>}
+    </span>
+  );
+}
+
 function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHistory = null, payRates = [], nameAliases = {} }) {
   const isOwner = role === 'owner';
   const today = localTodayISO();
@@ -2138,18 +2188,18 @@ function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHi
     rows.forEach(r => { byName[normalizePersonName(r.name)] = r; });
     const totals = getRangeTotals(history, weeklyHistory, range.start, range.end);
     const list = Object.entries(totals).map(([code, t]) => {
+      const goal = haircutPriceFor(code) * 2;
       const people = (t.employees || []).filter(e => e.totalHours > 0).map(e => {
         const sales = e.sales || 0;
         const hours = e.totalHours || 0;
-        return { name: e.name, hours, sales, tsth: sales / hours, row: byName[normalizePersonName(e.name)] || null };
+        return { name: e.name, hours, sales, tsth: sales / hours, goal, row: byName[normalizePersonName(e.name)] || null };
       }).sort((a, b) => b.tsth - a.tsth);
       const hours = people.reduce((s, p) => s + p.hours, 0);
       const sales = people.reduce((s, p) => s + p.sales, 0);
-      const goal = haircutPriceFor(code) * 2;
       return {
         code, name: STORE_CODE_TO_NAME[code] || `Store ${code}`, goal, people, hours, sales,
         tsth: hours > 0 ? sales / hours : null,
-        bonusing: people.filter(p => p.row?.bonusPerHour > 0).length,
+        split: bonusSplit(people),
         leader: getLeaderForStoreCode(code)?.leaderName || null,
       };
     }).filter(s => s.people.length);
@@ -2200,6 +2250,8 @@ function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHi
     else if (!isOwner && last) last.stores.push(s);
     else groups.push({ leader: s.leader, stores: [s] });
   });
+  groups.forEach(g => { g.split = bonusSplit(g.stores.flatMap(s => s.people)); });
+  const allSplit = bonusSplit(stores.flatMap(s => s.people));
 
   return (
     <div className="tab-content">
@@ -2246,6 +2298,7 @@ function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHi
         ) : <p className="empty-note">{person} has no hours or sales on file for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}. Pick another pay period or another person above.</p>
       ) : openStore ? (
         <div className="ledger-scroll">
+          <BonusHeatBar big split={openStore.split} title={`${openStore.name}: who's bonusing`} />
           <table className="ledger-table team-tsth-table">
             <thead><tr><th className="ledger-name-col">Employee</th><th>Hours here</th><th>Sales here</th><th>TSTH here</th><th>Bonus / hr</th><th>Tips</th><th>Possible pay</th></tr></thead>
             <tbody>
@@ -2266,20 +2319,50 @@ function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHi
           <p className="section-hint">"Here" is this store only. Bonus, tips and possible pay count every store they worked{isOwner ? '' : ' that you can see'}, the way pay is figured. Possible pay is base + tips + bonus so far; it's blank when no pay rate is on file for that name. Tap a name for the full breakdown.</p>
         </div>
       ) : stores.length ? (
-        groups.map(g => (
+        <>
+        <BonusHeatBar big split={allSplit} title={isOwner ? 'Company: who’s bonusing' : role === 'manager' ? 'Your store: who’s bonusing' : 'Your stores: who’s bonusing'} />
+        {isOwner && groups.length > 1 && (
+          <div className="ledger-scroll">
+            <table className="ledger-table bonus-heat-table">
+              <thead><tr><th className="ledger-name-col">DL</th><th>Stores</th><th>People</th><th>Bonusing</th><th>Close</th><th>Further under</th><th>% bonusing</th><th className="bonus-heat-table-bar">Split</th></tr></thead>
+              <tbody>{[...groups].sort((a, b) => (b.split.bonus / (b.split.total || 1)) - (a.split.bonus / (a.split.total || 1))).map(g => (
+                <tr key={g.leader || 'none'}>
+                  <td className="ledger-name-col">{g.leader || 'No DL listed'}</td>
+                  <td>{g.stores.length}</td>
+                  <td>{g.split.total}</td>
+                  <td className="employee-picker-tsth--bonus">{g.split.bonus}</td>
+                  <td>{g.split.close}</td>
+                  <td className="employee-picker-tsth--none">{g.split.under}</td>
+                  <td><b>{g.split.total ? Math.round((g.split.bonus / g.split.total) * 100) : 0}%</b></td>
+                  <td className="bonus-heat-table-bar"><BonusHeatBar split={g.split} /></td>
+                </tr>
+              ))}</tbody>
+            </table>
+            <p className="section-hint">Each person counts once, even if they worked at more than one store. Bonusing is figured across every store they worked, the way pay is. Close means under their goal by ${BONUS_CLOSE_GAP}/hr or less. Highest % bonusing first.</p>
+          </div>
+        )}
+        {groups.map(g => (
           <div key={g.leader || 'none'}>
-            {isOwner && <p className="section-label team-tsth-group">{g.leader || 'No DL listed'}</p>}
+            {isOwner && (
+              <div className="team-tsth-group">
+                <p className="section-label">{g.leader || 'No DL listed'} <span className="team-tsth-group-count">{g.split.bonus} of {g.split.total} bonusing · {g.split.close} close · {g.stores.length} stores</span></p>
+                <BonusHeatBar split={g.split} />
+              </div>
+            )}
             <div className="team-tsth-grid">
               {g.stores.map(s => (
                 <button type="button" key={s.code} className="team-tsth-card" onClick={() => { setOpenCode(s.code); setPerson(null); setLastPerson(null); }}>
                   <span className="team-tsth-card-name">{s.name}</span>
                   <span className={`team-tsth-card-tsth ${tsthClass(s.tsth, s.goal)}`}>{money2(s.tsth)}</span>
-                  <span className="team-tsth-card-meta">goal ${s.goal} · {s.bonusing} of {s.people.length} bonusing · {fmtNum(s.hours, 0)} hrs</span>
+                  <span className="team-tsth-card-meta"><b className="employee-picker-tsth--bonus">{s.split.bonus} of {s.split.total} bonusing</b>{s.split.close ? ` · ${s.split.close} close` : ''}</span>
+                  <BonusHeatBar split={s.split} />
+                  <span className="team-tsth-card-meta">goal ${s.goal} · {fmtNum(s.hours, 0)} hrs</span>
                 </button>
               ))}
             </div>
           </div>
-        ))
+        ))}
+        </>
       ) : (
         <p className="empty-note">No hours with sales on file for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}.</p>
       )}
