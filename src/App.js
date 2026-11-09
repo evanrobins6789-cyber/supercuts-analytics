@@ -12,7 +12,7 @@ import {
   loadScoped, loadScopedByPrefix, saveScoped, rosterList, rosterUpload, rosterResetPin, rosterSetPin, rosterUpdate, rosterLoginCounts,
   pointsBalance, pointsAllBalances, pointsTransactions, pointsDeleteTransaction, finalizeGoals,
   pointsRedeem, pointsListRewards, pointsSaveReward, pointsDeleteReward, pointsMarkFulfilled,
-  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank, lpLoad, lpSave, emailSalonCheck, changeSalonCheckQuestion, salonCheckPhotoUploadUrl, salonCheckPhotoUrls, salonCheckPhotoDelete, myNumbers, payRatesLoad, payRatesUpload,
+  leaseUploadUrl, leaseViewUrl, leaseDeleteFile, scanLeaseDates, storeRank, lpLoad, lpSave, emailSalonCheck, changeSalonCheckQuestion, salonCheckPhotoUploadUrl, salonCheckPhotoUrls, salonCheckPhotoDelete, myNumbers, teamNumbers, payRatesLoad, payRatesUpload,
 } from './auth';
 import { SALON_CHECK_MAX_PHOTOS, activeChecklist, checklistItems, visitChecklist, scoreSalonCheck, salonCheckList, salonCheckPhotoPaths } from './salonCheck';
 import { LP_RULES, parseLpSalesFile, parseLpAttendanceFile, parseLpRegisterFile, mergeLpDays, lpMonthPayload, analyzeLp, lpDefaultRange } from './lossPrevention';
@@ -28,7 +28,7 @@ import {
   shiftMonthKey, salesGoalBreakdown, monthlyReference as sharedMonthlyReference, openDaysInRange, closedDaysInMonth,
 } from './metrics';
 import { BITMOJI_POOLS } from './bitmoji';
-import { buildPayRows, topTsthRow, payPeriodFor, MIN_HOURS_FOR_TOP, buildRateLookup } from './payTracker';
+import { buildPayRows, topTsthRow, payPeriodFor, MIN_HOURS_FOR_TOP, buildRateLookup, haircutPriceFor } from './payTracker';
 import { buildMyNumbers, pickOwnRecords, normalizePersonName, buildPeerStats } from './myNumbers';
 import { buildPayBreakdown, buildCoaching } from './payCoach';
 import { TabMenu } from './TabMenu';
@@ -1546,6 +1546,7 @@ const SITE_TIPS = [
   { icon: '✂️', title: 'Change the Shear Check', body: 'Use Add question or Delete question in any Shear Check section to change the checklist for every future visit. Saved reports keep the questions and score they were filled out with.', roles: ['owner'] },
   { icon: '⭐', title: 'Focus Stylist', body: 'Tap FOCUS next to a stylist on the Overview or DL tab to pick them for the month, then track their TSTH and cuts-per-hour goals on the Focus Stylist tab. They get a FOCUS STYLIST tag next to their name.', roles: ['owner', 'district_leader'] },
   { icon: '🎁', title: 'Gift Cards', body: 'The Gift Cards tab shows gift card sales and progress toward the gift card goal for your stores. Tap a store to see who sold them.', roles: ['owner', 'district_leader'] },
+  { icon: '👥', title: 'Team TSTH', body: 'The Team TSTH tab shows each of your stores’ TSTH against goal. Tap a store to see everyone there, highest TSTH first, then tap a name to see exactly what their My Numbers tab shows them, including pay and how they can raise their TSTH.', roles: LEADERS },
   { icon: '👀', title: 'Pick who’s on the pay card', body: 'On the Homepage pay card or the My Numbers tab, use the "Showing" menu to look at any employee. It lists everyone by TSTH, highest first: green is bonusing, red is not. It starts on the top-TSTH person.', roles: ['owner'] },
   { icon: '📥', title: 'Keep the numbers fresh', body: 'Setup › Historical Import takes Sales-Accrual, Attendance, Tips and Pay Rates files. Re-uploading the same dates is safe; those days are replaced, not doubled.', roles: ['owner'] },
   { icon: '🔗', title: 'Different POS names', body: 'If someone’s name in the POS differs from their login ("Sammy" vs "Samantha"), type the POS spelling in Setup › Employee Access › "Also in sales as" so their numbers and pay rate line up.', roles: ['owner'] },
@@ -2005,6 +2006,203 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
     </div>
   );
 }
+// ─── Team TSTH tab (owner, District Leaders, managers; 2026-11-09) ─────────
+// Their stores (a DL's group, a manager's own store, every store for the
+// owner, grouped by DL) with each store's TSTH. Open a store to see its
+// people, highest TSTH first; open a person to see exactly what My Numbers
+// shows them, pay and coaching included (the user's call). Sales and hours
+// come from the store-scoped history the login already has. Tips and pay
+// rates: the owner's own full data, or for a DL/manager api/_team-numbers.js,
+// which sends only their stores' tips and the rates of people who worked there.
+const MY_NUMBERS_COLS = [
+  { key: 'hours', label: 'Hours', fmt: v => fmtNum(v, 1) },
+  { key: 'haircuts', label: 'Haircuts', fmt: fmtInt },
+  { key: 'service', label: 'Service $', fmt: fmt$ },
+  { key: 'colorSales', label: 'Color $', fmt: fmt$ },
+  { key: 'retail', label: 'Retail $', fmt: fmt$ },
+  { key: 'sales', label: 'Total Sales', fmt: fmt$ },
+  { key: 'tsth', label: 'TSTH', fmt: v => (v == null ? '—' : `$${v.toFixed(2)}`) },
+  { key: 'cph', label: 'Cuts / hr', fmt: v => fmtNum(v, 2) },
+  { key: 'tips', label: 'Tips', fmt: fmt$ },
+];
+
+// Scale a so-far bonus to the whole pay period at the same pace (same rule
+// as My Numbers).
+function payPeriodFactor(range, lastDate) {
+  const per = payPeriodFor(range.start);
+  const dayCount = (a, b) => Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000) + 1;
+  return range.start === per.start && range.end <= per.end && lastDate && lastDate < per.end
+    ? dayCount(per.start, per.end) / dayCount(per.start, lastDate) : 1;
+}
+
+function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHistory = null, payRates = [], nameAliases = {} }) {
+  const isOwner = role === 'owner';
+  const today = localTodayISO();
+  const cur = payPeriodFor(today);
+  const [range, setRange] = useState({ start: cur.start, end: today < cur.end ? today : cur.end });
+  const [openCode, setOpenCode] = useState(null);
+  const [person, setPerson] = useState(null);
+  const [server, setServer] = useState({ loading: !isOwner, data: null, error: null });
+  useEffect(() => {
+    if (isOwner || !range.start || !range.end) return undefined;
+    let cancelled = false;
+    setServer(s => ({ ...s, loading: true, error: null }));
+    teamNumbers(token, range.start, range.end).then(r => {
+      if (!cancelled) setServer({ loading: false, data: r.ok ? r : null, error: r.ok ? null : r.error });
+    });
+    return () => { cancelled = true; };
+  }, [isOwner, token, range.start, range.end]);
+
+  const tipsSrc = isOwner ? tipsHistory : server.data?.tips;
+  const rateFor = useMemo(() => {
+    if (isOwner) return payRates.length ? buildRateLookup(payRates, nameAliases) : null;
+    const rates = server.data?.rates;
+    return rates ? (name => (rates[name] != null ? { rate: rates[name] } : null)) : null;
+  }, [isOwner, payRates, nameAliases, server.data]);
+
+  // One row per person (across their stores, as the pay rules count them),
+  // and each store's own people and totals for these dates.
+  const { rowsByName, stores } = useMemo(() => {
+    const rows = buildPayRows({ history, weeklyHistory, tipsHistory: tipsSrc, start: range.start, end: range.end, rateFor });
+    const byName = {};
+    rows.forEach(r => { byName[normalizePersonName(r.name)] = r; });
+    const totals = getRangeTotals(history, weeklyHistory, range.start, range.end);
+    const list = Object.entries(totals).map(([code, t]) => {
+      const people = (t.employees || []).filter(e => e.totalHours > 0).map(e => {
+        const sales = e.sales || 0;
+        const hours = e.totalHours || 0;
+        return { name: e.name, hours, sales, tsth: sales / hours, row: byName[normalizePersonName(e.name)] || null };
+      }).sort((a, b) => b.tsth - a.tsth);
+      const hours = people.reduce((s, p) => s + p.hours, 0);
+      const sales = people.reduce((s, p) => s + p.sales, 0);
+      const goal = haircutPriceFor(code) * 2;
+      return {
+        code, name: STORE_CODE_TO_NAME[code] || `Store ${code}`, goal, people, hours, sales,
+        tsth: hours > 0 ? sales / hours : null,
+        bonusing: people.filter(p => p.row?.bonusPerHour > 0).length,
+        leader: getLeaderForStoreCode(code)?.leaderName || null,
+      };
+    }).filter(s => s.people.length);
+    list.sort((a, b) => (isOwner ? (a.leader || '~').localeCompare(b.leader || '~') : 0) || a.name.localeCompare(b.name));
+    return { rowsByName: byName, stores: list };
+  }, [history, weeklyHistory, tipsSrc, rateFor, range.start, range.end, isOwner]);
+
+  // The picked person: what My Numbers would show them for these dates.
+  const detail = useMemo(() => {
+    if (!person) return null;
+    const names = new Set([normalizePersonName(person)]);
+    const picked = pickOwnRecords({ dailyRows: [{ payload: history }], weeklyRows: [{ payload: weeklyHistory }], tipRows: [{ payload: tipsSrc }], names, start: range.start, end: range.end });
+    const result = buildMyNumbers({ ...picked, start: range.start, end: range.end });
+    if (!result.stores.length) return { result, pay: null, coaching: [], peers: null };
+    const peers = buildPeerStats({ history, weeklyHistory, names, codes: result.stores.map(st => st.code), start: range.start, end: range.end });
+    if (!isOwner && server.data?.company) peers.company = server.data.company;
+    const row = rowsByName[normalizePersonName(person)];
+    const pay = buildPayBreakdown({ stores: result.stores, total: result.total, payRate: row?.hourly ?? null, manager: !!row?.manager });
+    const lastDate = Object.values(picked.history).map(h => h.date).sort().pop() || null;
+    const coaching = buildCoaching({ stores: result.stores, pay, peers, periodFactor: payPeriodFactor(range, lastDate) });
+    return { result, pay, coaching, peers };
+  }, [person, history, weeklyHistory, tipsSrc, range, isOwner, server.data, rowsByName]);
+
+  const prev = previousPayPeriod(today);
+  const presets = [
+    { label: 'This pay period', start: cur.start, end: today < cur.end ? today : cur.end },
+    { label: 'Last pay period', start: prev.start, end: prev.end },
+    { label: 'This month', ...getCurrentMonthRange() },
+  ];
+  const openStore = stores.find(s => s.code === openCode) || null;
+  const money2 = v => (v == null ? '—' : `$${v.toFixed(2)}`);
+  const tsthClass = (tsth, goal) => (tsth == null ? '' : tsth >= goal ? 'employee-picker-tsth--bonus' : 'employee-picker-tsth--none');
+  const goBack = () => { if (person) setPerson(null); else setOpenCode(null); };
+  const groups = [];
+  stores.forEach(s => {
+    const last = groups[groups.length - 1];
+    if (isOwner && last && last.leader === s.leader) last.stores.push(s);
+    else if (!isOwner && last) last.stores.push(s);
+    else groups.push({ leader: s.leader, stores: [s] });
+  });
+
+  return (
+    <div className="tab-content">
+      <p className="section-hint">
+        TSTH for {isOwner ? 'every store, grouped by DL' : role === 'manager' ? 'your store' : 'your stores'}: total sales (service, color and retail) ÷ hours. The goal is 2 × the store's haircut price (PA $56, NJ/DE $60). <b className="employee-picker-tsth--bonus">Green</b> is at or over goal, <b className="employee-picker-tsth--none">red</b> is under. Open a store, then a person, to see what their My Numbers tab shows them, pay included.
+      </p>
+      <div className="view-toggle">
+        {presets.map(p => (
+          <button key={p.label} className={`view-toggle-btn ${range.start === p.start && range.end === p.end ? 'active' : ''}`} onClick={() => setRange({ start: p.start, end: p.end })}>{p.label}</button>
+        ))}
+      </div>
+      <DateRangeBar start={range.start} end={range.end} onChange={(s, e) => setRange({ start: s, end: e })} />
+      {server.loading && <span className="spinner small" />}
+      {server.error && <p className="password-error">Couldn't load tips and pay rates: {server.error}. Sales, hours and TSTH below are still right.</p>}
+
+      {(openStore || person) && (
+        <div className="team-tsth-crumbs">
+          <button type="button" className="view-toggle-btn" onClick={goBack}>← {person ? (openStore ? openStore.name : 'Back') : 'All stores'}</button>
+          <span>{openStore ? openStore.name : ''}{person ? ` › ${person}` : ''}</span>
+        </div>
+      )}
+
+      {person && detail ? (
+        detail.result.stores.length ? (
+          <>
+            <p className="section-hint"><b>{person}</b>{rowsByName[normalizePersonName(person)]?.manager ? ' (manager, 30% bonus rate)' : ''}: their own numbers, by the store where the POS recorded the work{isOwner ? '' : ' (stores outside yours aren\'t included)'}. The tips below are written to them, so you can pass them on as is.</p>
+            <div className="ledger-scroll">
+              <table className="ledger-table">
+                <thead><tr><th className="ledger-name-col">Store</th>{MY_NUMBERS_COLS.map(c => <th key={c.key}>{c.label}</th>)}</tr></thead>
+                <tbody>{detail.result.stores.map(s => (
+                  <tr key={s.code}><td className="ledger-name-col">{s.name}</td>{MY_NUMBERS_COLS.map(c => <td key={c.key}>{c.fmt(s[c.key])}</td>)}</tr>
+                ))}</tbody>
+                {detail.result.stores.length > 1 && (
+                  <tfoot><tr className="ledger-avg-row"><td className="ledger-name-col">All stores</td>{MY_NUMBERS_COLS.map(c => <td key={c.key}>{c.fmt(detail.result.total[c.key])}</td>)}</tr></tfoot>
+                )}
+              </table>
+            </div>
+            <PayExplainer pay={detail.pay} coaching={detail.coaching} leaderName={person} stores={detail.result.stores} peers={detail.peers} />
+          </>
+        ) : <p className="empty-note">{person} has no hours or sales on file for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}.</p>
+      ) : openStore ? (
+        <div className="ledger-scroll">
+          <table className="ledger-table team-tsth-table">
+            <thead><tr><th className="ledger-name-col">Employee</th><th>Hours here</th><th>Sales here</th><th>TSTH here</th><th>Bonus / hr</th><th>Tips</th><th>Possible pay</th></tr></thead>
+            <tbody>
+              {openStore.people.map(p => (
+                <tr key={p.name} className="team-tsth-row" tabIndex={0} role="button" onClick={() => setPerson(p.name)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPerson(p.name); } }}>
+                  <td className="ledger-name-col"><span className="team-tsth-link">{p.name}</span><FocusTag name={p.name} /></td>
+                  <td>{fmtNum(p.hours, 1)}</td>
+                  <td>{fmt$(p.sales)}</td>
+                  <td><b className={tsthClass(p.tsth, openStore.goal)}>{money2(p.tsth)}</b></td>
+                  <td>{p.row ? money2(p.row.bonusPerHour) : '—'}</td>
+                  <td>{p.row ? fmt$(p.row.tips) : '—'}</td>
+                  <td>{p.row?.basePay != null ? fmt$(p.row.madeSoFar) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot><tr className="ledger-avg-row"><td className="ledger-name-col">Store</td><td>{fmtNum(openStore.hours, 1)}</td><td>{fmt$(openStore.sales)}</td><td><b className={tsthClass(openStore.tsth, openStore.goal)}>{money2(openStore.tsth)}</b></td><td colSpan={3}>Goal ${openStore.goal}</td></tr></tfoot>
+          </table>
+          <p className="section-hint">"Here" is this store only. Bonus, tips and possible pay count every store they worked{isOwner ? '' : ' that you can see'}, the way pay is figured. Possible pay is base + tips + bonus so far; it's blank when no pay rate is on file for that name. Tap a name for the full breakdown.</p>
+        </div>
+      ) : stores.length ? (
+        groups.map(g => (
+          <div key={g.leader || 'none'}>
+            {isOwner && <p className="section-label team-tsth-group">{g.leader || 'No DL listed'}</p>}
+            <div className="team-tsth-grid">
+              {g.stores.map(s => (
+                <button type="button" key={s.code} className="team-tsth-card" onClick={() => { setOpenCode(s.code); setPerson(null); }}>
+                  <span className="team-tsth-card-name">{s.name}</span>
+                  <span className={`team-tsth-card-tsth ${tsthClass(s.tsth, s.goal)}`}>{money2(s.tsth)}</span>
+                  <span className="team-tsth-card-meta">goal ${s.goal} · {s.bonusing} of {s.people.length} bonusing · {fmtNum(s.hours, 0)} hrs</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ))
+      ) : (
+        <p className="empty-note">No hours with sales on file for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}.</p>
+      )}
+    </div>
+  );
+}
+
 // Pay-period earnings tracker (Homepage hero). Leadership preview for now:
 // shows the highest-TSTH employee this pay period (see src/payTracker.js for
 // the pay rules). Each employee will later see their own.
@@ -8699,7 +8897,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
   if (payTracker && payTracker.rows?.length) {
     const { period, through, rows } = payTracker;
     lines.push('');
-    lines.push(`PAY TRACKER, pay period ${period.start} to ${period.end} (data through ${through || 'n/a'}). Rules: TSTH = (net service + retail incl. color) ÷ hours; TSTH goal = 2 × haircut price (PA $28, NJ/DE $30); bonus/hr = (TSTH − goal) × 25% stylists / 30% managers when above goal, paid on every hour; no other commission; made so far = base (hourly rate × hours, from the Employee Pay Rate Report) + bonus + tips${payTracker.ratesLoaded ? '' : '; pay rates are NOT uploaded yet, so base is unknown'}. Top 25 by TSTH (min ${MIN_HOURS_FOR_TOP} hours):`);
+    lines.push(`PAY TRACKER${payTracker.team ? ' (the Team TSTH tab: only the people at this person’s own stores; they are allowed to see these people’s pay, tips and TSTH)' : ''}, pay period ${period.start} to ${period.end} (data through ${through || 'n/a'}). Rules: TSTH = (net service + retail incl. color) ÷ hours; TSTH goal = 2 × haircut price (PA $28, NJ/DE $30); bonus/hr = (TSTH − goal) × 25% stylists / 30% managers when above goal, paid on every hour; no other commission; made so far = base (hourly rate × hours, from the Employee Pay Rate Report) + bonus + tips${payTracker.ratesLoaded ? '' : '; pay rates are NOT uploaded yet, so base is unknown'}. Top 25 by TSTH (min ${MIN_HOURS_FOR_TOP} hours):`);
     rows.filter(r => r.hours >= MIN_HOURS_FOR_TOP).sort((x, y) => y.tsth - x.tsth).slice(0, 25).forEach(r => lines.push(`  ${r.name} @ ${r.store} (${r.state}${r.manager ? ', manager' : ''}): ${r.hours.toFixed(1)} hrs, TSTH $${r.tsth.toFixed(2)} vs goal $${r.goal}, bonus/hr $${r.bonusPerHour.toFixed(2)}, bonus $${Math.round(r.bonus)}, tips $${Math.round(r.tips)}, ${r.basePay != null ? `base $${Math.round(r.basePay)} ($${r.hourly.toFixed(2)}/hr), made so far $${Math.round(r.madeSoFar)}, guaranteed pay (base + tips) $${Math.round(r.basePay + r.tips)} = $${((r.basePay + r.tips) / r.hours).toFixed(2)}/hr, possible pay (adds the bonus, paid only if they finish the pay period) $${Math.round(r.madeSoFar)} = $${(r.madeSoFar / r.hours).toFixed(2)}/hr` : `no pay rate matched, made so far excl. base $${Math.round(r.madeSoFar)}`}`));
     if (payTracker.noRate?.length) lines.push(`  ${payTracker.noRate.length} people with hours this pay period have no pay rate matched (name differs from the pay rate report; leadership can link it in Setup › Employee Access "Also in sales as"): ${payTracker.noRate.slice(0, 40).join(', ')}`);
   }
@@ -10107,7 +10305,7 @@ function RewardsSetupTab({ token, showToast }) {
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Homepage', 'My Numbers', 'News', 'HSA', 'Overview', 'Focus Stylist', 'Shear Check', 'DL', 'Retail', 'Color Sales', 'Signature Service', 'Gift Cards', 'Budgets', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Loss Prevention', 'Setup'];
+const TABS = ['Homepage', 'My Numbers', 'News', 'HSA', 'Overview', 'Focus Stylist', 'Shear Check', 'DL', 'Team TSTH', 'Retail', 'Color Sales', 'Signature Service', 'Gift Cards', 'Budgets', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Loss Prevention', 'Setup'];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
@@ -11720,6 +11918,27 @@ export default function App() {
     try { if (name) window.localStorage.setItem('payFocusName', name); else window.localStorage.removeItem('payFocusName'); } catch { /* storage blocked */ }
   }, []);
 
+  // Team TSTH for Tilly (DL/manager): this pay period's TSTH, bonus, tips
+  // and pay for the people at their own stores, in the same shape as the
+  // owner's pay tracker. Tips and rates come from api/_team-numbers.js.
+  const [teamPayData, setTeamPayData] = useState(null);
+  useEffect(() => {
+    const role = currentUser?.role;
+    if (!currentUser?.token || presenting || (role !== 'district_leader' && role !== 'manager')) { setTeamPayData(null); return; }
+    const today = localTodayISO();
+    const period = payPeriodFor(today);
+    const end = today < period.end ? today : period.end;
+    teamNumbers(currentUser.token, period.start, end).then(r => { if (r.ok) setTeamPayData({ period, end, tips: r.tips, rates: r.rates }); });
+  }, [currentUser, presenting]);
+  const teamPayTracker = useMemo(() => {
+    if (!teamPayData) return null;
+    const { period, end, tips, rates } = teamPayData;
+    const rateFor = name => (rates[name] != null ? { rate: rates[name] } : null);
+    const rows = buildPayRows({ history, weeklyHistory, tipsHistory: tips, start: period.start, end, rateFor });
+    const days = Object.values(history || {}).filter(r => r.date >= period.start && r.date <= end && r.employees && Object.keys(r.employees).length).map(r => r.date).sort();
+    return { period, through: days[days.length - 1] || null, rows, ratesLoaded: Object.keys(rates).length > 0, noRate: [], team: true };
+  }, [teamPayData, history, weeklyHistory]);
+
   // Homepage pay tracker: leadership preview only (owner; made-up people and
   // pay while presenting). Current pay period
   // (1–15 / 16–end) through today; `through` is the last day with Sales-
@@ -11764,7 +11983,7 @@ export default function App() {
   const canFocus = currentUser.role === 'owner' || currentUser.role === 'district_leader';
   // Shear Check: same roles as Focus Stylist.
   const canSalonCheck = canFocus;
-  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner') && (t !== 'Gift Cards' || currentUser.role === 'owner' || currentUser.role === 'district_leader') && (t !== 'Loss Prevention' || currentUser.role === 'owner') && (t !== 'Focus Stylist' || canFocus) && (t !== 'Shear Check' || canSalonCheck));
+  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner') && (t !== 'Gift Cards' || currentUser.role === 'owner' || currentUser.role === 'district_leader') && (t !== 'Loss Prevention' || currentUser.role === 'owner') && (t !== 'Focus Stylist' || canFocus) && (t !== 'Shear Check' || canSalonCheck) && (t !== 'Team TSTH' || currentUser.role === 'owner' || currentUser.role === 'district_leader' || currentUser.role === 'manager'));
   // A live weekly Stylist Report upload is no longer the only way to power
   // these tabs — Sales-Accrual + Attendance historical imports feed the
   // exact same tables via each tab's own current-month fallback (see
@@ -11807,6 +12026,7 @@ export default function App() {
             payTracker={payTracker} onPayPick={setPayFocusName} payFocusName={payFocusName}
           />
         )}
+        {tab === 'Team TSTH' && <TeamTsthTab token={currentUser.token} role={currentUser.role} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={d.tipsHistory} payRates={d.payRates} nameAliases={d.nameAliases} />}
         {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={shownUserName} userRole={currentUser.role} presenting={presenting} isOwner={currentUser.role === 'owner'} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={d.tipsHistory} payRates={d.payRates} nameAliases={d.nameAliases} payFocusName={payFocusName} onPayPick={setPayFocusName} />}
         {tab === 'News' && (
           <NewsTab news={d.news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={currentUser} newsReads={d.newsReads} onSignOff={handleSignOffNews} />
@@ -11944,7 +12164,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={d.news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} salonQuestions={salonQuestions} payTracker={payTracker} myNumbersSummary={myNumbersSummary} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
+      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={d.news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} salonQuestions={salonQuestions} payTracker={payTracker || teamPayTracker} myNumbersSummary={myNumbersSummary} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
     </div>
     </FocusNamesContext.Provider>
   );

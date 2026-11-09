@@ -180,6 +180,11 @@ export function myNumbers(token, start, end) {
   return postJson('/api/scoped-data', { action: 'my-numbers', token, start, end });
 }
 
+// "Team TSTH": tips + pay rates for the caller's own stores (DL/manager).
+export function teamNumbers(token, start, end) {
+  return postJson('/api/scoped-data', { action: 'team-numbers', token, start, end });
+}
+
 // Starred tabs, saved to the logged-in person's account (api/_tab-favorites.js).
 // Saving isn't a presenter-mode write: it's a personal menu preference, not
 // company data, so it uses postJson.

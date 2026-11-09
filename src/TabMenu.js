@@ -8,7 +8,7 @@ import { loadTabFavorites, saveTabFavorites } from './auth';
 // so it can't go missing from the menu.
 export const TAB_GROUPS = [
   { title: 'Home', tabs: ['Homepage', 'My Numbers', 'News', 'HSA'] },
-  { title: 'Performance', tabs: ['Overview', 'DL', 'Employees', 'Weekly', 'Reviews'] },
+  { title: 'Performance', tabs: ['Overview', 'DL', 'Team TSTH', 'Employees', 'Weekly', 'Reviews'] },
   { title: 'Sales', tabs: ['Retail', 'Color Sales', 'Signature Service', 'Gift Cards'] },
   { title: 'Coaching', tabs: ['Focus Stylist', 'Shear Check', 'Goals', "Tillie's Nest"] },
   { title: 'Admin', tabs: ['Budgets', 'Leases', 'Loss Prevention', 'Setup'] },

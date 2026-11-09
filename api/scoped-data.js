@@ -14,6 +14,7 @@ import { getCodeForStoreName } from '../src/storeDirectory.js';
 import { handleFinalizeGoals } from './_finalize-goals.js';
 import { handleSalonCheckEmail, handleSalonCheckPhoto, handleSalonCheckQuestion, cleanSalonCheckPatch, removeDeletedVisitPhotos } from './_salon-check.js';
 import { handleMyNumbers } from './_my-numbers.js';
+import { handleTeamNumbers } from './_team-numbers.js';
 import { handlePayRates } from './_pay-rates.js';
 import { handleTabFavorites } from './_tab-favorites.js';
 
@@ -177,6 +178,11 @@ export default async function handler(req, res) {
   // "My Numbers": the caller's own lines only, any role (api/_my-numbers.js).
   if (req.body?.action === 'my-numbers') {
     await handleMyNumbers(req, res);
+    return;
+  }
+  // "Team TSTH": tips + pay rates for a DL's/manager's own stores (api/_team-numbers.js).
+  if (req.body?.action === 'team-numbers') {
+    await handleTeamNumbers(req, res);
     return;
   }
   // Starred tabs: the caller's own, any role (api/_tab-favorites.js).

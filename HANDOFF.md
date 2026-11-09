@@ -1,6 +1,6 @@
 # Handoff — Supercuts Analytics
 
-## Where things stand (updated 2026-11-05)
+## Where things stand (updated 2026-11-09)
 
 **The user's 2026-10-28 list:**
 1. ~~Bonus + tips as an hourly figure~~ **Built 2026-11-03.** The rules came from the user (see the TSTH/bonus entries below). Tips come from the new Tips report upload. Base pay comes from the Employee Pay Rate Report (locked `pay_rates` table).
@@ -17,6 +17,14 @@
 - **Leadership roll-up email**: the user pasted the new Apps Script `doPost`. Their first test still hit the old code (needs Deploy → Manage deployments → edit → **New version**). Not confirmed fixed.
 - **Open questions**: do DLs get the 30% management bonus rate? (Today 30% = role `manager` or the Tips report Job "Manager".) Should Possible pay project the whole pay period instead of "so far"? (Offered; coaching already projects to the end of the period.)
 - **Nothing from 2026-11-03 has been clicked through in a real browser or with an employee login.** Checks were builds, temp jest tests on real data, and headless screenshots of mocks.
+
+**Team TSTH tab (2026-11-09).** User: a tab for DLs and managers focused on their stores' TSTH. Open a store, open an employee, and see what My Numbers shows them, including how to raise TSTH. User's calls (asked): **pay included** (base rate, tips, Guaranteed/Possible pay), and **owner, DLs and managers** all get the tab.
+- **UI**: `TeamTsthTab` in `src/App.js`. Store cards with TSTH vs goal (green/red) and "N of M bonusing", grouped by DL for the owner. A store opens to its people, highest TSTH first, with this-store hours/sales/TSTH plus bonus/hr, tips, possible pay. A person opens to the My Numbers table + `PayExplainer` (coaching stays worded to the employee, so the DL can pass it on). Under Performance in the menu, plus a `SITE_TIPS` entry.
+- **Data**: sales/hours come from the login's already-scoped `d.history`/`d.weeklyHistory`. The owner uses its own `tipsHistory`/`payRates`/`nameAliases`, no server call. A DL/manager calls `team-numbers` (`api/_team-numbers.js` via scoped-data): tips for their stores only, rates already matched to POS names (aliases never leave the server) only for people who worked there, and company-wide peer aggregates for coaching.
+- **Limit**: for a DL/manager, someone who also works a store outside their group only shows the hours/sales/tips from the stores they can see, and bonus is figured from those.
+- **Tilly**: DLs/managers get the current pay period's team rows through the existing PAY TRACKER block (`teamPayTracker`, `team: true`).
+- **Verified**: build clean. The handler was run against real Nov 2026 rows with a fake Supabase as Amber Vines' DL: only her 4 stores' tips came back, and an employee role got 403. The tab's math was run on the same data. **Not verified**: the real logged-in site, a real DL/manager login, and the pay rate matching with real rates (the anon key can't read `pay_rates`).
+- **Noticed, not changed**: `tips_history_*` rows are readable with the public anon key (same as all of `weekly_report`), so tips aren't actually locked down the way `pay_rates` is.
 
 **Month-to-date ends on the last day with data (2026-11-07).** User: Current Month comparisons shouldn't include today last year, because today's data is uploaded after close. `getCurrentMonthRange()` in `src/App.js` now ends at `latestDataISO`: the latest `history` date with sales/cuts, or the latest weekly report end date, capped at today. The App sets it with `setLatestDataDate` in a `useMemo` before tabs render. It covers every caller: tab defaults, the Current Month buttons, Tilly, Focus Stylists, the Homepage Top 10, and `monthlyReference`. Dates are now local, not `toISOString` (UTC), which used to roll to tomorrow in the evening. If nothing is uploaded yet this month, the range is the 1st alone, so it's empty and the last-year line hides. A date already picked with the Current Month button stays as clicked. Hand-typed ranges aren't changed. Verified: build clean; live data runs through Nov 6, so on Nov 7 the range is Nov 1–6 against Nov 1–6, 2025. Not clicked through on the live site.
 

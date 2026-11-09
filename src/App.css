@@ -1531,3 +1531,16 @@
 .site-tips-nav .homepage-hero-dots { margin-top: 0; flex-wrap: wrap; justify-content: center; }
 .site-tips-arrow { border: 1px solid var(--line); background: #fff; color: var(--navy); border-radius: 999px; width: 26px; height: 26px; font-size: 16px; line-height: 1; cursor: pointer; }
 .site-tips-arrow:hover { background: #E8EEF6; }
+
+/* ─── Team TSTH tab (owner, DLs, managers) ──────────────────────────────── */
+.team-tsth-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin: 8px 0 16px; }
+.team-tsth-group { margin-top: 14px; }
+.team-tsth-card { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--navy); text-align: left; cursor: pointer; font-family: inherit; min-height: 44px; }
+.team-tsth-card:hover, .team-tsth-card:focus-visible { border-color: var(--navy); box-shadow: 0 2px 8px rgba(20,42,74,0.12); }
+.team-tsth-card-name { font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
+.team-tsth-card-tsth { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.team-tsth-card-meta { font-size: 12px; color: var(--ink-soft); }
+.team-tsth-crumbs { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0; font-weight: 600; color: var(--navy); }
+.team-tsth-row { cursor: pointer; }
+.team-tsth-row:hover td, .team-tsth-row:focus-visible td { background: var(--paper); }
+.team-tsth-link { text-decoration: underline; text-underline-offset: 2px; }
