@@ -34,7 +34,7 @@ import { buildMyNumbers, pickOwnRecords, normalizePersonName, buildPeerStats } f
 import { buildPayBreakdown, buildCoaching } from './payCoach';
 import { TabMenu } from './TabMenu';
 import { CollectiveGoalBars } from './CollectiveGoalBars';
-import { collectiveGoal, goalPace, GIFT_CARD_GOAL_PERIODS, giftCardPeriodFor, giftCardPeriodGoal, periodThrough, periodPace } from './goalProgress';
+import { collectiveGoal, goalPace, goalHeat, GIFT_CARD_GOAL_PERIODS, giftCardPeriodFor, giftCardPeriodGoal, periodThrough, periodPace } from './goalProgress';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
 import supercutsWordmarkBlue from './assets/branding/supercuts-wordmark-blue.png';
 import gcRobinBadge from './assets/branding/gc-robin-badge.png';
@@ -2109,16 +2109,19 @@ function payPeriodFactor(range, lastDate) {
 // under, counting each person once. Uses their pay row (TSTH across every
 // store they worked, as pay is figured) and falls back to this store's TSTH.
 const BONUS_CLOSE_GAP = 5;
+function bonusStatus(p) {
+  const tsth = p.row ? p.row.tsth : p.tsth;
+  const goal = p.row ? p.row.goal : p.goal;
+  const gap = goal - tsth;
+  return p.row ? (p.row.bonusPerHour > 0 ? 'bonus' : gap <= BONUS_CLOSE_GAP ? 'close' : 'under')
+    : (tsth > goal ? 'bonus' : gap <= BONUS_CLOSE_GAP ? 'close' : 'under');
+}
 function bonusSplit(people) {
   const seen = new Map();
   people.forEach(p => {
     const key = normalizePersonName(p.name);
     if (seen.has(key)) return;
-    const tsth = p.row ? p.row.tsth : p.tsth;
-    const goal = p.row ? p.row.goal : p.goal;
-    const gap = goal - tsth;
-    seen.set(key, p.row ? (p.row.bonusPerHour > 0 ? 'bonus' : gap <= BONUS_CLOSE_GAP ? 'close' : 'under')
-      : (tsth > goal ? 'bonus' : gap <= BONUS_CLOSE_GAP ? 'close' : 'under'));
+    seen.set(key, bonusStatus(p));
   });
   const out = { bonus: 0, close: 0, under: 0, total: seen.size };
   seen.forEach(v => { out[v] += 1; });
@@ -3850,8 +3853,186 @@ function NewsTab({ news, newsGroups, openNews, onConsumeOpenNews, currentUser, n
 
 // ─── Overview tab ───────────────────────────────────────────────────────────
 // ─── Overview tab (top-10/bottom-10 leaderboards, plus the full store list) ─
-function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery, managers, isOwner, goals, giftCardHistory, rankToken, focusStylists = {}, onSaveFocus = null }) {
+// ─── Overview store snapshot ────────────────────────────────────────────────
+// Opening a store on Overview shows what the other tabs know about it, under
+// its numbers: goal progress, who's bonusing (Team TSTH), reviews, last year,
+// coaching and budget. Same dates as the rest of Overview. Each card links to
+// its own tab for the full detail. `show` says which cards this login gets.
+function SnapGoalBar({ label, actual, goal, fmt, pace, note, pct = false }) {
+  const ratio = goal ? actual / goal : 0;
+  const heat = goalHeat(actual, goal, pct ? null : pace);
+  const p = Math.round(ratio * 100);
+  return (
+    <div className="snap-goal">
+      <div className="snap-goal-head">
+        <span className="snap-goal-label">{label}</span>
+        <span className="snap-goal-nums"><b>{fmt(actual)}</b> of {fmt(goal)} · {p}%</span>
+      </div>
+      <div className={`thermo-bar snap-goal-track thermo-bar--${heat.status}`} role="img" aria-label={`${label}: ${fmt(actual)} of ${fmt(goal)}, ${p} percent${heat.text ? `, ${heat.text}` : ''}`}>
+        <div className="thermo-fill" style={{ width: `${Math.min(100, ratio * 100)}%` }} />
+        {!pct && pace != null && pace < 1 && <div className="thermo-goal-tick" style={{ left: `${pace * 100}%` }} title={`Pace: ${Math.round(pace * 100)}%`} />}
+      </div>
+      {(heat.text || note) && <p className="snap-goal-note">{heat.text && <strong className={`collective-heat collective-heat--${heat.status}`}>{heat.text}</strong>}{heat.text && note ? ' · ' : ''}{note}</p>}
+    </div>
+  );
+}
+
+function SnapCard({ title, tab, onGoTab, children }) {
+  return (
+    <section className="snap-card">
+      <div className="snap-card-head">
+        <p className="snap-card-title">{title}</p>
+        {tab && onGoTab && <button type="button" className="snap-link" onClick={() => onGoTab(tab)}>Open {tab} ›</button>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function StoreSnapshot({ s, start, end, ly, history, weeklyHistory, goals, giftCardHistory, reviews, focusStylists, salonChecks, managers, show, onGoTab }) {
+  const code = s.code;
+  const go = tab => (show.tabs.includes(tab) ? tab : null);
+  const pace = goalPace(start, end);
+
+  const goalRows = useMemo(() => {
+    const rows = [];
+    const g = field => goalForRange(goals, code, field, start, end).value;
+    const add = (label, actual, goal, fmt, extra = {}) => { if (goal != null && Number(goal) > 0) rows.push({ label, actual: actual || 0, goal: Number(goal), fmt, pace, ...extra }); };
+    add('Sales $', s.sales, g('salesGoal'), fmt$);
+    add('Retail $', s.retail, g('retailGoal'), fmt$);
+    add('Bottles', s.bottles, g('bottleGoal'), fmtInt);
+    add('Color $', s.colorSales, g('colorGoal'), fmt$);
+    add('Signature Services', s.signatureSCount, g('signatureSGoal'), fmtInt);
+    const attachGoal = goalForRange(goals, code, 'retailAttachGoal', start, end, { rate: true }).value;
+    if (attachGoal != null && s.retailAttachPct != null) add('Retail Attach % (color)', s.retailAttachPct * 100, attachGoal, v => `${fmtNum(v, 0)}%`, { pct: true });
+    if (show.giftCards) {
+      const period = giftCardPeriodFor(start, end);
+      const gStart = period ? period.start : start;
+      const gEnd = period ? periodThrough(period) : end;
+      const actual = getGiftCardRangeTotals(giftCardHistory, gStart, gEnd)[code]?.giftCards || 0;
+      const goal = period ? giftCardPeriodGoal(goals, code, period) : g('giftCardGoal');
+      add('Gift Cards $', actual, goal, fmt$, period ? { pace: periodPace(period, gEnd), note: `goal runs ${period.label}, counts sales since ${fmtDateLong(period.start)}` } : {});
+    }
+    return rows;
+  }, [goals, code, start, end, s, pace, show.giftCards, giftCardHistory]);
+
+  const team = useMemo(() => {
+    if (!show.team) return null;
+    const goal = haircutPriceFor(code) * 2;
+    const payRows = buildPayRows({ history, weeklyHistory, tipsHistory: {}, start, end });
+    const byName = Object.fromEntries(payRows.map(r => [normalizePersonName(r.name), r]));
+    const people = (s.employees || []).filter(e => (e.totalHours || 0) > 0)
+      .map(e => ({ name: e.name, tsth: e.tsth || 0, hours: e.totalHours, goal, row: byName[normalizePersonName(e.name)] }));
+    const top = [...people].filter(p => p.hours >= MIN_HOURS_FOR_TOP).sort((a, b) => b.tsth - a.tsth).slice(0, 3);
+    const close = people.filter(p => bonusStatus(p) === 'close').sort((a, b) => b.tsth - a.tsth).slice(0, 5);
+    return { goal, split: bonusSplit(people), top, close };
+  }, [show.team, code, history, weeklyHistory, start, end, s.employees]);
+
+  const rev = useMemo(() => {
+    const list = (reviews?.reviews || []).filter(r => r.code === code).map(r => ({ ...r, day: (r.postedAt || '').slice(0, 10) })).sort((a, b) => b.day.localeCompare(a.day));
+    if (!list.length) return null;
+    let label = 'these dates';
+    let shown = list.filter(r => r.day >= start && r.day <= end);
+    if (!shown.length) { const from = addDaysISO(end, -89); shown = list.filter(r => r.day >= from && r.day <= end); label = 'last 90 days'; }
+    const avg = arr => (arr.length ? arr.reduce((a, r) => a + (r.rating || 0), 0) / arr.length : null);
+    return {
+      label, count: shown.length, avg: avg(shown), neg: shown.filter(isNegativeReview).length, allAvg: avg(list), allCount: list.length,
+      lastNeg: shown.find(isNegativeReview) || null, lastPos: shown.find(isPositiveReview) || null,
+    };
+  }, [reviews, code, start, end]);
+
+  const lyShape = ly ? historyTotalsToReportShape(ly) : null;
+  const lyRows = lyShape ? [
+    ['Sales', 'sales', fmt$], ['Cuts', 'haircuts', fmtInt], ['Avg Ticket', 'avgTicket', fmtRate], ['TSTH', 'tsth', fmtRate], ['Color', 'colorSales', fmt$], ['Retail', 'retail', fmt$],
+  ].map(([label, key, fmt]) => ({ label, cur: s[key], ly: lyShape[key], fmt, ch: yoyChange(key, s[key], lyShape[key]) })) : null;
+
+  const coaching = useMemo(() => {
+    if (!show.coaching) return null;
+    const month = focusMonthKey();
+    const focus = focusEntriesList({ [code]: focusStylists?.[code] }).filter(e => e.month === month).map(e => e.name);
+    const visit = salonCheckList({ [code]: salonChecks?.[code] })[0] || null;
+    return { focus, visit };
+  }, [show.coaching, code, focusStylists, salonChecks]);
+
+  const budget = useMemo(() => {
+    if (!show.budgets) return null;
+    const bp = getCurrentBudgetPeriodRange();
+    const t = getRangeTotals(history, weeklyHistory, bp.start, bp.end)[code];
+    if (!t) return { empty: true, start: bp.start, end: bp.end };
+    return { ...computeStoreBudget({ ...historyTotalsToReportShape(t), code }), start: bp.start, end: bp.end };
+  }, [show.budgets, history, weeklyHistory, code]);
+
+  const manager = managers?.[code];
+  return (
+    <div className="snap">
+      <p className="snap-intro">Everything for <b>{s.name}</b>, {fmtDateLong(start)} – {fmtDateLong(end)}{manager ? <> · Manager: <b>{manager}</b></> : null}. Each card opens its own tab for the full detail.</p>
+      <div className="snap-grid">
+        <SnapCard title="🎯 Goals & progress" tab={go('Goals')} onGoTab={onGoTab}>
+          {goalRows.length ? goalRows.map(r => <SnapGoalBar key={r.label} {...r} />) : <p className="empty-note">No goals set for this store for these dates.</p>}
+          {goalRows.length > 0 && pace != null && pace < 1 && <p className="snap-small">The tick on each bar is where the store should be by now ({Math.round(pace * 100)}% of the month).</p>}
+        </SnapCard>
+
+        {team && (
+          <SnapCard title="💵 Team TSTH" tab={go('Team TSTH')} onGoTab={onGoTab}>
+            <p className="snap-line">Store TSTH <b className={tsthClass(s.tsth)}>{fmtRate(s.tsth)}</b> · bonus goal {fmtRate(team.goal)}</p>
+            {team.split.total ? <BonusHeatBar split={team.split} title="Who's bonusing" big /> : <p className="empty-note">No one with hours on these dates.</p>}
+            {team.top.length > 0 && <p className="snap-line">Top TSTH: {team.top.map((p, i) => <span key={p.name}>{i ? ', ' : ''}<b>{p.name}</b> {fmtRate(p.tsth)}</span>)}</p>}
+            {team.close.length > 0 && <p className="snap-line">Within ${BONUS_CLOSE_GAP}/hr of bonus: {team.close.map((p, i) => <span key={p.name}>{i ? ', ' : ''}{p.name} {fmtRate(p.row ? p.row.tsth : p.tsth)}</span>)}</p>}
+          </SnapCard>
+        )}
+
+        <SnapCard title="⭐ Reviews" tab={go('Reviews')} onGoTab={onGoTab}>
+          {rev ? (
+            <>
+              <p className="snap-line">{rev.count ? <><b className={ratingClass(rev.avg)}>{rev.avg.toFixed(2)}★</b> from {rev.count} review{rev.count === 1 ? '' : 's'} ({rev.label}) · {rev.neg} at 3★ or below</> : <>No reviews in the last 90 days.</>}</p>
+              <p className="snap-small">All on file: {rev.allAvg.toFixed(2)}★ from {rev.allCount}.</p>
+              {rev.lastNeg && <blockquote className="snap-quote snap-quote--neg"><b>{rev.lastNeg.rating}★ · {fmtDateLong(rev.lastNeg.day)}</b> {String(rev.lastNeg.message || '(no text)').slice(0, 220)}{String(rev.lastNeg.message || '').length > 220 ? '…' : ''}</blockquote>}
+              {rev.lastPos && <blockquote className="snap-quote snap-quote--pos"><b>{rev.lastPos.rating}★ · {fmtDateLong(rev.lastPos.day)}</b> {String(rev.lastPos.message || '(no text)').slice(0, 220)}{String(rev.lastPos.message || '').length > 220 ? '…' : ''}</blockquote>}
+            </>
+          ) : <p className="empty-note">No reviews on file for this store.</p>}
+        </SnapCard>
+
+        <SnapCard title="📅 vs last year" tab={go('Weekly')} onGoTab={onGoTab}>
+          {lyRows ? (
+            <table className="snap-table">
+              <thead><tr><th></th><th>Now</th><th>Last year</th><th>Change</th></tr></thead>
+              <tbody>{lyRows.map(r => (
+                <tr key={r.label}><td>{r.label}</td><td>{r.cur == null ? '—' : r.fmt(r.cur)}</td><td>{r.ly == null ? '—' : r.fmt(r.ly)}</td>
+                  <td className={r.ch ? `yoy-${r.ch.dir}` : ''}>{r.ch ? r.ch.pct : '—'}</td></tr>
+              ))}</tbody>
+            </table>
+          ) : <p className="empty-note">No data for this store on the same dates last year.</p>}
+          {s.cpd != null && <p className="snap-small">Cuts per day: {fmtCPD(s.cpd, s.cpdLY)} (now|last year)</p>}
+        </SnapCard>
+
+        {coaching && (
+          <SnapCard title="🧭 Coaching" tab={go('Focus Stylist')} onGoTab={onGoTab}>
+            <p className="snap-line">Focus stylists this month: {coaching.focus.length ? <b>{coaching.focus.join(', ')}</b> : 'none picked'}</p>
+            <p className="snap-line">Last Shear Check: {coaching.visit ? <><b>{fmtDateLong(coaching.visit.date)}</b>{coaching.visit.score != null ? <> · score <b>{Math.round(coaching.visit.score * 100)}%</b></> : null}{coaching.visit.by ? <> · by {coaching.visit.by}</> : null}</> : 'none on file'}</p>
+            {go('Shear Check') && <button type="button" className="snap-link" onClick={() => onGoTab('Shear Check')}>Open Shear Check ›</button>}
+          </SnapCard>
+        )}
+
+        {budget && (
+          <SnapCard title="🧾 Budget (this half-month)" tab={go('Budgets')} onGoTab={onGoTab}>
+            <p className="snap-small">Set from {fmtDateLong(budget.start)} – {fmtDateLong(budget.end)} sales, same as the Budgets tab.</p>
+            {budget.empty ? <p className="empty-note">No sales on file for those dates yet.</p> : <table className="snap-table"><tbody>
+              <tr><td>Retail (40% of retail)</td><td>{fmt$(budget.retailBudget)}</td></tr>
+              <tr><td>Supply (10% of color)</td><td>{fmt$(budget.supplyBudget)}</td></tr>
+              <tr><td>SS (10% of SS)</td><td>{fmt$(budget.ssBudget)}</td></tr>
+              <tr className="snap-total"><td>Total</td><td>{fmt$(budget.totalBudget)}</td></tr>
+            </tbody></table>}
+          </SnapCard>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeChange, selected, onSelect, query, onQuery, managers, isOwner, goals, giftCardHistory, rankToken, focusStylists = {}, onSaveFocus = null, reviews = null, salonChecks = {}, goalGiftCards = null, snapshotShow = null, onGoTab = null }) {
   const [sortBy, setSortBy] = useState('tsth');
+  // Top charts: stores (default) or employees.
+  const [boardMode, setBoardMode] = useState('stores');
   const { focusProps, focusModal } = useFocusPicker(focusStylists, onSaveFocus);
   const [expanded, setExpanded] = useState({});
   const [focused, setFocused] = useState(null);
@@ -3965,6 +4146,18 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
   }, [rowsWithCpd, lyTotals, cpdData]);
   const toggle = name => setExpanded(prev => ({ ...prev, [name]: !prev[name] }));
 
+  // Employee top charts: everyone at the stores shown with at least
+  // MIN_HOURS_FOR_TOP hours (so a 1-hour shift can't top TSTH or sit at the
+  // bottom of sales). CPD and gift cards are store-only metrics.
+  const employeeMetricKeys = useMemo(() => new Set(EMPLOYEE_METRICS.map(m => m.key)), []);
+  const employeeBoardOk = employeeMetricKeys.has(metric.key);
+  const employeeBoardRows = useMemo(
+    () => (boardMode === 'employees'
+      ? filtered.flatMap(st => (st.employees || []).filter(e => (e.totalHours || 0) >= MIN_HOURS_FOR_TOP).map(e => ({ ...e, name: `${e.name} · ${st.name}` })))
+      : []),
+    [boardMode, filtered]
+  );
+
   return (
     <div className="tab-content">
       <DateRangeBar start={dateRange.start} end={dateRange.end} onChange={onDateRangeChange} />
@@ -3991,7 +4184,21 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
         })}
       </div>
 
-      {rankToken ? (
+      <div className="view-toggle overview-board-toggle" role="group" aria-label="Top charts by">
+        <button className={`view-toggle-btn ${boardMode === 'stores' ? 'active' : ''}`} onClick={() => setBoardMode('stores')}>Stores</button>
+        <button className={`view-toggle-btn ${boardMode === 'employees' ? 'active' : ''}`} onClick={() => setBoardMode('employees')}>Employees</button>
+      </div>
+      {boardMode === 'employees' ? (
+        employeeBoardOk ? (
+          <>
+            <p className="section-hint">Employees at {filtered.length === storeRows.length ? (filtered.length === 1 ? 'this store' : `all ${filtered.length} stores shown`) : `the ${filtered.length} stores matching your search`} with at least {MIN_HOURS_FOR_TOP} hours on these dates.</p>
+            <div className="leaderboard-grid">
+              <Leaderboard rows={employeeBoardRows} metric={metric.key} formatter={metric.fmt} title={`Top 10 Employees — ${metric.label}`} count={10} order="desc" />
+              <Leaderboard rows={employeeBoardRows} metric={metric.key} formatter={metric.fmt} title={`Bottom 10 Employees — ${metric.label}`} count={10} order="asc" />
+            </div>
+          </>
+        ) : <p className="empty-note">{metric.label} is a store-only number. Pick another tile above to see employees, or switch back to Stores.</p>
+      ) : rankToken ? (
         rankWindows && Object.keys(rankWindows).length ? (
           <div className="leaderboard-grid">
             {Object.entries(rankWindows).map(([code, rows]) => (
@@ -4029,11 +4236,14 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
         {sorted.map(s => {
           const hasEmployeeData = s.employees.length > 0;
           const isOpen = isSearching || !!expanded[s.name];
+          // The snapshot shows only for a store opened on purpose, not for
+          // every store a search opens.
+          const showSnapshot = !!expanded[s.name] && !!snapshotShow;
           return (
             <div key={s.name} className="dl-card">
-              <button className="dl-card-head" onClick={() => toggle(s.name)} disabled={!hasEmployeeData}>
+              <button className="dl-card-head" onClick={() => toggle(s.name)} disabled={!hasEmployeeData && !snapshotShow}>
                 <div className="dl-card-name-wrap">
-                  {hasEmployeeData && <span className={`dl-chevron ${isOpen ? 'dl-chevron--open' : ''}`}>▸</span>}
+                  {(hasEmployeeData || snapshotShow) && <span className={`dl-chevron ${isOpen ? 'dl-chevron--open' : ''}`}>▸</span>}
                   <span className="dl-card-name">{s.name}</span>
                   <span className="dl-card-count">
                     {hasEmployeeData ? `${s.employees.length} employee${s.employees.length !== 1 ? 's' : ''}` : (isHistorical ? 'no employee data for this range' : '')}
@@ -4063,6 +4273,14 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
                   {showGiftCards && <div className="dl-stat"><span className="dl-stat-label">Gift Cards</span><span className="dl-stat-value">{fmtSS(s.giftCardCount, s.giftCards)}</span></div>}
                 </div>
               </button>
+              {showSnapshot && (
+                <StoreSnapshot
+                  s={s} start={cpdStart} end={cpdEnd} ly={lyTotals?.[s.code]}
+                  history={history} weeklyHistory={weeklyHistory} goals={goals} giftCardHistory={goalGiftCards}
+                  reviews={reviews} focusStylists={focusStylists} salonChecks={salonChecks} managers={managers}
+                  show={snapshotShow} onGoTab={onGoTab}
+                />
+              )}
               {isOpen && hasEmployeeData && (
                 <div className="dl-store-table">
                   <EmployeeTable
@@ -12383,7 +12601,17 @@ export default function App() {
         )}
         {!needsReport && tab === 'Overview' && (report || hasHistoricalData) && (
           <OverviewTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={d.managers} isOwner={u.role === 'owner'} goals={d.goals} giftCardHistory={u.role === 'owner' ? d.giftCardHistory : null} rankToken={!viewing && u.role === 'manager' ? currentUser.token : null}
-            focusStylists={d.focusStylists} onSaveFocus={canFocus ? handleSaveFocus : null} />
+            focusStylists={d.focusStylists} onSaveFocus={canFocus ? handleSaveFocus : null}
+            reviews={d.reviews} salonChecks={d.salonChecks}
+            goalGiftCards={u.role === 'owner' || u.role === 'district_leader' ? d.giftCardHistory : null}
+            snapshotShow={{
+              tabs: visibleTabs,
+              team: visibleTabs.includes('Team TSTH'),
+              giftCards: u.role === 'owner' || u.role === 'district_leader',
+              coaching: canFocus,
+              budgets: visibleTabs.includes('Budgets'),
+            }}
+            onGoTab={t => { setTab(t); window.scrollTo(0, 0); }} />
         )}
         {tab === 'Focus Stylist' && canFocus && (
           <FocusStylistTab focusStylists={d.focusStylists} history={d.history} weeklyHistory={d.weeklyHistory} onSaveFocus={handleSaveFocus} isOwner={u.role === 'owner'} />
