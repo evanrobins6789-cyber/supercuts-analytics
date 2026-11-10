@@ -17,7 +17,8 @@ import {
 import { SALON_CHECK_MAX_PHOTOS, activeChecklist, checklistItems, visitChecklist, scoreSalonCheck, salonCheckList, salonCheckPhotoPaths } from './salonCheck';
 import { LP_RULES, parseLpSalesFile, parseLpAttendanceFile, parseLpRegisterFile, mergeLpDays, lpMonthPayload, analyzeLp, lpDefaultRange } from './lossPrevention';
 import { LEADER_ROSTER_SECTIONS as REAL_LEADER_ROSTER_SECTIONS, getLeaderForStoreCode as realGetLeaderForStoreCode } from './leaderRoster';
-import { isPresenting, initPresenterMode, setPresenterMode, presenterView, fakeLeaderSections, fakePersonName } from './presenter';
+import { isPresenting, initPresenterMode, setPresenterMode, presenterView, fakeLeaderSections, fakePersonName, initViewAsDl, setViewAsDl } from './presenter';
+import { filterPayload, filterDailyHistory } from './scopeFilter';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
 import { LEASE_STORE_CODE_TO_NAME, LEASE_INACTIVE_CODES, leaseStoreName, matchStoreCodeFromPath, extractTermDatesFromFilename } from './leaseStoreDirectory';
 import { exportReviewsToPDF, exportPinListToPDF } from './reviewExport';
@@ -1953,20 +1954,32 @@ function PayExplainer({ pay, coaching, leaderName = null, stores = [], peers = n
 // Leadership (owner) instead sees the TOP-TSTH person for the dates picked
 // (min MIN_HOURS_FOR_TOP hours), worked out locally from the full history the
 // owner already has, in the same by-store layout.
-function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = false, history = null, weeklyHistory = null, tipsHistory = null, payRates = [], nameAliases = {}, payFocusName = null, onPayPick = null }) {
+function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = false, history = null, weeklyHistory = null, tipsHistory = null, payRates = [], nameAliases = {}, payFocusName = null, onPayPick = null, localSelf = null }) {
   const today = localTodayISO();
   const cur = payPeriodFor(today);
   const [range, setRange] = useState({ start: cur.start, end: today < cur.end ? today : cur.end });
   const [state, setState] = useState({ loading: true, data: null, error: null });
   useEffect(() => {
-    if (presenting || isOwner || !range.start || !range.end) return undefined;
+    if (presenting || isOwner || localSelf || !range.start || !range.end) return undefined;
     let cancelled = false;
     setState(s => ({ ...s, loading: true, error: null }));
     myNumbers(token, range.start, range.end).then(r => {
       if (!cancelled) setState({ loading: false, data: r.ok ? r : null, error: r.ok ? null : r.error });
     });
     return () => { cancelled = true; };
-  }, [token, range.start, range.end, presenting, isOwner]);
+  }, [token, range.start, range.end, presenting, isOwner, localSelf]);
+  // Owner's "View as DL": the DL's own lines, worked out here from the full
+  // data the owner already has, the same way api/_my-numbers.js does it.
+  const localSelfData = useMemo(() => {
+    if (!localSelf || !range.start || !range.end) return null;
+    const names = new Set((localSelf.names || []).map(normalizePersonName).filter(Boolean));
+    const picked = pickOwnRecords({ dailyRows: [{ payload: localSelf.history || {} }], weeklyRows: [{ payload: localSelf.weeklyHistory || {} }], tipRows: [{ payload: localSelf.tipsHistory || {} }], names, start: range.start, end: range.end });
+    const codes = [...new Set(Object.values(picked.history).map(r => r.code))];
+    Object.values(picked.weeklyHistory).forEach(w => Object.entries(w.stores || {}).forEach(([c, st]) => { if (st.employees?.length) codes.push(c); }));
+    const peers = buildPeerStats({ history: localSelf.history || {}, weeklyHistory: localSelf.weeklyHistory || {}, names, codes: [...new Set(codes)], start: range.start, end: range.end });
+    return { ...picked, peers, payRate: localSelf.payRate ?? null, matchedNames: [...names] };
+  }, [localSelf, range.start, range.end]);
+  const serverData = localSelf ? localSelfData : state.data;
   const leaderTop = useMemo(() => {
     if (!isOwner || !range.start || !range.end) return null;
     const rateFor = payRates.length ? buildRateLookup(payRates, nameAliases) : null;
@@ -1983,31 +1996,31 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
   }, [isOwner, history, weeklyHistory, tipsHistory, payRates, nameAliases, payFocusName, range.start, range.end]);
   const result = useMemo(() => {
     if (isOwner) return leaderTop?.result || (leaderTop ? { stores: [], total: null } : null);
-    return state.data
-      ? buildMyNumbers({ history: state.data.history, weeklyHistory: state.data.weeklyHistory, tips: state.data.tips, start: range.start, end: range.end })
+    return serverData
+      ? buildMyNumbers({ history: serverData.history, weeklyHistory: serverData.weeklyHistory, tips: serverData.tips, start: range.start, end: range.end })
       : null;
-  }, [isOwner, leaderTop, state.data, range.start, range.end]);
-  const loading = isOwner ? false : state.loading;
+  }, [isOwner, leaderTop, serverData, range.start, range.end]);
+  const loading = isOwner || localSelf ? false : state.loading;
   // Pay breakdown + coaching. Employees: their own rate and store-peer
   // averages come from the server. Leadership: worked out locally for the
   // top-TSTH person.
   const { pay, coaching } = useMemo(() => {
     if (!result?.stores?.length) return { pay: null, coaching: [] };
-    const tipsSrc = isOwner ? null : state.data?.tips;
+    const tipsSrc = isOwner ? null : serverData?.tips;
     const managerFromTips = Object.values(tipsSrc || {}).some(rec => Object.values(rec.employees || {}).some(v => /manager/i.test(v.job || '')));
     const p = isOwner
       ? buildPayBreakdown({ stores: result.stores, total: result.total, payRate: leaderTop?.top?.hourly ?? null, manager: !!leaderTop?.top?.manager })
-      : buildPayBreakdown({ stores: result.stores, total: result.total, payRate: state.data?.payRate ?? null, manager: userRole === 'manager' || managerFromTips });
-    const peers = isOwner ? leaderTop?.peers : state.data?.peers;
+      : buildPayBreakdown({ stores: result.stores, total: result.total, payRate: serverData?.payRate ?? null, manager: userRole === 'manager' || managerFromTips });
+    const peers = isOwner ? leaderTop?.peers : serverData?.peers;
     // Scale so-far bonus to the whole pay period at the same pace, when the
     // dates shown are the start of a pay period that isn't over yet.
-    const lastDate = isOwner ? leaderTop?.lastDate : Object.values(state.data?.history || {}).map(h => h.date).sort().pop();
+    const lastDate = isOwner ? leaderTop?.lastDate : Object.values(serverData?.history || {}).map(h => h.date).sort().pop();
     const per = payPeriodFor(range.start);
     const dayCount = (a, b) => Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000) + 1;
     const periodFactor = range.start === per.start && range.end <= per.end && lastDate && lastDate < per.end
       ? dayCount(per.start, per.end) / dayCount(per.start, lastDate) : 1;
     return { pay: p, coaching: buildCoaching({ stores: result.stores, pay: p, peers, periodFactor }) };
-  }, [result, isOwner, leaderTop, state.data, userRole, range.start, range.end]);
+  }, [result, isOwner, leaderTop, serverData, userRole, range.start, range.end]);
 
   const cols = [
     { key: 'hours', label: 'Hours', fmt: v => fmtNum(v, 1) },
@@ -2053,12 +2066,12 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
               {result.stores.length > 1 && <tfoot>{row('All stores', result.total, 'ledger-avg-row')}</tfoot>}
             </table>
           </div>
-          <PayExplainer pay={pay} coaching={coaching} leaderName={isOwner ? leaderTop?.top?.name : null} stores={result.stores} peers={isOwner ? leaderTop?.peers : state.data?.peers} />
+          <PayExplainer pay={pay} coaching={coaching} leaderName={isOwner ? leaderTop?.top?.name : null} stores={result.stores} peers={isOwner ? leaderTop?.peers : serverData?.peers} />
         </>
       ) : isOwner ? (
         <p className="empty-note">No one has {MIN_HOURS_FOR_TOP}+ hours with sales on file for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}.</p>
       ) : (
-        <p className="empty-note">No sales, hours or tips found under your name ({(state.data?.matchedNames || []).join(', ') || userName}) for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}. If the POS spells your name differently, ask leadership to link that spelling to your login in Setup › Employee Access.</p>
+        <p className="empty-note">No sales, hours or tips found under your name ({(serverData?.matchedNames || []).join(', ') || userName}) for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}. If the POS spells your name differently, ask leadership to link that spelling to your login in Setup › Employee Access.</p>
       ))}
     </div>
   );
@@ -2142,8 +2155,11 @@ function BonusHeatBar({ split, title, big = false }) {
   );
 }
 
-function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHistory = null, payRates = [], nameAliases = {} }) {
+function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHistory = null, payRates = [], nameAliases = {}, localData = false }) {
   const isOwner = role === 'owner';
+  // Owner, or the owner's "View as DL": tips and rates are already in this
+  // browser (scoped to the DL's stores by the caller), so no server call.
+  const useLocal = isOwner || localData;
   const today = localTodayISO();
   const cur = payPeriodFor(today);
   const [range, setRange] = useState({ start: cur.start, end: today < cur.end ? today : cur.end });
@@ -2162,23 +2178,23 @@ function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHi
     const el = topRef.current;
     if (el && el.getBoundingClientRect().top < 0) el.scrollIntoView({ block: 'start' });
   }, [person, openCode]);
-  const [server, setServer] = useState({ loading: !isOwner, data: null, error: null });
+  const [server, setServer] = useState({ loading: !useLocal, data: null, error: null });
   useEffect(() => {
-    if (isOwner || !range.start || !range.end) return undefined;
+    if (useLocal || !range.start || !range.end) return undefined;
     let cancelled = false;
     setServer(s => ({ ...s, loading: true, error: null }));
     teamNumbers(token, range.start, range.end).then(r => {
       if (!cancelled) setServer({ loading: false, data: r.ok ? r : null, error: r.ok ? null : r.error });
     });
     return () => { cancelled = true; };
-  }, [isOwner, token, range.start, range.end]);
+  }, [useLocal, token, range.start, range.end]);
 
-  const tipsSrc = isOwner ? tipsHistory : server.data?.tips;
+  const tipsSrc = useLocal ? tipsHistory : server.data?.tips;
   const rateFor = useMemo(() => {
-    if (isOwner) return payRates.length ? buildRateLookup(payRates, nameAliases) : null;
+    if (useLocal) return payRates.length ? buildRateLookup(payRates, nameAliases) : null;
     const rates = server.data?.rates;
     return rates ? (name => (rates[name] != null ? { rate: rates[name] } : null)) : null;
-  }, [isOwner, payRates, nameAliases, server.data]);
+  }, [useLocal, payRates, nameAliases, server.data]);
 
   // One row per person (across their stores, as the pay rules count them),
   // and each store's own people and totals for these dates.
@@ -9221,13 +9237,56 @@ const SETUP_SECTIONS = [
   { key: 'rewards', label: 'Rewards' },
   { key: 'hsa', label: 'HSA' },
   { key: 'leases', label: 'Leases' },
-  { key: 'presenter', label: 'Presenter Mode' },
+  { key: 'presenter', label: 'Presenter Mode & DL View' },
 ];
 
 // Owner-only (Setup is already owner-only + password gated). Flips this
 // browser into presenter mode — see presenter.js for what it does/doesn't do.
-function PresenterSetupTab({ presenting, onToggle }) {
+// "View as DL": pick one of the District Leaders from Employee Access and see
+// the site the way their login does (their stores only, their tabs only).
+function ViewAsDlPicker({ token, onViewAs }) {
+  const [dls, setDls] = useState(null);
+  const [error, setError] = useState(null);
+  const [pick, setPick] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    rosterList(token).then(r => {
+      if (cancelled) return;
+      if (!r.ok) { setError(r.error); setDls([]); return; }
+      setDls((r.employees || []).filter(e => e.role === 'district_leader' && e.active !== false && (e.storeCodes || []).length).sort((a, b) => a.name.localeCompare(b.name)));
+    });
+    return () => { cancelled = true; };
+  }, [token]);
+  const chosen = (dls || []).find(e => String(e.id) === pick);
   return (
+    <div className="setup-section">
+      <p className="chart-title">👁 View as a District Leader</p>
+      <p className="step-body">See the site exactly as one DL sees it when they log in: only their stores, only the tabs a DL gets, and their own My Numbers. The data goes through the same filter the server uses for a real DL login.</p>
+      <ul className="step-body">
+        <li><strong>Read-only.</strong> Nothing is saved while you're viewing as a DL (goals, Focus Stylist picks, Shear Checks, sign-offs). Anything you type is thrown away when you exit.</li>
+        <li><strong>Only you, only this browser.</strong> The DL isn't affected and doesn't know. It stays on across reloads until you exit with the 👁 button at the top.</li>
+        <li><strong>Small differences:</strong> the store-rank card isn't shown, and Team TSTH coaching compares against the DL's stores instead of the whole company.</li>
+      </ul>
+      {dls === null ? <span className="spinner small" /> : error ? (
+        <p className="password-error">Couldn't load the DL list: {error}</p>
+      ) : dls.length === 0 ? (
+        <p className="empty-note">No active District Leaders with stores in Employee Access yet.</p>
+      ) : (
+        <div className="view-as-row">
+          <select value={pick} onChange={e => setPick(e.target.value)} aria-label="District Leader to view as">
+            <option value="">Pick a District Leader…</option>
+            {dls.map(e => <option key={e.id} value={String(e.id)}>{e.name} ({e.storeCodes.length} store{e.storeCodes.length === 1 ? '' : 's'})</option>)}
+          </select>
+          <button className="btn-primary" disabled={!chosen} onClick={() => chosen && onViewAs({ name: chosen.name, employeeCode: chosen.employeeCode, storeCodes: chosen.storeCodes })}>View as this DL</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PresenterSetupTab({ presenting, onToggle, token, onViewAs }) {
+  return (
+    <>
     <div className="setup-section">
       <p className="chart-title">🎭 Presenter Mode</p>
       <p className="step-body">Shows made-up numbers and names everywhere in the app so you can demo it without showing real data. Store names stay real; every sales figure, count, goal, tip, pay rate, score, star rating, rent amount, point balance, and person's name (stylists, managers, DLs, reviewers, HSA sign-ups) is swapped for a fake one. Review text is swapped for sample reviews.</p>
@@ -9241,6 +9300,8 @@ function PresenterSetupTab({ presenting, onToggle }) {
         {presenting ? 'Turn off presenter mode (show real data)' : 'Turn on presenter mode'}
       </button>
     </div>
+    {onViewAs && <ViewAsDlPicker token={token} onViewAs={onViewAs} />}
+    </>
   );
 }
 
@@ -10530,6 +10591,8 @@ export default function App() {
   // Presenter mode (owner-only, this browser only) — see presenter.js.
   // initPresenterMode also arms the module-level write block in db.js/auth.js.
   const [presenting, setPresenting] = useState(() => initPresenterMode(getSession()));
+  // "View as DL" (owner-only, this browser only, read-only) — see presenter.js.
+  const [viewAs, setViewAs] = useState(() => initViewAsDl(getSession()));
   const [report, setReport] = useState(null);
   const [employeeRoster, setEmployeeRoster] = useState(null);
   const [goals, setGoals] = useState({});
@@ -10639,7 +10702,7 @@ export default function App() {
       if (focusStylistsRes.data) setFocusStylists(focusStylistsRes.data);
       if (salonChecksRes.data) setSalonChecks(salonChecksRes.data);
       if (salonQuestionsRes.data) setSalonQuestions(salonQuestionsRes.data);
-      if (reportRes.data) setReport(ensureReportDerivedFields(reportRes.data)); else if (currentUser.role === 'owner') { setTab('Setup'); setSetupSection('upload'); }
+      if (reportRes.data) setReport(ensureReportDerivedFields(reportRes.data)); else if (currentUser.role === 'owner' && !viewAs) { setTab('Setup'); setSetupSection('upload'); }
       if (rosterRes.data) setEmployeeRoster(rosterRes.data);
       if (goalsRes.data) setGoals(goalsRes.data);
       if (managersRes.data) setManagers(managersRes.data);
@@ -12177,6 +12240,66 @@ export default function App() {
     return { period, through: days[days.length - 1] || null, top: picked || topTsthRow(rows), picked: !!picked, rows, ratesLoaded: !!rateFor, noRate };
   }, [currentUser, presenterData, history, weeklyHistory, tipsHistory, payRates, nameAliases, payFocusName]);
 
+  // View as DL: the owner's data run through the same per-role filter the
+  // server uses (src/scopeFilter.js), so every tab shows what that DL's own
+  // login would get. Works on top of presenter mode's fakes when both are on.
+  const viewScope = useMemo(() => {
+    if (!viewAs || currentUser?.role !== 'owner') return null;
+    const src = presenterData || { report, history, weeklyHistory, giftCardHistory, tipsHistory, payRates, nameAliases, goals, milestoneGoals, managers, reviews, focusStylists, salonChecks };
+    const emp = { role: 'district_leader', store_codes: viewAs.storeCodes };
+    const f = (key, v) => filterPayload(key, v, emp);
+    const hist = f('daily_history', src.history || {});
+    const weekly = f('weekly_history', src.weeklyHistory || {});
+    return {
+      report: f('stylist_report', src.report), history: hist, weeklyHistory: weekly,
+      giftCardHistory: f('gift_card_history_', src.giftCardHistory || {}),
+      tipsHistory: {}, payRates: [], nameAliases: {}, leases: {}, lpData: null,
+      goals: f('store_goals', src.goals), milestoneGoals: f('milestone_goals', src.milestoneGoals), managers: f('store_managers', src.managers),
+      reviews: f('reviews', src.reviews), focusStylists: f('focus_stylists', src.focusStylists), salonChecks: f('salon_checks', src.salonChecks),
+      fallbackEmployeesByStore: getEmployeesByStoreFromHistory(hist, weekly),
+      // What a real DL gets from api/_team-numbers.js: tips for their stores
+      // and pay rates (only their people are ever looked up).
+      teamTips: filterDailyHistory(src.tipsHistory || {}, new Set(viewAs.storeCodes)),
+      full: src,
+    };
+  }, [viewAs, currentUser, presenterData, report, history, weeklyHistory, giftCardHistory, tipsHistory, payRates, nameAliases, goals, milestoneGoals, managers, reviews, focusStylists, salonChecks]);
+  // My Numbers in DL view: the DL's own lines, from every store (as the server does).
+  const viewSelf = useMemo(() => {
+    if (!viewScope) return null;
+    const { full } = viewScope;
+    const rate = (full.payRates || []).find(r => viewAs.employeeCode && String(r.emp_number ?? r.empNumber ?? '') === String(viewAs.employeeCode));
+    return {
+      names: [viewAs.name, ...(((full.nameAliases || {})[viewAs.employeeCode]) || [])],
+      payRate: rate && rate.rate != null ? Number(rate.rate) : null,
+      history: full.history || {}, weeklyHistory: full.weeklyHistory || {}, tipsHistory: full.tipsHistory || {},
+    };
+  }, [viewScope, viewAs]);
+  // Tilly's PAY TRACKER line in DL view, same shape as teamPayTracker.
+  const viewTeamPayTracker = useMemo(() => {
+    if (!viewScope) return null;
+    const today = localTodayISO();
+    const period = payPeriodFor(today);
+    const end = today < period.end ? today : period.end;
+    const rateFor = (viewScope.full.payRates || []).length ? buildRateLookup(viewScope.full.payRates, viewScope.full.nameAliases) : null;
+    const rows = buildPayRows({ history: viewScope.history, weeklyHistory: viewScope.weeklyHistory, tipsHistory: viewScope.teamTips, start: period.start, end, rateFor });
+    const days = Object.values(viewScope.history || {}).filter(r => r.date >= period.start && r.date <= end && r.employees && Object.keys(r.employees).length).map(r => r.date).sort();
+    return { period, through: days[days.length - 1] || null, rows, ratesLoaded: !!rateFor, noRate: [], team: true };
+  }, [viewScope]);
+
+  const handleViewAs = dl => {
+    if (!currentUser || currentUser.role !== 'owner') return;
+    if (dl) {
+      setViewAs(setViewAsDl(currentUser, dl));
+      setTab('Homepage');
+      window.scrollTo(0, 0);
+      showToast(`Viewing as ${dl.name} (District Leader). Nothing is saved while this is on.`);
+    } else {
+      setViewAsDl(currentUser, null);
+      // Reload so anything typed while viewing (memory only, never saved) is discarded.
+      window.location.reload();
+    }
+  };
+
   const handleTogglePresenter = on => {
     if (!currentUser || currentUser.role !== 'owner') return;
     if (on) {
@@ -12197,11 +12320,15 @@ export default function App() {
   if (!currentUser) return <LoginScreen onLoggedIn={handleLoggedIn} />;
   if (loading) return <div className="app-loading"><div className="spinner large" /></div>;
 
+  // View as DL: `u` is who the screen is for. Role checks below use it;
+  // the real session (token, favorites) stays the owner's.
+  const viewing = !!viewScope;
+  const u = viewing ? { ...currentUser, role: 'district_leader', name: viewAs.name, store_codes: viewAs.storeCodes } : currentUser;
   // Focus Stylist: DLs pick and see their own; leadership (owner) sees everyone.
-  const canFocus = currentUser.role === 'owner' || currentUser.role === 'district_leader';
+  const canFocus = u.role === 'owner' || u.role === 'district_leader';
   // Shear Check: same roles as Focus Stylist.
   const canSalonCheck = canFocus;
-  const visibleTabs = TABS.filter(t => (t !== 'Setup' || currentUser.role === 'owner') && (t !== 'Goals' || currentUser.role !== 'employee') && (t !== 'Budgets' || currentUser.role !== 'employee') && (t !== 'Leases' || currentUser.role === 'owner') && (t !== 'Gift Cards' || currentUser.role === 'owner' || currentUser.role === 'district_leader') && (t !== 'Loss Prevention' || currentUser.role === 'owner') && (t !== 'Focus Stylist' || canFocus) && (t !== 'Shear Check' || canSalonCheck) && (t !== 'Team TSTH' || currentUser.role === 'owner' || currentUser.role === 'district_leader' || currentUser.role === 'manager'));
+  const visibleTabs = TABS.filter(t => (t !== 'Setup' || u.role === 'owner') && (t !== 'Goals' || u.role !== 'employee') && (t !== 'Budgets' || u.role !== 'employee') && (t !== 'Leases' || u.role === 'owner') && (t !== 'Gift Cards' || u.role === 'owner' || u.role === 'district_leader') && (t !== 'Loss Prevention' || u.role === 'owner') && (t !== 'Focus Stylist' || canFocus) && (t !== 'Shear Check' || canSalonCheck) && (t !== 'Team TSTH' || u.role === 'owner' || u.role === 'district_leader' || u.role === 'manager'));
   // A live weekly Stylist Report upload is no longer the only way to power
   // these tabs — Sales-Accrual + Attendance historical imports feed the
   // exact same tables via each tab's own current-month fallback (see
@@ -12209,10 +12336,11 @@ export default function App() {
   const hasHistoricalData = Object.keys(history || {}).length > 0 || Object.keys(weeklyHistory || {}).length > 0;
   const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'My Numbers' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases' && tab !== 'Gift Cards' && tab !== 'Loss Prevention' && tab !== 'Focus Stylist' && tab !== 'Shear Check';
 
-  const d = presenterData
+  const d = viewing ? { ...viewScope, news: presenterData ? presenterData.news : news, employeeRoster: presenterData ? presenterData.employeeRoster : employeeRoster, reviewNotes: presenterData ? presenterData.reviewNotes : reviewNotes, goldCombs: presenterData ? presenterData.goldCombs : goldCombs, hsaSignups: presenterData ? presenterData.hsaSignups : hsaSignups, newsReads: presenterData ? presenterData.newsReads : newsReads, pointsSummary: presenterData ? presenterData.pointsSummary : pointsSummary }
+    : presenterData
     ? { ...presenterData, fallbackEmployeesByStore: presenterFallbackEmployees }
     : { news, tipsHistory, payRates, nameAliases, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, focusStylists, salonChecks, fallbackEmployeesByStore };
-  const shownUserName = presenting ? fakePersonName(currentUser.name) : currentUser.name;
+  const shownUserName = presenting ? fakePersonName(u.name) : u.name;
   const focusNames = currentFocusNames(d.focusStylists);
 
   return (
@@ -12227,46 +12355,47 @@ export default function App() {
           <img src={supercutsWordmarkWhite} alt="Supercuts" className="header-logo-img" />
         </div>
         <div className="header-right">
+          {viewing && <button className="presenter-pill view-as-pill" onClick={() => handleViewAs(null)} title="You're seeing the site as this District Leader would. Click to go back to your own view.">👁 Viewing as {shownUserName} (DL) · Exit</button>}
           {presenting && <button className="presenter-pill" onClick={() => handleTogglePresenter(false)} title="Presenter mode is on — made-up data. Click to turn off.">🎭 Presenter</button>}
-          <span className="header-user">{shownUserName} · {ROLE_LABELS[currentUser.role] || currentUser.role}</span>
+          <span className="header-user">{shownUserName} · {ROLE_LABELS[u.role] || u.role}</span>
           <button className="btn-ghost" onClick={handleLogout}>Log Out</button>
         </div>
       </header>
 
       <TabMenu key={currentUser.token} userKey={currentUser.name} token={currentUser.token} tabs={visibleTabs} tab={tab} onPick={setTab} onSaveError={msg => showToast(`Couldn't save your favorite tabs (${msg})`, 'error')} />
-      <main className="app-main" key={presenting ? 'main-presenting' : 'main-live'}>
+      <main className="app-main" key={`${presenting ? 'main-presenting' : 'main-live'}-${viewing ? viewAs.name : ''}`}>
         {needsReport && <div className="empty-state"><p className="empty-title">No data yet</p><p>Go to the Setup tab and either upload this week's Stylist Report, or run a Sales-Accrual/Attendance historical import.</p></div>}
         {tab === 'Homepage' && (
           <HomepageTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} fallbackEmployeesByStore={d.fallbackEmployeesByStore} news={d.news} events={events} reviews={d.reviews} onOpenNews={handleOpenNews}
-            canPost={currentUser.role === 'owner' && !presenting} onAddNews={handleAddNews} onAddEvent={handleAddEvent}
+            canPost={u.role === 'owner' && !presenting} onAddNews={handleAddNews} onAddEvent={handleAddEvent}
             newsGroups={newsGroups} onImageError={msg => showToast(msg, 'error')}
-            rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} rankRole={currentUser.role}
-            payTracker={payTracker} onPayPick={setPayFocusName} payFocusName={payFocusName}
+            rankToken={!viewing && (u.role === 'manager' || u.role === 'district_leader') ? currentUser.token : null} rankRole={u.role}
+            payTracker={viewing ? null : payTracker} onPayPick={setPayFocusName} payFocusName={payFocusName}
           />
         )}
-        {tab === 'Team TSTH' && <TeamTsthTab token={currentUser.token} role={currentUser.role} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={d.tipsHistory} payRates={d.payRates} nameAliases={d.nameAliases} />}
-        {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={shownUserName} userRole={currentUser.role} presenting={presenting} isOwner={currentUser.role === 'owner'} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={d.tipsHistory} payRates={d.payRates} nameAliases={d.nameAliases} payFocusName={payFocusName} onPayPick={setPayFocusName} />}
+        {tab === 'Team TSTH' && <TeamTsthTab token={currentUser.token} role={u.role} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={viewing ? viewScope.teamTips : d.tipsHistory} payRates={viewing ? viewScope.full.payRates : d.payRates} nameAliases={viewing ? viewScope.full.nameAliases : d.nameAliases} localData={viewing} />}
+        {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={shownUserName} userRole={u.role} presenting={presenting} isOwner={u.role === 'owner'} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={d.tipsHistory} payRates={d.payRates} nameAliases={d.nameAliases} payFocusName={payFocusName} onPayPick={setPayFocusName} localSelf={viewSelf} />}
         {tab === 'News' && (
-          <NewsTab news={d.news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={currentUser} newsReads={d.newsReads} onSignOff={handleSignOffNews} />
+          <NewsTab news={d.news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={u} newsReads={d.newsReads} onSignOff={handleSignOffNews} />
         )}
         {tab === 'HSA' && (
-          <HsaTab events={events} hsaSignups={d.hsaSignups} currentUser={currentUser} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} onEditSignup={handleEditHsaSignup} onAddClass={handleAddHsaClass} onEditClass={handleEditHsaClass} onDeleteClass={handleDeleteEvent} />
+          <HsaTab events={events} hsaSignups={d.hsaSignups} currentUser={u} onSignUp={handleHsaSignUp} onRemoveSignup={handleRemoveHsaSignup} onEditSignup={handleEditHsaSignup} onAddClass={handleAddHsaClass} onEditClass={handleEditHsaClass} onDeleteClass={handleDeleteEvent} />
         )}
         {!needsReport && tab === 'Overview' && (report || hasHistoricalData) && (
-          <OverviewTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={d.managers} isOwner={currentUser.role === 'owner'} goals={d.goals} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} rankToken={currentUser.role === 'manager' ? currentUser.token : null}
+          <OverviewTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} selected={selectedMetric} onSelect={setSelectedMetric} query={queries.Overview} onQuery={v => setQuery('Overview', v)} managers={d.managers} isOwner={u.role === 'owner'} goals={d.goals} giftCardHistory={u.role === 'owner' ? d.giftCardHistory : null} rankToken={!viewing && u.role === 'manager' ? currentUser.token : null}
             focusStylists={d.focusStylists} onSaveFocus={canFocus ? handleSaveFocus : null} />
         )}
         {tab === 'Focus Stylist' && canFocus && (
-          <FocusStylistTab focusStylists={d.focusStylists} history={d.history} weeklyHistory={d.weeklyHistory} onSaveFocus={handleSaveFocus} isOwner={currentUser.role === 'owner'} />
+          <FocusStylistTab focusStylists={d.focusStylists} history={d.history} weeklyHistory={d.weeklyHistory} onSaveFocus={handleSaveFocus} isOwner={u.role === 'owner'} />
         )}
         {tab === 'Shear Check' && canSalonCheck && (
           <ShearCheckTab
             stores={(d.report ? d.report.stores.map(s => ({ name: s.name, code: s.code })) : Object.keys(d.fallbackEmployeesByStore || {}).map(code => ({ code, name: STORE_CODE_TO_NAME[code] || `Store ${code}` }))).sort((a, b) => a.name.localeCompare(b.name))}
             salonChecks={d.salonChecks} questions={salonQuestions} managers={d.managers}
             onSave={handleSaveSalonCheck} onEmail={handleEmailSalonCheck} onDelete={handleDeleteSalonCheck}
-            onChangeQuestion={handleChangeSalonQuestion} canEditQuestions={currentUser.role === 'owner' && !presenting}
+            onChangeQuestion={handleChangeSalonQuestion} canEditQuestions={u.role === 'owner' && !presenting}
             canPhotos={!presenting} token={currentUser.token} notify={showToast}
-            isOwner={currentUser.role === 'owner'} userName={currentUser.name} />
+            isOwner={u.role === 'owner'} userName={u.name} />
         )}
         {!needsReport && tab === 'Employees' && (report || hasHistoricalData) && (
           <EmployeesTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange} query={queries.Employees} onQuery={v => setQuery('Employees', v)} managers={d.managers} employeeRoster={d.employeeRoster} fallbackEmployeesByStore={d.fallbackEmployeesByStore} />
@@ -12278,7 +12407,7 @@ export default function App() {
             goalType="retailGoal" goalLabel="Retail" goals={d.goals}
             extraGoal={{ type: 'bottleGoal', metricKey: 'bottles', label: 'Bottles', fmt: fmtInt }}
             history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
-            managers={d.managers} isOwner={currentUser.role === 'owner'}
+            managers={d.managers} isOwner={u.role === 'owner'}
             showProducts
           />
         )}
@@ -12289,7 +12418,7 @@ export default function App() {
             goalType="colorGoal" goals={d.goals}
             attachMetric={{ rowKey: 'retailAttachPct', actualField: 'retailAttach', goalField: 'retailAttachGoal', label: 'Retail Attach %' }}
             history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
-            isOwner={currentUser.role === 'owner'}
+            isOwner={u.role === 'owner'}
             showPrevMonthColor
             managers={d.managers}
           />
@@ -12301,18 +12430,18 @@ export default function App() {
             goalType="signatureSGoal" goals={d.goals} goalMetricKey="signatureSCount" goalFmt={fmtInt}
             attachMetric={{ rowKey: 'signatureAttachPct', label: 'Retail Attach %' }}
             history={d.history} weeklyHistory={d.weeklyHistory} dateRange={dateRange} onDateRangeChange={setDateRange}
-            managers={d.managers} isOwner={currentUser.role === 'owner'}
+            managers={d.managers} isOwner={u.role === 'owner'}
           />
         )}
-        {tab === 'Gift Cards' && (currentUser.role === 'owner' || currentUser.role === 'district_leader') && (
+        {tab === 'Gift Cards' && (u.role === 'owner' || u.role === 'district_leader') && (
           <GiftCardsTab
-            giftCardHistory={d.giftCardHistory} goals={d.goals} isOwner={currentUser.role === 'owner'}
+            giftCardHistory={d.giftCardHistory} goals={d.goals} isOwner={u.role === 'owner'}
             query={queries['Gift Cards']} onQuery={v => setQuery('Gift Cards', v)}
             dateRange={dateRange} onDateRangeChange={setDateRange}
             onGoToUpload={() => { setTab('Setup'); setSetupSection('history'); }}
           />
         )}
-        {tab === 'Loss Prevention' && currentUser.role === 'owner' && (
+        {tab === 'Loss Prevention' && u.role === 'owner' && (
           <LossPreventionTab
             lpData={d.lpData || lpData} lpStatus={lpStatus} onImportRegister={handleImportLpRegister}
             onGoToHistoryImport={() => { setTab('Setup'); setSetupSection('history'); }}
@@ -12322,11 +12451,11 @@ export default function App() {
           <BudgetsTab
             query={queries.Budgets} onQuery={v => setQuery('Budgets', v)}
             history={d.history} weeklyHistory={d.weeklyHistory}
-            isOwner={currentUser.role === 'owner'}
+            isOwner={u.role === 'owner'}
           />
         )}
         {tab === 'Goals' && (
-          <GoalsTab report={d.report} goals={d.goals} isOwner={currentUser.role === 'owner'} canSeeGiftCards={currentUser.role === 'owner' || currentUser.role === 'district_leader'} onSaveGoal={handleSaveGoal} onApplySalesGoals={handleApplySalesGoals} milestoneGoals={d.milestoneGoals} onSaveMilestoneGoal={handleSaveMilestoneGoal} onFinalize={handleFinalizeGoals} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} />
+          <GoalsTab report={d.report} goals={d.goals} isOwner={u.role === 'owner'} canSeeGiftCards={u.role === 'owner' || u.role === 'district_leader'} onSaveGoal={handleSaveGoal} onApplySalesGoals={handleApplySalesGoals} milestoneGoals={d.milestoneGoals} onSaveMilestoneGoal={handleSaveMilestoneGoal} onFinalize={handleFinalizeGoals} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} />
         )}
         {tab === 'Leases' && (
           <LeasesTab
@@ -12343,7 +12472,7 @@ export default function App() {
             report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} reviews={d.reviews} query={queries.Reviews} onQuery={v => setQuery('Reviews', v)}
             reviewNotes={d.reviewNotes} onAddReviewNote={handleAddReviewNote}
             goldCombs={d.goldCombs} onToggleGoldComb={handleToggleGoldComb}
-            currentUser={currentUser}
+            currentUser={u}
           />
         )}
         {tab === 'Weekly' && (
@@ -12378,11 +12507,11 @@ export default function App() {
               uploading: uploadingHsaSchedule, onFile: handleImportHsaSchedule, onClear: handleClearHsaSchedule,
             }}
             leaseAdminProps={{ leaseCount: Object.keys(d.leases).length, onClearAll: handleClearAllLeases }}
-            presenterProps={{ presenting, onToggle: handleTogglePresenter }}
+            presenterProps={{ presenting, onToggle: handleTogglePresenter, token: currentUser.token, onViewAs: handleViewAs }}
           />
         )}
       </main>
-      <AIChatWidget key={presenting ? 'chat-presenting' : 'chat-live'} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={d.news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={currentUser.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={currentUser.role === 'owner' ? d.giftCardHistory : null} lpData={currentUser.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} salonQuestions={salonQuestions} payTracker={payTracker || teamPayTracker} myNumbersSummary={myNumbersSummary} rankToken={currentUser.role === 'manager' || currentUser.role === 'district_leader' ? currentUser.token : null} />
+      <AIChatWidget key={`${presenting ? 'chat-presenting' : 'chat-live'}-${viewing ? viewAs.name : ''}`} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={d.news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={u.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={u.role === 'owner' ? d.giftCardHistory : null} lpData={u.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} salonQuestions={salonQuestions} payTracker={viewing ? viewTeamPayTracker : (payTracker || teamPayTracker)} myNumbersSummary={viewing ? null : myNumbersSummary} rankToken={!viewing && (u.role === 'manager' || u.role === 'district_leader') ? currentUser.token : null} />
     </div>
     </FocusNamesContext.Provider>
   );

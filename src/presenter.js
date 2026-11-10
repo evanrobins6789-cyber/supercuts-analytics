@@ -27,8 +27,37 @@ let presenting = false;
 const flagKey = userId => `supercuts_presenter_mode_${userId}`;
 
 export function isPresenting() { return presenting; }
-export function isWriteBlocked() { return presenting; }
-export const PRESENTER_BLOCKED_ERROR = 'Presenter mode is on — nothing is saved while presenting.';
+// "View as DL" (owner only, this browser only): the app shows the owner what
+// one District Leader's login sees, using the same filter the server applies
+// (src/scopeFilter.js). Read-only, same as presenter mode, so nothing done
+// while looking around as a DL can be saved under the owner's login.
+let viewAsDl = null; // { name, employeeCode, storeCodes }
+const viewAsKey = userId => `supercuts_view_as_dl_${userId}`;
+export function getViewAsDl() { return viewAsDl; }
+export function initViewAsDl(user) {
+  let v = null;
+  if (user && user.role === 'owner') {
+    try {
+      const raw = JSON.parse(localStorage.getItem(viewAsKey(user.id || user.name)) || 'null');
+      if (raw && raw.name && Array.isArray(raw.storeCodes)) v = { name: raw.name, employeeCode: raw.employeeCode || null, storeCodes: raw.storeCodes.map(String) };
+    } catch { v = null; }
+  }
+  viewAsDl = v;
+  return v;
+}
+export function setViewAsDl(user, dl) {
+  const v = user && user.role === 'owner' && dl ? { name: dl.name, employeeCode: dl.employeeCode || null, storeCodes: (dl.storeCodes || []).map(String) } : null;
+  viewAsDl = v;
+  if (user) {
+    try {
+      if (v) localStorage.setItem(viewAsKey(user.id || user.name), JSON.stringify(v));
+      else localStorage.removeItem(viewAsKey(user.id || user.name));
+    } catch { /* storage unavailable — applies for this page load only */ }
+  }
+  return v;
+}
+export function isWriteBlocked() { return presenting || !!viewAsDl; }
+export const PRESENTER_BLOCKED_ERROR = 'Presenter mode or DL view is on — nothing is saved.';
 
 // Reads the stored flag for this user and arms the module-level switch.
 // Only ever honored for an owner session.

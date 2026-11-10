@@ -1,6 +1,6 @@
 # Handoff — Supercuts Analytics
 
-## Where things stand (updated 2026-11-09)
+## Where things stand (updated 2026-11-10)
 
 **The user's 2026-10-28 list:**
 1. ~~Bonus + tips as an hourly figure~~ **Built 2026-11-03.** The rules came from the user (see the TSTH/bonus entries below). Tips come from the new Tips report upload. Base pay comes from the Employee Pay Rate Report (locked `pay_rates` table).
@@ -17,6 +17,14 @@
 - **Leadership roll-up email**: the user pasted the new Apps Script `doPost`. Their first test still hit the old code (needs Deploy → Manage deployments → edit → **New version**). Not confirmed fixed.
 - **Open questions**: do DLs get the 30% management bonus rate? (Today 30% = role `manager` or the Tips report Job "Manager".) Should Possible pay project the whole pay period instead of "so far"? (Offered; coaching already projects to the end of the period.)
 - **Nothing from 2026-11-03 has been clicked through in a real browser or with an employee login.** Checks were builds, temp jest tests on real data, and headless screenshots of mocks.
+
+**View as DL (2026-11-10).** User: a toggle like presenter mode that shows the owner what being a DL looks like on the site.
+- **Where**: Setup → "Presenter Mode & DL View" (renamed section) → pick an active DL from Employee Access → View as this DL. A yellow "👁 Viewing as {name} (DL) · Exit" pill in the header turns it off (reloads the page, like presenter mode). Owner only, this browser only (localStorage ), stays on across reloads.
+- **How**: the server's per-role filter moved unchanged from  to **** (), now imported by both the server and App.js. In DL view App.js runs the owner's in-memory data through it as  ( memo), and render-time role checks use  (the viewed DL) instead of . **A change to who-sees-what now goes in scopeFilter.js and applies to both.** The token stays the owner's.
+- **Read-only**:  in presenter.js is now , so every db.js/auth.js write is refused. Read faking in auth.js  now keys off  only (DL view shows real data). Works together with presenter mode (fakes, then scopes).
+- **Server calls made local in DL view**: Team TSTH ( prop: DL-store tips + pay rates from the owner's data, no  call); My Numbers ( prop: the DL's own lines by name + aliases + rate by employee code, mirrors ); Tilly's PAY TRACKER (). **Differences from a real DL login**: no store-rank card (it needs the DL's own token), Team TSTH coaching has no company-wide peer line, and the owner's own tab favorites show.
+- **Bug avoided**: with no Stylist Report, load sent the owner to Setup, which a DL can't see (blank page). Skipped while viewing.
+- **Verified**: clean ; temp jest tests (deleted) rendering the real App with a mocked server: owner sees both stores; DL view hides the other store's people on Employees/Team TSTH, hides Setup/Leases/Loss Prevention, shows Gift Cards/Team TSTH, My Numbers reads "Your own numbers, {DL}", a goals write is refused with no request sent; the Setup picker (after the Setup password) turns it on and saves the choice. **Not verified**: the live site with real DLs in Employee Access.
 
 **Who's-bonusing heat bars on Team TSTH (2026-11-09).** User: more detail on how many are bonusing in each group, and a heat bar at the top for leadership with total bonusing vs not.
 - `bonusSplit(people)` + `BonusHeatBar` (`src/App.js`, just above `TeamTsthTab`). Each person counts once per bar (de-duped by normalized name). Bonusing comes from their pay row (TSTH across every store they worked, as pay is figured; falls back to the store's TSTH if no row). Buckets: green **bonusing**, amber **close** (under goal by ≤ `BONUS_CLOSE_GAP` = $5/hr, a display choice, not a business rule), red **further under**.

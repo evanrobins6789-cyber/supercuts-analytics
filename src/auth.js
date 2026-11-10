@@ -4,7 +4,7 @@
 // already use, so App.js's existing load/error-handling code doesn't need a
 // second pattern for the sensitive keys that go through this instead.
 
-import { isWriteBlocked, PRESENTER_BLOCKED_ERROR, fakeServerResponse } from './presenter';
+import { isWriteBlocked, isPresenting, PRESENTER_BLOCKED_ERROR, fakeServerResponse } from './presenter';
 
 const SESSION_KEY = 'supercuts_session_v1';
 
@@ -41,7 +41,8 @@ function postWrite(url, body) {
 // way back (names/phones/balances — see presenter.js fakeServerResponse).
 async function postRead(kind, url, body) {
   const res = await postJson(url, body);
-  return isWriteBlocked() ? fakeServerResponse(kind, res) : res;
+  // Only presenter mode fakes reads; DL view shows real data.
+  return isPresenting() ? fakeServerResponse(kind, res) : res;
 }
 
 async function postJson(url, body) {
