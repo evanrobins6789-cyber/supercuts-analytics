@@ -1609,33 +1609,55 @@
 .team-tsth-group-count { font-weight: 500; font-size: 12px; color: var(--ink-soft); margin-left: 6px; text-transform: none; letter-spacing: 0; }
 .team-tsth-card .bonus-heat { margin: 2px 0; }
 
-/* Overview: Stores/Employees toggle for the top charts, and the store snapshot */
+/* Overview: Stores/Employees toggle for the top charts, and the store snapshot
+   (full-width sections stacked under the stylist table) */
 .overview-board-toggle { margin: 4px 0 10px; }
-.snap { border-top: 1px solid var(--line); padding: 14px 16px 6px; background: #f7f9fc; }
-.snap-intro { font-size: 13px; color: var(--ink-soft); margin: 0 0 10px; }
-.snap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
-.snap-card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
-.snap-card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
-.snap-card-title { font-weight: 700; color: var(--navy); font-size: 14px; margin: 0; }
-.snap-link { background: none; border: none; color: var(--navy-2); font-size: 12px; font-weight: 600; cursor: pointer; padding: 2px 0; white-space: nowrap; text-decoration: underline; }
-.snap-line { font-size: 13px; margin: 6px 0; }
-.snap-small { font-size: 12px; color: var(--ink-soft); margin: 6px 0 0; }
-.snap-goal { margin: 0 0 10px; }
-.snap-goal-head { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; margin-bottom: 4px; flex-wrap: wrap; }
-.snap-goal-label { font-weight: 600; }
-.snap-goal-nums { color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-.snap-goal-nums b { color: var(--ink); }
-.snap-goal-track { height: 10px; }
-.snap-goal-note { font-size: 12px; color: var(--ink-soft); margin: 3px 0 0; }
-.snap-quote { margin: 8px 0 0; padding: 6px 10px; border-left: 3px solid var(--line); font-size: 12.5px; background: #fafbfd; border-radius: 0 6px 6px 0; overflow-wrap: anywhere; }
-.snap-quote b { display: block; font-size: 11.5px; margin-bottom: 2px; }
+.snap { border-top: 2px solid var(--navy); padding: 16px 18px 6px; background: #f4f7fb; display: flex; flex-direction: column; gap: 16px; }
+.snap-intro { font-size: 14px; color: var(--ink-soft); margin: 0; }
+.snap-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 20px; min-width: 0; box-shadow: var(--shadow); }
+.snap-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.snap-card-title { font-weight: 800; color: var(--navy); font-size: 18px; margin: 0; }
+.snap-card-sub { font-size: 13px; color: var(--ink-soft); margin: 3px 0 0; }
+.snap-link { background: none; border: 1px solid var(--line); border-radius: 999px; color: var(--navy-2); font-size: 13px; font-weight: 700; cursor: pointer; padding: 5px 12px; white-space: nowrap; }
+.snap-link:hover { background: var(--paper, #eef2f7); }
+.snap-line { font-size: 14px; margin: 8px 0; }
+.snap-small { font-size: 12.5px; color: var(--ink-soft); margin: 10px 0 0; }
+.snap-subhead { font-weight: 700; color: var(--navy); font-size: 15px; margin: 14px 0 6px; }
+.snap-subhead-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.snap-goal-list { display: flex; flex-direction: column; gap: 16px; }
+.snap-goal-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; align-items: baseline; }
+.snap-goal-label { font-weight: 700; font-size: 15px; }
+.snap-goal-pct { font-weight: 800; font-size: 18px; color: var(--navy); font-variant-numeric: tabular-nums; }
+.snap-goal-track { height: 16px; }
+.snap-goal-foot { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 13.5px; color: var(--ink-soft); margin-top: 6px; font-variant-numeric: tabular-nums; }
+.snap-goal-foot b { color: var(--ink); }
+.snap-goal-note { font-size: 12.5px; color: var(--ink-soft); margin: 4px 0 0; }
+.snap-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.snap-stat { background: #f7f9fc; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+.snap-stat-label { font-size: 11.5px; text-transform: uppercase; letter-spacing: .4px; color: var(--ink-soft); font-weight: 600; }
+.snap-stat-value { font-size: 22px; font-weight: 800; color: var(--navy); font-variant-numeric: tabular-nums; }
+.snap-stat-value small { font-size: 13px; font-weight: 600; color: var(--ink-soft); }
+.snap-stars { display: flex; flex-direction: column; gap: 4px; max-width: 520px; margin-bottom: 8px; }
+.snap-star-row { display: grid; grid-template-columns: 32px 1fr 32px; gap: 8px; align-items: center; font-size: 13px; font-variant-numeric: tabular-nums; }
+.snap-star-row span:last-child { text-align: right; }
+.snap-star-track { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; }
+.snap-star-fill { display: block; height: 100%; background: #F2B705; }
+.snap-quotes { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.snap-quote { margin: 0; padding: 8px 12px; border-left: 4px solid var(--line); font-size: 14px; line-height: 1.45; background: #fafbfd; border-radius: 0 8px 8px 0; overflow-wrap: anywhere; }
+.snap-quote b { display: block; font-size: 12.5px; margin-bottom: 3px; color: var(--ink-soft); }
 .snap-quote--neg { border-left-color: var(--red); }
 .snap-quote--pos { border-left-color: var(--green); }
-.snap-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
-.snap-table th { text-align: right; font-size: 11.5px; color: var(--ink-soft); font-weight: 600; padding: 2px 4px; }
-.snap-table td { text-align: right; padding: 3px 4px; border-bottom: 1px solid var(--line); }
+.snap-table { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.snap-table th { text-align: right; font-size: 12px; text-transform: uppercase; letter-spacing: .3px; color: var(--ink-soft); font-weight: 700; padding: 6px 8px; border-bottom: 2px solid var(--line); white-space: nowrap; }
+.snap-table td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .snap-table th:first-child, .snap-table td:first-child { text-align: left; }
+.snap-table--wide td:first-child { font-weight: 600; }
+.snap-table tbody tr:nth-child(even) td { background: #fafbfd; }
 .snap-table .yoy-up { color: var(--green); } .snap-table .yoy-down { color: var(--red); }
-.snap-total td { font-weight: 700; }
-.snap .bonus-heat--big { margin: 6px 0 8px; padding: 8px 10px; }
-@media (max-width: 520px) { .snap { padding: 12px 10px 4px; } .snap-grid { grid-template-columns: 1fr; } }
+.snap-total td { font-weight: 800; border-top: 2px solid var(--navy); }
+.snap-chip { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+.snap-chip--bonus { background: #e3f4ea; color: var(--green); }
+.snap-chip--close { background: #fdf3d6; color: #8a6400; }
+.snap-chip--under { background: #fbe4e4; color: var(--red); }
+.snap .bonus-heat--big { margin: 0 0 12px; }
+@media (max-width: 520px) { .snap { padding: 12px 8px 4px; } .snap-card { padding: 12px 12px; } .snap-card-head { flex-direction: column; } .snap-card-title { font-size: 16px; } }
