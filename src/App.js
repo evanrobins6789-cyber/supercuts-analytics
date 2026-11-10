@@ -12658,8 +12658,8 @@ export default function App() {
   const canFocus = u.role === 'owner' || u.role === 'district_leader';
   // Shear Check: same roles as Focus Stylist.
   const canSalonCheck = canFocus;
-  // The DL tab (every DL group side by side) is for the owner and managers, not DLs (user, 2026-11-10).
-  const visibleTabs = TABS.filter(t => (t !== 'DL' || u.role !== 'district_leader') && (t !== 'Setup' || u.role === 'owner') && (t !== 'Goals' || u.role !== 'employee') && (t !== 'Budgets' || u.role !== 'employee') && (t !== 'Leases' || u.role === 'owner') && (t !== 'Gift Cards' || u.role === 'owner' || u.role === 'district_leader') && (t !== 'Loss Prevention' || u.role === 'owner') && (t !== 'Focus Stylist' || canFocus) && (t !== 'Shear Check' || canSalonCheck) && (t !== 'Team TSTH' || u.role === 'owner' || u.role === 'district_leader' || u.role === 'manager'));
+  // The DL tab (every DL group side by side) is owner-only (user, 2026-11-10).
+  const visibleTabs = TABS.filter(t => (t !== 'DL' || u.role === 'owner') && (t !== 'Setup' || u.role === 'owner') && (t !== 'Goals' || u.role !== 'employee') && (t !== 'Budgets' || u.role !== 'employee') && (t !== 'Leases' || u.role === 'owner') && (t !== 'Gift Cards' || u.role === 'owner' || u.role === 'district_leader') && (t !== 'Loss Prevention' || u.role === 'owner') && (t !== 'Focus Stylist' || canFocus) && (t !== 'Shear Check' || canSalonCheck) && (t !== 'Team TSTH' || u.role === 'owner' || u.role === 'district_leader' || u.role === 'manager'));
   // A live weekly Stylist Report upload is no longer the only way to power
   // these tabs — Sales-Accrual + Attendance historical imports feed the
   // exact same tables via each tab's own current-month fallback (see
