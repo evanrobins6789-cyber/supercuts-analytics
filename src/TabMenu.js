@@ -9,7 +9,7 @@ import { loadTabFavorites, saveTabFavorites } from './auth';
 export const TAB_GROUPS = [
   { title: 'Home', tabs: ['Homepage', 'My Numbers', 'News', 'HSA'] },
   { title: 'Performance', tabs: ['Overview', 'DL', 'Team TSTH', 'Employees', 'Weekly', 'Reviews'] },
-  { title: 'Sales', tabs: ['Retail', 'Color Sales', 'Signature Service', 'Gift Cards'] },
+  { title: 'Sales', tabs: ['Retail', 'Color Sales', 'Signature Service', 'Gift Cards', 'Coupons'] },
   { title: 'Coaching', tabs: ['Focus Stores', 'Focus Stylist', 'Shear Check', 'Goals', "Tillie's Nest"] },
   { title: 'Admin', tabs: ['Budgets', 'Leases', 'Loss Prevention', 'Setup'] },
 ];

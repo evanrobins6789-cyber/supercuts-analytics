@@ -186,6 +186,13 @@ export function teamNumbers(token, start, end) {
   return postJson('/api/scoped-data', { action: 'team-numbers', token, start, end });
 }
 
+// Coupons tab (owner only): ad coupon numbers from the landing-page site,
+// fetched by the server (api/_coupon-stats.js). No names in it, so presenter
+// mode shows it as is.
+export function couponStats(token, start, end) {
+  return postJson('/api/scoped-data', { action: 'coupon-stats', token, start, end });
+}
+
 // Starred tabs, saved to the logged-in person's account (api/_tab-favorites.js).
 // Saving isn't a presenter-mode write: it's a personal menu preference, not
 // company data, so it uses postJson.

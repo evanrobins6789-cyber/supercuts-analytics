@@ -16,6 +16,7 @@ import { handleMyNumbers } from './_my-numbers.js';
 import { handleTeamNumbers } from './_team-numbers.js';
 import { handlePayRates } from './_pay-rates.js';
 import { handleTabFavorites } from './_tab-favorites.js';
+import { handleCouponStats } from './_coupon-stats.js';
 
 const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases', 'focus_stylists', 'salon_checks', 'salon_check_questions', 'employee_name_aliases', 'focus_stores']);
 const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_', 'gift_card_history_', 'tips_history_'];
@@ -63,6 +64,11 @@ export default async function handler(req, res) {
   // "Team TSTH": tips + pay rates for a DL's/manager's own stores (api/_team-numbers.js).
   if (req.body?.action === 'team-numbers') {
     await handleTeamNumbers(req, res);
+    return;
+  }
+  // Coupons tab (owner only): ad coupon numbers from the landing-page site (api/_coupon-stats.js).
+  if (req.body?.action === 'coupon-stats') {
+    await handleCouponStats(req, res);
     return;
   }
   // Starred tabs: the caller's own, any role (api/_tab-favorites.js).
