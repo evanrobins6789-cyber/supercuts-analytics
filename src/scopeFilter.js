@@ -124,6 +124,8 @@ export function filterPayload(key, payload, employee) {
   // legitimate reason to see even their own store's entry, so this isn't a
   // per-store scope-down, it's a blanket deny for anyone but the owner.
   if (key === 'store_leases') return {};
+  // Focus Stores (leadership's 90-day plan, src/focusStores.js): owner only.
+  if (key === 'focus_stores') return {};
   if (key === 'daily_history' || key.startsWith('daily_history_')) return filterDailyHistory(payload, allowed);
   if (key === 'weekly_history' || key.startsWith('weekly_history_')) return filterWeeklyHistory(payload, allowed);
   return payload;

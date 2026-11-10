@@ -17,7 +17,7 @@ import { handleTeamNumbers } from './_team-numbers.js';
 import { handlePayRates } from './_pay-rates.js';
 import { handleTabFavorites } from './_tab-favorites.js';
 
-const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases', 'focus_stylists', 'salon_checks', 'salon_check_questions', 'employee_name_aliases']);
+const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases', 'focus_stylists', 'salon_checks', 'salon_check_questions', 'employee_name_aliases', 'focus_stores']);
 const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_', 'gift_card_history_', 'tips_history_'];
 
 // Goal fields any role may read but only the owner may write.
@@ -27,7 +27,7 @@ const OWNER_ONLY_GOAL_WRITE_PREFIXES = ['salesGoal:'];
 // object and support scoped PATCH writes below — a merge-in for just the
 // codes in the patch, never a full-object overwrite. store_goals/
 // store_managers/milestone_goals/store_leases all share this shape.
-const PATCHABLE_KEYS = new Set(['store_goals', 'store_managers', 'milestone_goals', 'store_leases', 'focus_stylists', 'salon_checks', 'employee_name_aliases']);
+const PATCHABLE_KEYS = new Set(['store_goals', 'store_managers', 'milestone_goals', 'store_leases', 'focus_stylists', 'salon_checks', 'employee_name_aliases', 'focus_stores']);
 
 function isAllowedKey(key) {
   return SENSITIVE_KEYS.has(key) || SENSITIVE_PREFIXES.some(p => key.startsWith(p));
@@ -150,6 +150,10 @@ export default async function handler(req, res) {
           res.status(403).json({ error: 'Only the owner can modify lease data.' });
           return;
         }
+        if (key === 'focus_stores') {
+          res.status(403).json({ error: 'Only leadership can change focus stores.' });
+          return;
+        }
         if (key === 'store_goals' && Object.values(patch).some(v => v && typeof v === 'object' && Object.keys(v).some(isOwnerOnlyGoalField))) {
           res.status(403).json({ error: 'Only the owner can set gift card goals.' });
           return;
@@ -184,7 +188,7 @@ export default async function handler(req, res) {
         }
         // A focus stylist is removed by patching their entry to null —
         // drop it (and the store, once empty) rather than storing nulls.
-        if ((key === 'focus_stylists' || key === 'salon_checks') && merged[code]) {
+        if ((key === 'focus_stylists' || key === 'salon_checks' || key === 'focus_stores') && merged[code]) {
           Object.keys(merged[code]).forEach(k => { if (merged[code][k] == null) delete merged[code][k]; });
           if (!Object.keys(merged[code]).length) delete merged[code];
         }

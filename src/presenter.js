@@ -547,6 +547,10 @@ export function presenterView(real, realEmployeesByStore) {
     lpData: fakeLpData(real.lpData),
     focusStylists: fakeFocusStylists(real.focusStylists),
     salonChecks: fakeSalonChecks(real.salonChecks),
+    // Focus Stores holds only store codes, months and checkmarks; its sales
+    // and goals come from the faked history/goals above, and the tab runs
+    // names (who checked a box, DLs) through fakePersonName.
+    focusStores: real.focusStores || {},
   };
 }
 

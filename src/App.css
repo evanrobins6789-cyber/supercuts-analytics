@@ -1661,3 +1661,77 @@
 .snap-chip--under { background: #fbe4e4; color: var(--red); }
 .snap .bonus-heat--big { margin: 0 0 12px; }
 @media (max-width: 520px) { .snap { padding: 12px 8px 4px; } .snap-card { padding: 12px 12px; } .snap-card-head { flex-direction: column; } .snap-card-title { font-size: 16px; } }
+
+/* ─── Focus Stores (src/focusStores.js) ─────────────────────────────────── */
+.fs-tab .fs-up { color: var(--green); }
+.fs-tab .fs-down { color: var(--red); }
+.fs-cap { font-size: 12px; color: var(--ink-soft); }
+.fs-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 4px 0 16px; }
+.fs-summary > div { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; box-shadow: var(--shadow); }
+.fs-big { font-size: 24px; font-weight: 700; color: var(--navy); }
+.fs-big.fs-up { color: var(--green); }
+.fs-big.fs-down { color: var(--red); }
+@media (max-width: 760px) { .fs-summary { grid-template-columns: 1fr 1fr; } }
+.fs-add { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; }
+.fs-add-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.fs-add-row select { padding: 7px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 14px; max-width: 100%; }
+.fs-btn { background: var(--navy); color: #fff; border: 0; border-radius: 6px; padding: 7px 14px; font-weight: 600; cursor: pointer; }
+.fs-btn:disabled { opacity: .45; cursor: default; }
+.fs-link { background: none; border: 0; color: var(--navy-2); text-decoration: underline; cursor: pointer; padding: 2px 0; font-size: 13px; }
+.fs-suggest { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+.fs-suggest-chip { border: 1px solid var(--line); background: var(--paper); border-radius: 999px; padding: 4px 10px; font-size: 12.5px; cursor: pointer; }
+.fs-suggest-chip:hover { border-color: var(--navy-2); }
+.fs-card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 12px; box-shadow: var(--shadow); overflow: hidden; }
+.fs-card--grad { border-color: var(--green); }
+.fs-card-head { width: 100%; display: grid; grid-template-columns: minmax(0, 1.4fr) auto minmax(0, 1fr) 20px; gap: 12px; align-items: center; background: none; border: 0; padding: 12px 14px; text-align: left; cursor: pointer; font: inherit; color: inherit; }
+.fs-card-title { display: flex; flex-direction: column; min-width: 0; }
+.fs-store { font-size: 17px; font-weight: 700; color: var(--navy); }
+.fs-meta { font-size: 12px; color: var(--ink-soft); }
+.fs-months { display: flex; gap: 4px; }
+.fs-dot { font-size: 11px; font-weight: 700; padding: 3px 7px; border-radius: 6px; background: var(--paper); color: var(--ink-soft); border: 1px solid var(--line); }
+.fs-dot--hit { background: var(--green); color: #fff; border-color: var(--green); }
+.fs-dot--miss { background: var(--red); color: #fff; border-color: var(--red); }
+.fs-dot--live { background: #fff; color: var(--green); border-color: var(--green); }
+.fs-dot--behind { background: #fff; color: var(--red); border-color: var(--red); }
+.fs-card-stats { display: flex; flex-direction: column; align-items: flex-end; font-size: 13.5px; text-align: right; }
+.fs-caret { color: var(--ink-soft); }
+@media (max-width: 640px) {
+  .fs-card-head { grid-template-columns: minmax(0, 1fr) 20px; }
+  .fs-months { grid-column: 1; }
+  .fs-card-stats { grid-column: 1; align-items: flex-start; text-align: left; }
+  .fs-caret { grid-row: 1; grid-column: 2; }
+}
+.fs-card-body { padding: 0 14px 14px; }
+.fs-progress { height: 6px; background: var(--paper); border-radius: 3px; overflow: hidden; margin-bottom: 12px; }
+.fs-progress > div { height: 100%; background: var(--green); }
+.fs-table-wrap { overflow-x: auto; }
+.fs-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.fs-table th { background: var(--paper); text-align: right; padding: 7px 8px; font-size: 12px; white-space: nowrap; }
+.fs-table td { text-align: right; padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: top; }
+.fs-table th:first-child, .fs-table td:first-child { text-align: left; }
+.fs-row-current td { background: #FAFBF4; }
+.fs-planned { margin-left: 5px; font-size: 10.5px; color: var(--ink-soft); border: 1px dashed var(--silver); border-radius: 4px; padding: 0 4px; }
+.fs-chip { display: inline-block; font-size: 11.5px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--paper); color: var(--ink-soft); }
+.fs-chip--hit { background: #E3F2E8; color: var(--green); }
+.fs-chip--miss { background: #F8E3E3; color: var(--red); }
+.fs-need { font-size: 11.5px; color: var(--ink-soft); margin-top: 2px; }
+.fs-worth { font-size: 13.5px; margin: 10px 0; }
+.fs-missed { font-size: 13.5px; color: var(--red); margin: 0 0 10px; }
+.fs-people { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 6px; }
+@media (max-width: 860px) { .fs-people { grid-template-columns: 1fr; } }
+.fs-person { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.fs-person-head { display: flex; justify-content: space-between; align-items: baseline; }
+.fs-person-head strong { font-size: 15px; color: var(--navy); }
+.fs-person-count { font-size: 12px; font-weight: 700; color: var(--ink-soft); }
+.fs-person-role { font-size: 12px; font-weight: 700; color: var(--red); margin-bottom: 6px; }
+.fs-tasks { list-style: none; margin: 0 0 6px; padding: 0; }
+.fs-tasks li { padding: 5px 0; border-bottom: 1px solid var(--paper); font-size: 13.5px; }
+.fs-tasks label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+.fs-tasks input { margin-top: 3px; width: 16px; height: 16px; flex: none; }
+.fs-task-done span { color: var(--ink-soft); text-decoration: line-through; }
+.fs-task-by { font-size: 11.5px; color: var(--green); margin-left: 24px; }
+.fs-task-remove { margin-left: 24px; font-size: 11.5px; }
+.fs-add-task { display: flex; gap: 6px; flex-wrap: wrap; }
+.fs-add-task input { flex: 1; min-width: 140px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
+.fs-card-foot { margin-top: 10px; text-align: right; }
+.fs-remove { color: var(--red); }.fs-tab > * { min-width: 0; }
