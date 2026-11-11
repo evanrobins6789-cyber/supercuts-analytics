@@ -1874,12 +1874,12 @@ function PayExplainer({ pay, coaching, leaderName = null, stores = [], peers = n
               ? <>({money2(pay.tsth)} − ${pay.goal}) × {Math.round(pay.bonusRate * 100)}% = <b>{money2(pay.bonusPerHour)}/hr</b> × {pay.hours.toFixed(1)} hrs = <b>{fmt$(pay.bonus)}</b>.</>
               : <>{you} TSTH is under the goal, so no bonus yet.</>}
           </li>
-          <li><b>Guaranteed pay</b> = base pay + tips. <b>Possible pay</b> = guaranteed + bonus.</li>
+          <li><b>Guaranteed pay</b> = base pay + tips. <b>Potential pay</b> = guaranteed + bonus.</li>
         </ol>
         <TsthBar tsth={pay.tsth} goal={pay.goal} dark={false} />
         <div className="ledger-scroll">
           <table className="ledger-table pay-explainer-table">
-            <thead><tr><th className="ledger-name-col">Per hour</th>{perHour.map(p => <th key={p.label}>{p.label}</th>)}<th>Guaranteed / hr</th><th>Possible / hr</th></tr></thead>
+            <thead><tr><th className="ledger-name-col">Per hour</th>{perHour.map(p => <th key={p.label}>{p.label}</th>)}<th>Guaranteed / hr</th><th>Potential / hr</th></tr></thead>
             <tbody>
               <tr>
                 <td className="ledger-name-col">$ per hour</td>
@@ -2323,7 +2323,7 @@ function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHi
         <div className="ledger-scroll">
           <BonusHeatBar big split={openStore.split} title={`${openStore.name}: who's bonusing`} />
           <table className="ledger-table team-tsth-table">
-            <thead><tr><th className="ledger-name-col">Employee</th><th>Hours here</th><th>Sales here</th><th>TSTH here</th><th>Bonus / hr</th><th>Tips</th><th>Possible pay</th></tr></thead>
+            <thead><tr><th className="ledger-name-col">Employee</th><th>Hours here</th><th>Sales here</th><th>TSTH here</th><th>Bonus / hr</th><th>Tips</th><th>Potential pay</th></tr></thead>
             <tbody>
               {openStore.people.map(p => (
                 <tr key={p.name} ref={p.name === lastPerson ? lastRowRef : undefined} className={`team-tsth-row ${p.name === lastPerson ? 'team-tsth-row--last' : ''}`} tabIndex={0} role="button" onClick={() => openPerson(p.name)} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPerson(p.name); } }}>
@@ -2339,7 +2339,7 @@ function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHi
             </tbody>
             <tfoot><tr className="ledger-avg-row"><td className="ledger-name-col">Store</td><td>{fmtNum(openStore.hours, 1)}</td><td>{fmt$(openStore.sales)}</td><td><b className={tsthClass(openStore.tsth, openStore.goal)}>{money2(openStore.tsth)}</b></td><td colSpan={3}>Goal ${openStore.goal}</td></tr></tfoot>
           </table>
-          <p className="section-hint">"Here" is this store only. Bonus, tips and possible pay count every store they worked{isOwner ? '' : ' that you can see'}, the way pay is figured. Possible pay is base + tips + bonus so far; it's blank when no pay rate is on file for that name. Tap a name for the full breakdown.</p>
+          <p className="section-hint">"Here" is this store only. Bonus, tips and potential pay count every store they worked{isOwner ? '' : ' that you can see'}, the way pay is figured. Potential pay is base + tips + bonus so far; it's blank when no pay rate is on file for that name. Tap a name for the full breakdown.</p>
         </div>
       ) : stores.length ? (
         <>
@@ -2484,7 +2484,7 @@ function PayTrackerCard({ data, onPick = null, pickedName = null }) {
         <div><span>Tips</span><strong>{fmt$(top.tips)}</strong><em>${(top.hours > 0 ? top.tips / top.hours : 0).toFixed(2)}/hr</em></div>
       </div>
       <div className="pay-tracker-pay">
-        {/* Guaranteed = hourly base + tips, theirs no matter what. Possible =
+        {/* Guaranteed = hourly base + tips, theirs no matter what. Potential =
             guaranteed + the bonus earned so far, paid if they make it to the
             end of the pay period. */}
         {top.hourly != null ? (
@@ -2495,7 +2495,7 @@ function PayTrackerCard({ data, onPick = null, pickedName = null }) {
               <em>${((top.basePay + top.tips) / top.hours).toFixed(2)}/hr · ${top.hourly.toFixed(2)} base + ${(top.tips / top.hours).toFixed(2)} tips</em>
             </div>
             <div className="pay-tracker-total">
-              <span>Possible pay</span>
+              <span>Potential pay</span>
               <strong>{fmt$(top.madeSoFar)}</strong>
               <em>${(top.madeSoFar / top.hours).toFixed(2)}/hr · adds the {fmt$(top.bonus)} bonus if they finish the pay period</em>
             </div>
@@ -9466,7 +9466,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     const { period, through, rows } = payTracker;
     lines.push('');
     lines.push(`PAY TRACKER${payTracker.team ? ' (the Team TSTH tab: only the people at this person’s own stores; they are allowed to see these people’s pay, tips and TSTH)' : ''}, pay period ${period.start} to ${period.end} (data through ${through || 'n/a'}). Rules: TSTH = (net service + retail incl. color) ÷ hours; TSTH goal = 2 × haircut price (PA $28, NJ/DE $30); bonus/hr = (TSTH − goal) × 25% stylists / 30% managers when above goal, paid on every hour; no other commission; made so far = base (hourly rate × hours, from the Employee Pay Rate Report) + bonus + tips${payTracker.ratesLoaded ? '' : '; pay rates are NOT uploaded yet, so base is unknown'}. Top 25 by TSTH (min ${MIN_HOURS_FOR_TOP} hours):`);
-    rows.filter(r => r.hours >= MIN_HOURS_FOR_TOP).sort((x, y) => y.tsth - x.tsth).slice(0, 25).forEach(r => lines.push(`  ${r.name} @ ${r.store} (${r.state}${r.manager ? ', manager' : ''}): ${r.hours.toFixed(1)} hrs, TSTH $${r.tsth.toFixed(2)} vs goal $${r.goal}, bonus/hr $${r.bonusPerHour.toFixed(2)}, bonus $${Math.round(r.bonus)}, tips $${Math.round(r.tips)}, ${r.basePay != null ? `base $${Math.round(r.basePay)} ($${r.hourly.toFixed(2)}/hr), made so far $${Math.round(r.madeSoFar)}, guaranteed pay (base + tips) $${Math.round(r.basePay + r.tips)} = $${((r.basePay + r.tips) / r.hours).toFixed(2)}/hr, possible pay (adds the bonus, paid only if they finish the pay period) $${Math.round(r.madeSoFar)} = $${(r.madeSoFar / r.hours).toFixed(2)}/hr` : `no pay rate matched, made so far excl. base $${Math.round(r.madeSoFar)}`}`));
+    rows.filter(r => r.hours >= MIN_HOURS_FOR_TOP).sort((x, y) => y.tsth - x.tsth).slice(0, 25).forEach(r => lines.push(`  ${r.name} @ ${r.store} (${r.state}${r.manager ? ', manager' : ''}): ${r.hours.toFixed(1)} hrs, TSTH $${r.tsth.toFixed(2)} vs goal $${r.goal}, bonus/hr $${r.bonusPerHour.toFixed(2)}, bonus $${Math.round(r.bonus)}, tips $${Math.round(r.tips)}, ${r.basePay != null ? `base $${Math.round(r.basePay)} ($${r.hourly.toFixed(2)}/hr), made so far $${Math.round(r.madeSoFar)}, guaranteed pay (base + tips) $${Math.round(r.basePay + r.tips)} = $${((r.basePay + r.tips) / r.hours).toFixed(2)}/hr, potential pay (adds the bonus, paid only if they finish the pay period) $${Math.round(r.madeSoFar)} = $${(r.madeSoFar / r.hours).toFixed(2)}/hr` : `no pay rate matched, made so far excl. base $${Math.round(r.madeSoFar)}`}`));
     if (payTracker.noRate?.length) lines.push(`  ${payTracker.noRate.length} people with hours this pay period have no pay rate matched (name differs from the pay rate report; leadership can link it in Setup › Employee Access "Also in sales as"): ${payTracker.noRate.slice(0, 40).join(', ')}`);
   }
 

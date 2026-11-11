@@ -4,7 +4,7 @@
 // (service + color + retail) ÷ hours; goal = 2 × haircut price (PA $28, NJ/DE
 // $30) at the store where they worked the most hours; bonus/hr = (TSTH − goal)
 // × 25% (30% management), only above goal, on every hour; no other commission.
-// Guaranteed = base (rate × hours) + tips. Possible = guaranteed + bonus (the
+// Guaranteed = base (rate × hours) + tips. Potential = guaranteed + bonus (the
 // bonus is paid if they finish the pay period).
 //
 // Coaching compares a person with everyone ELSE at the same store over the
