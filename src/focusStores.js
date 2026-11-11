@@ -11,7 +11,11 @@ import { shiftMonthKey, openDaysInRange } from './metrics';
 //   { [storeCode]: {
 //       startMonth: '2026-11', addedBy, addedAt,
 //       'task:<taskId>': { by, at },              // a checked box (unchecked = key removed)
-//       'custom:<id>': { owner, label, by, at },  // a task added for this store only
+//       'custom:<id>': { owner, label, by, at },  // legacy: a task added for one store only
+//   },
+//   _tasks: {                                     // the shared task list, applies to every focus store
+//       'add:<id>': { owner, label, by, at },     // a task added for all stores, now and future
+//       'del:<id>': { by, at },                   // a task (built-in or added) removed from all stores
 //   } }
 // Flat keys because the server's patch merge is one level deep per store.
 
@@ -74,18 +78,25 @@ export function focusStoreList(focusStores) {
 }
 
 // Each person's tasks for one store, with what's been checked.
-export function focusTasksFor(rec) {
-  const custom = Object.entries(rec || {}).filter(([k, v]) => k.startsWith('custom:') && v && v.label)
-    .map(([k, v]) => ({ id: k.slice(7), label: v.label, owner: v.owner, custom: true, at: v.at }))
+//   shared = focusStores._tasks: tasks added or removed for every focus store.
+//   Built-in FOCUS_TEAM tasks minus removed, plus shared adds, plus any legacy
+//   store-only `custom:` task on this store.
+export function focusTasksFor(rec, shared) {
+  const sh = shared || {};
+  const removed = new Set(Object.keys(sh).filter(k => k.startsWith('del:') && sh[k]).map(k => k.slice(4)));
+  const pick = (obj, prefix, extra) => Object.entries(obj || {}).filter(([k, v]) => k.startsWith(prefix) && v && v.label)
+    .map(([k, v]) => ({ id: k.slice(prefix.length), label: v.label, owner: v.owner, at: v.at, ...extra }));
+  const added = [...pick(sh, 'add:', { added: true }), ...pick(rec, 'custom:', { storeOnly: true })]
     .sort((a, b) => String(a.at).localeCompare(String(b.at)));
   return FOCUS_TEAM.map(p => {
-    const tasks = [...p.tasks, ...custom.filter(c => c.owner === p.id)]
+    const tasks = [...p.tasks, ...added.filter(c => c.owner === p.id)]
+      .filter(t => !removed.has(t.id))
       .map(t => ({ ...t, done: rec?.[`task:${t.id}`] || null }));
     return { ...p, tasks, doneCount: tasks.filter(t => t.done).length };
   });
 }
-export function focusTaskCounts(rec) {
-  const people = focusTasksFor(rec);
+export function focusTaskCounts(rec, shared) {
+  const people = focusTasksFor(rec, shared);
   const total = people.reduce((s, p) => s + p.tasks.length, 0);
   const done = people.reduce((s, p) => s + p.doneCount, 0);
   return { total, done };
@@ -168,8 +179,8 @@ export function focusStoresContext(focusStores, goals, salesForStore, throughISO
   list.forEach(rec => {
     const t = focusTracker(rec, rec.code, goals, mk => salesForStore(rec.code, mk), throughISO);
     const months = t.months.map(m => `${fmtMonthShort(m.mk)} goal ${fmtMoney(m.goal)}${m.planned ? ' (planned, not set on Goals tab)' : ''}, sales ${fmtMoney(m.sales)}${m.current ? `, projected ${fmtMoney(m.projected)}` : ''}, ${m.status}`).join('; ');
-    const counts = focusTaskCounts(rec);
-    const open = focusTasksFor(rec).map(p => `${p.name}: ${p.tasks.filter(x => !x.done).map(x => x.label).join(' / ') || 'all done'}`).join(' | ');
+    const counts = focusTaskCounts(rec, focusStores._tasks);
+    const open = focusTasksFor(rec, focusStores._tasks).map(p => `${p.name}: ${p.tasks.filter(x => !x.done).map(x => x.label).join(' / ') || 'all done'}`).join(' | ');
     lines.push(`${storeName(rec.code)} (started ${fmtMonthShort(rec.startMonth)}, day ${t.day} of 90, ${t.hit} of 3 months hit${t.graduated ? ', GRADUATED' : ''}): ${months}. Pre-plan pace for the 3 months ${fmtMoney(t.baselineTotal)}, at goal ${fmtMoney(t.goalTotal)} (${fmtSigned(t.extraAtGoal)}). Tasks ${counts.done} of ${counts.total} done; still open — ${open}`);
   });
   return lines.join('\n');
@@ -212,7 +223,7 @@ function StoreTracker({ t }) {
   );
 }
 
-function TaskList({ rec, readOnly, onToggle, onAddTask, onRemoveTask, showName }) {
+function TaskList({ rec, shared, readOnly, onToggle, onAddTask, onRemoveTask, showName }) {
   const [adding, setAdding] = useState(null); // person id
   const [draft, setDraft] = useState('');
   const submit = owner => {
@@ -222,7 +233,7 @@ function TaskList({ rec, readOnly, onToggle, onAddTask, onRemoveTask, showName }
   };
   return (
     <div className="fs-people">
-      {focusTasksFor(rec).map(p => (
+      {focusTasksFor(rec, shared).map(p => (
         <div key={p.id} className="fs-person">
           <div className="fs-person-head">
             <strong>{showName(p.name)}</strong>
@@ -237,13 +248,13 @@ function TaskList({ rec, readOnly, onToggle, onAddTask, onRemoveTask, showName }
                   <span>{task.label}</span>
                 </label>
                 {task.done && <div className="fs-task-by">✓ {showName(task.done.by || '')}{task.done.at ? ` · ${fmtDay(task.done.at)}` : ''}</div>}
-                {task.custom && !readOnly && <button type="button" className="fs-link fs-task-remove" onClick={() => onRemoveTask(task.id)} title="Remove this task">Remove</button>}
+                {!readOnly && <button type="button" className="fs-link fs-task-remove" onClick={() => onRemoveTask(task)} title={task.storeOnly ? 'Remove this task from this store' : 'Remove this task from every focus store'}>Remove</button>}
               </li>
             ))}
           </ul>
           {!readOnly && (adding === p.id ? (
             <div className="fs-add-task">
-              <input autoFocus value={draft} maxLength={200} placeholder="New task for this store" onChange={e => setDraft(e.target.value)}
+              <input autoFocus value={draft} maxLength={200} placeholder="New task for every focus store" onChange={e => setDraft(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') submit(p.id); if (e.key === 'Escape') { setAdding(null); setDraft(''); } }} />
               <button type="button" className="fs-btn" onClick={() => submit(p.id)}>Add</button>
               <button type="button" className="fs-link" onClick={() => { setAdding(null); setDraft(''); }}>Cancel</button>
@@ -274,8 +285,9 @@ export function FocusStoresTab({ focusStores, goals, monthSales, throughISO, sto
     };
   }, [monthSales]);
 
+  const shared = focusStores?._tasks || {};
   const list = focusStoreList(focusStores)
-    .map(rec => ({ ...rec, name: storeNames[rec.code] || `Store ${rec.code}`, t: focusTracker(rec, rec.code, goals, mk => salesFor(rec.code, mk), throughISO), counts: focusTaskCounts(rec) }))
+    .map(rec => ({ ...rec, name: storeNames[rec.code] || `Store ${rec.code}`, t: focusTracker(rec, rec.code, goals, mk => salesFor(rec.code, mk), throughISO), counts: focusTaskCounts(rec, shared) }))
     .sort((a, b) => a.startMonth.localeCompare(b.startMonth) || a.name.localeCompare(b.name));
   const focusCodes = new Set(list.map(r => r.code));
 
@@ -307,8 +319,21 @@ export function FocusStoresTab({ focusStores, goals, monthSales, throughISO, sto
     onPatch({ [rec.code]: { startMonth: currentMk } });
   };
   const toggleTask = (code, taskId, done) => onPatch({ [code]: { [`task:${taskId}`]: done ? { by: userName, at: new Date().toISOString() } : null } });
-  const addTask = (code, owner, label) => onPatch({ [code]: { [`custom:${Date.now().toString(36)}`]: { owner, label, by: userName, at: new Date().toISOString() } } });
-  const removeTask = (code, id) => onPatch({ [code]: { [`custom:${id}`]: null, [`task:${id}`]: null } });
+  // Tasks are one shared list: adding or removing one changes it for every
+  // focus store, now and later. Checkmarks stay per store.
+  const addTask = (owner, label) => onPatch({ _tasks: { [`add:${Date.now().toString(36)}`]: { owner, label, by: userName, at: new Date().toISOString() } } });
+  const removeTask = (code, task) => {
+    if (task.storeOnly) {
+      if (!window.confirm(`Remove "${task.label}" from this store?`)) return;
+      onPatch({ [code]: { [`custom:${task.id}`]: null, [`task:${task.id}`]: null } });
+      return;
+    }
+    if (!window.confirm(`Remove "${task.label}" from every focus store, now and in the future?`)) return;
+    // Clear its checkmarks everywhere too, so nothing stale is left behind.
+    const patch = { _tasks: task.added ? { [`add:${task.id}`]: null } : { [`del:${task.id}`]: { by: userName, at: new Date().toISOString() } } };
+    list.forEach(r => { if (r[`task:${task.id}`]) patch[r.code] = { [`task:${task.id}`]: null }; });
+    onPatch(patch);
+  };
 
   // Company roll-up across the focus stores.
   const roll = list.reduce((acc, r) => {
@@ -409,8 +434,8 @@ export function FocusStoresTab({ focusStores, goals, monthSales, throughISO, sto
                 )}
                 <TaskList rec={rec} readOnly={readOnly} showName={showName}
                   onToggle={(id, done) => toggleTask(rec.code, id, done)}
-                  onAddTask={(owner, label) => addTask(rec.code, owner, label)}
-                  onRemoveTask={id => removeTask(rec.code, id)} />
+                  onAddTask={addTask}
+                  onRemoveTask={task => removeTask(rec.code, task)} />
                 {!readOnly && <div className="fs-card-foot"><button type="button" className="fs-link fs-remove" onClick={() => removeStore(rec)}>{t.graduated ? 'Graduate and take off the list' : 'Take off the focus list'}</button></div>}
               </div>
             )}
