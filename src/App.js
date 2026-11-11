@@ -17,7 +17,7 @@ import {
 import { SALON_CHECK_MAX_PHOTOS, activeChecklist, checklistItems, visitChecklist, scoreSalonCheck, salonCheckList, salonCheckPhotoPaths } from './salonCheck';
 import { LP_RULES, parseLpSalesFile, parseLpAttendanceFile, parseLpRegisterFile, mergeLpDays, lpMonthPayload, analyzeLp, lpDefaultRange } from './lossPrevention';
 import { LEADER_ROSTER_SECTIONS as REAL_LEADER_ROSTER_SECTIONS, getLeaderForStoreCode as realGetLeaderForStoreCode } from './leaderRoster';
-import { isPresenting, initPresenterMode, setPresenterMode, presenterView, fakeLeaderSections, fakePersonName, initViewAsDl, setViewAsDl } from './presenter';
+import { isPresenting, initPresenterMode, setPresenterMode, presenterView, fakeLeaderSections, fakePersonName, initViewAsDl, setViewAsDl, isWriteBlocked, PRESENTER_BLOCKED_ERROR } from './presenter';
 import { filterPayload, filterDailyHistory } from './scopeFilter';
 import { getCodeForStoreName, STORE_CODE_TO_NAME } from './storeDirectory';
 import { LEASE_STORE_CODE_TO_NAME, LEASE_INACTIVE_CODES, leaseStoreName, matchStoreCodeFromPath, extractTermDatesFromFilename } from './leaseStoreDirectory';
@@ -34,6 +34,7 @@ import { buildMyNumbers, pickOwnRecords, normalizePersonName, buildPeerStats } f
 import { buildPayBreakdown, buildCoaching } from './payCoach';
 import { TabMenu } from './TabMenu';
 import { FocusStoresTab, focusStoresContext } from './focusStores';
+import { SchedulingTab, parseShiftFile, mergeShiftMonth, analyzeSchedules, schedulingContext } from './scheduling';
 import { CouponsTab, couponsContext, couponPresets } from './coupons';
 import { CollectiveGoalBars } from './CollectiveGoalBars';
 import { collectiveGoal, goalPace, goalHeat, GIFT_CARD_GOAL_PERIODS, giftCardPeriodFor, giftCardPeriodGoal, periodThrough, periodPace } from './goalProgress';
@@ -1549,6 +1550,7 @@ const SITE_TIPS = [
   { icon: '✂️', title: 'Change the Shear Check', body: 'Use Add question or Delete question in any Shear Check section to change the checklist for every future visit. Saved reports keep the questions and score they were filled out with.', roles: ['owner'] },
   { icon: '⭐', title: 'Focus Stylist', body: 'Tap FOCUS next to a stylist on the Overview tab to pick them for the month, then track their TSTH and cuts-per-hour goals on the Focus Stylist tab. They get a FOCUS STYLIST tag next to their name.', roles: ['owner', 'district_leader'] },
   { icon: '🎁', title: 'Gift Cards', body: 'The Gift Cards tab shows gift card sales and progress toward the gift card goal for your stores. Tap a store to see who sold them.', roles: ['owner', 'district_leader'] },
+  { icon: '🗓️', title: 'Scheduling', body: 'The Scheduling tab shows how many people were on at every 15 minutes of the day, from Attendance clock-ins. It flags stores with too many people on during slow times, times one person was alone, and times nobody was on, and suggests shift cuts that never leave anyone working alone. Tap a store for its tips and a day-by-day view.' },
   { icon: '👥', title: 'Team TSTH', body: 'The Team TSTH tab shows each of your stores’ TSTH against goal. Tap a store to see everyone there, highest TSTH first, then tap a name to see exactly what their My Numbers tab shows them, including pay and how they can raise their TSTH.', roles: LEADERS },
   { icon: '👀', title: 'Pick who’s on the pay card', body: 'On the Homepage pay card or the My Numbers tab, use the "Showing" menu to look at any employee. It lists everyone by TSTH, highest first: green is bonusing, red is not. It starts on the top-TSTH person.', roles: ['owner'] },
   { icon: '📥', title: 'Keep the numbers fresh', body: 'Setup › Historical Import takes Sales-Accrual, Attendance, Tips and Pay Rates files. Re-uploading the same dates is safe; those days are replaced, not doubled.', roles: ['owner'] },
@@ -10919,7 +10921,7 @@ function RewardsSetupTab({ token, showToast }) {
 }
 
 // ─── App ────────────────────────────────────────────────────────────────────
-const TABS = ['Homepage', 'My Numbers', 'News', 'HSA', 'Overview', 'Focus Stores', 'Focus Stylist', 'Shear Check', 'DL', 'Team TSTH', 'Retail', 'Color Sales', 'Signature Service', 'Gift Cards', 'Coupons', 'Budgets', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Loss Prevention', 'Setup'];
+const TABS = ['Homepage', 'My Numbers', 'News', 'HSA', 'Overview', 'Focus Stores', 'Focus Stylist', 'Shear Check', 'DL', 'Team TSTH', 'Scheduling', 'Retail', 'Color Sales', 'Signature Service', 'Gift Cards', 'Coupons', 'Budgets', 'Reviews', 'Employees', 'Weekly', "Tillie's Nest", 'Goals', 'Leases', 'Loss Prevention', 'Setup'];
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
@@ -10967,6 +10969,32 @@ export default function App() {
   const [giftCardHistory, setGiftCardHistory] = useState({});
   // Tips (Tips report, owner only for now): tips_history_YYYY-MM rows, same
   // { "code|date": record } shape as gift cards. Feeds the Homepage pay tracker.
+  // Shift times for the Scheduling tab (src/scheduling.js): shift_history_YYYY-MM
+  // rows, loaded a month at a time. Login loads this month and last; the tab
+  // asks for more when a longer range is picked.
+  const [shiftHistory, setShiftHistory] = useState({});
+  const [shiftMonths, setShiftMonths] = useState(() => new Set());
+  const [shiftLoading, setShiftLoading] = useState(false);
+  const shiftMonthsRef = useRef(new Set());
+  const loadShiftMonths = useCallback(async (months, token) => {
+    const todo = months.filter(m => !shiftMonthsRef.current.has(m));
+    if (!todo.length || !token) return;
+    todo.forEach(m => shiftMonthsRef.current.add(m));
+    setShiftLoading(true);
+    const results = await Promise.all(todo.map(m => loadScoped(`shift_history_${m}`, token)));
+    setShiftLoading(false);
+    const failed = results.filter(r => r.error);
+    if (failed.length) {
+      todo.forEach((m, i) => { if (results[i].error) shiftMonthsRef.current.delete(m); });
+      showToast(`Couldn't load shift times (${failed[0].error}). Try refreshing the page.`, 'error');
+    }
+    setShiftHistory(prev => {
+      const next = { ...prev };
+      results.forEach(r => { if (r.data) Object.assign(next, r.data); });
+      return next;
+    });
+    setShiftMonths(new Set(shiftMonthsRef.current));
+  }, []);
   const [tipsHistory, setTipsHistory] = useState({});
   const tipsHistoryRef = useRef(tipsHistory);
   useEffect(() => { tipsHistoryRef.current = tipsHistory; }, [tipsHistory]);
@@ -11206,6 +11234,15 @@ export default function App() {
       }
     }).catch(() => setLoading(false));
   }, [currentUser]);
+
+  useEffect(() => {
+    shiftMonthsRef.current = new Set();
+    setShiftMonths(new Set());
+    setShiftHistory({});
+    if (!currentUser || !['owner', 'district_leader', 'manager'].includes(currentUser.role)) return;
+    const today = localTodayISO();
+    loadShiftMonths([shiftMonthKey(today.slice(0, 7), -1), today.slice(0, 7)], currentUser.token);
+  }, [currentUser, loadShiftMonths]);
 
   useEffect(() => {
     if (!currentUser || currentUser.role !== 'owner') { setTipsHistory({}); return; }
@@ -12302,6 +12339,38 @@ export default function App() {
     return queued;
   }, []);
 
+  // Scheduling tab: save each Attendance file's shift times into its
+  // shift_history_YYYY-MM row(s). Reads the stored month fresh first, so
+  // months not loaded on this page are merged, never overwritten.
+  const captureShifts = async (file, lines) => {
+    let parsed;
+    try { parsed = await parseShiftFile(file); } catch (err) { lines.push(`  ✗ shift times: ${err.message}`); return; }
+    if (!parsed || !parsed.shifts) { lines.push('  · no shift times in this file (older layout without Actual Check-Ins)'); return; }
+    const months = [...new Set(Object.keys(parsed.days).map(d => d.slice(0, 7)))];
+    const saved = {};
+    for (const m of months) {
+      const key = `shift_history_${m}`;
+      const current = await loadData(key);
+      if (current.error) { lines.push(`  ✗ shift times for ${m}: couldn't read what's saved (${current.error}), so nothing was changed`); continue; }
+      const merged = mergeShiftMonth(current.data || {}, parsed, m);
+      // Supabase only: ~300KB a month would fill this browser's local
+      // storage (saveData mirrors every row there).
+      if (isWriteBlocked()) { lines.push(`  ✗ shift times: ${PRESENTER_BLOCKED_ERROR}`); return; }
+      if (!supabase) { lines.push('  ✗ shift times: Supabase is not configured, so they were not saved'); return; }
+      const { error } = await supabase.from('weekly_report').upsert({ report_id: key, payload: merged }, { onConflict: 'report_id' });
+      if (!error) saved[m] = merged;
+      else lines.push(`  ✗ shift times for ${m}: couldn't save (${error.message})`);
+    }
+    if (Object.keys(saved).length) {
+      lines.push(`  ✓ shift times: ${parsed.shifts} shifts (${Object.keys(saved).join(', ')})`);
+      setShiftHistory(prev => {
+        const next = { ...prev };
+        Object.values(saved).forEach(v => Object.assign(next, v));
+        return next;
+      });
+    }
+  };
+
   const handleImportAttendanceBatch = useCallback(fileList => {
     const task = async () => {
       let working = historyRef.current;
@@ -12315,6 +12384,7 @@ export default function App() {
           parsed.records.forEach(r => touchedMonths.add(r.date.slice(0, 7)));
           lines.push(`✓ ${file.name} — ${parsed.records.length} store-days`);
           await captureLpFile('att', parseLpAttendanceFile, file, lpMonths, lines);
+          await captureShifts(file, lines);
         } catch (err) {
           lines.push(`✗ ${file.name} — ${err.message}`);
         }
@@ -12517,8 +12587,8 @@ export default function App() {
   const [nameAliases, setNameAliases] = useState({});
   const [payRatesError, setPayRatesError] = useState(null);
   const presenterData = useMemo(() => (presenting ? presenterView({
-    news, tipsHistory, payRates, nameAliases, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, focusStylists, salonChecks, focusStores,
-  }, fallbackEmployeesByStore) : null), [presenting, news, tipsHistory, payRates, nameAliases, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, focusStylists, salonChecks, focusStores, fallbackEmployeesByStore]);
+    news, tipsHistory, payRates, nameAliases, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, focusStylists, salonChecks, focusStores, shiftHistory,
+  }, fallbackEmployeesByStore) : null), [presenting, shiftHistory, news, tipsHistory, payRates, nameAliases, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, lpData, focusStylists, salonChecks, focusStores, fallbackEmployeesByStore]);
   // Focus Stores: each store's Sales for one month (through the last data
   // day). The tab is owner-only and hidden in DL view, so this reads the
   // owner's data (faked in presenter mode).
@@ -12620,7 +12690,7 @@ export default function App() {
   // login would get. Works on top of presenter mode's fakes when both are on.
   const viewScope = useMemo(() => {
     if (!viewAs || currentUser?.role !== 'owner') return null;
-    const src = presenterData || { report, history, weeklyHistory, giftCardHistory, tipsHistory, payRates, nameAliases, goals, milestoneGoals, managers, reviews, focusStylists, salonChecks };
+    const src = presenterData || { report, history, weeklyHistory, giftCardHistory, tipsHistory, payRates, nameAliases, goals, milestoneGoals, managers, reviews, focusStylists, salonChecks, shiftHistory };
     const emp = { role: 'district_leader', store_codes: viewAs.storeCodes };
     const f = (key, v) => filterPayload(key, v, emp);
     const hist = f('daily_history', src.history || {});
@@ -12631,13 +12701,14 @@ export default function App() {
       tipsHistory: {}, payRates: [], nameAliases: {}, leases: {}, lpData: null,
       goals: f('store_goals', src.goals), milestoneGoals: f('milestone_goals', src.milestoneGoals), managers: f('store_managers', src.managers),
       reviews: f('reviews', src.reviews), focusStylists: f('focus_stylists', src.focusStylists), salonChecks: f('salon_checks', src.salonChecks),
+      shiftHistory: f('shift_history_', src.shiftHistory || {}),
       fallbackEmployeesByStore: getEmployeesByStoreFromHistory(hist, weekly),
       // What a real DL gets from api/_team-numbers.js: tips for their stores
       // and pay rates (only their people are ever looked up).
       teamTips: filterDailyHistory(src.tipsHistory || {}, new Set(viewAs.storeCodes)),
       full: src,
     };
-  }, [viewAs, currentUser, presenterData, report, history, weeklyHistory, giftCardHistory, tipsHistory, payRates, nameAliases, goals, milestoneGoals, managers, reviews, focusStylists, salonChecks]);
+  }, [viewAs, currentUser, presenterData, report, history, weeklyHistory, giftCardHistory, tipsHistory, payRates, nameAliases, goals, milestoneGoals, managers, reviews, focusStylists, salonChecks, shiftHistory]);
   // My Numbers in DL view: the DL's own lines, from every store (as the server does).
   const viewSelf = useMemo(() => {
     if (!viewScope) return null;
@@ -12705,19 +12776,35 @@ export default function App() {
   const canSalonCheck = canFocus;
   // The DL tab (every DL group side by side) is owner-only (user, 2026-11-10).
   // Focus Stores is leadership-only (owner role), like Leases.
-  const visibleTabs = TABS.filter(t => (t !== 'Focus Stores' || u.role === 'owner') && (t !== 'DL' || u.role === 'owner') && (t !== 'Setup' || u.role === 'owner') && (t !== 'Goals' || u.role !== 'employee') && (t !== 'Budgets' || u.role !== 'employee') && (t !== 'Leases' || u.role === 'owner') && (t !== 'Gift Cards' || u.role === 'owner' || u.role === 'district_leader') && (t !== 'Loss Prevention' || u.role === 'owner') && (t !== 'Coupons' || u.role === 'owner') && (t !== 'Focus Stylist' || canFocus) && (t !== 'Shear Check' || canSalonCheck) && (t !== 'Team TSTH' || u.role === 'owner' || u.role === 'district_leader' || u.role === 'manager'));
+  const visibleTabs = TABS.filter(t => (t !== 'Focus Stores' || u.role === 'owner') && (t !== 'DL' || u.role === 'owner') && (t !== 'Setup' || u.role === 'owner') && (t !== 'Goals' || u.role !== 'employee') && (t !== 'Budgets' || u.role !== 'employee') && (t !== 'Leases' || u.role === 'owner') && (t !== 'Gift Cards' || u.role === 'owner' || u.role === 'district_leader') && (t !== 'Loss Prevention' || u.role === 'owner') && (t !== 'Coupons' || u.role === 'owner') && (t !== 'Focus Stylist' || canFocus) && (t !== 'Shear Check' || canSalonCheck) && (t !== 'Team TSTH' || u.role === 'owner' || u.role === 'district_leader' || u.role === 'manager') && (t !== 'Scheduling' || u.role === 'owner' || u.role === 'district_leader' || u.role === 'manager'));
   // A live weekly Stylist Report upload is no longer the only way to power
   // these tabs — Sales-Accrual + Attendance historical imports feed the
   // exact same tables via each tab's own current-month fallback (see
   // getCurrentMonthRange). Only actually block on "nothing at all yet".
   const hasHistoricalData = Object.keys(history || {}).length > 0 || Object.keys(weeklyHistory || {}).length > 0;
-  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'My Numbers' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases' && tab !== 'Gift Cards' && tab !== 'Loss Prevention' && tab !== 'Coupons' && tab !== 'Focus Stylist' && tab !== 'Shear Check' && tab !== 'Focus Stores';
+  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'My Numbers' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases' && tab !== 'Gift Cards' && tab !== 'Loss Prevention' && tab !== 'Coupons' && tab !== 'Focus Stylist' && tab !== 'Shear Check' && tab !== 'Focus Stores' && tab !== 'Scheduling';
 
   const d = viewing ? { ...viewScope, news: presenterData ? presenterData.news : news, employeeRoster: presenterData ? presenterData.employeeRoster : employeeRoster, reviewNotes: presenterData ? presenterData.reviewNotes : reviewNotes, goldCombs: presenterData ? presenterData.goldCombs : goldCombs, hsaSignups: presenterData ? presenterData.hsaSignups : hsaSignups, newsReads: presenterData ? presenterData.newsReads : newsReads, pointsSummary: presenterData ? presenterData.pointsSummary : pointsSummary }
     : presenterData
     ? { ...presenterData, fallbackEmployeesByStore: presenterFallbackEmployees }
-    : { news, tipsHistory, payRates, nameAliases, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, focusStylists, salonChecks, focusStores, fallbackEmployeesByStore };
+    : { news, tipsHistory, payRates, nameAliases, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, focusStylists, salonChecks, focusStores, shiftHistory, fallbackEmployeesByStore };
   const shownUserName = presenting ? fakePersonName(u.name) : u.name;
+  // Scheduling tab + Tilly: each store-day's sales (service + retail).
+  const schedSalesFor = (() => {
+    const m = new Map();
+    Object.values(d.history || {}).forEach(r => { if (r && r.code && r.date) m.set(`${r.code}|${r.date}`, (r.service || 0) + (r.retail || 0)); });
+    return (code, date) => m.get(`${code}|${date}`) || 0;
+  })();
+  const schedStoreName = code => STORE_CODE_TO_NAME[code] || `Store ${code}`;
+  const canSchedule = u.role === 'owner' || u.role === 'district_leader' || u.role === 'manager';
+  const schedTilly = () => {
+    if (!canSchedule) return '';
+    const latest = Object.keys(d.shiftHistory || {}).sort().pop();
+    if (!latest) return '';
+    const dt = new Date(`${latest}T12:00:00`); dt.setDate(dt.getDate() - 27);
+    const start = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+    return schedulingContext(analyzeSchedules({ shiftHistory: d.shiftHistory, start, end: latest, salesFor: schedSalesFor }), schedStoreName);
+  };
   const focusNames = currentFocusNames(d.focusStylists);
 
   return (
@@ -12750,6 +12837,7 @@ export default function App() {
             payTracker={viewing ? null : payTracker} onPayPick={setPayFocusName} payFocusName={payFocusName}
           />
         )}
+        {tab === 'Scheduling' && canSchedule && <SchedulingTab shiftHistory={d.shiftHistory} loadedMonths={shiftMonths} onNeedMonths={months => loadShiftMonths(months, currentUser.token)} loading={shiftLoading} salesFor={schedSalesFor} storeName={schedStoreName} dlFor={u.role === 'owner' ? code => getLeaderForStoreCode(code)?.leaderName || null : null} />}
         {tab === 'Team TSTH' && <TeamTsthTab token={currentUser.token} role={u.role} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={viewing ? viewScope.teamTips : d.tipsHistory} payRates={viewing ? viewScope.full.payRates : d.payRates} nameAliases={viewing ? viewScope.full.nameAliases : d.nameAliases} localData={viewing} />}
         {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={shownUserName} userRole={u.role} presenting={presenting} isOwner={u.role === 'owner'} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={d.tipsHistory} payRates={d.payRates} nameAliases={d.nameAliases} payFocusName={payFocusName} onPayPick={setPayFocusName} localSelf={viewSelf} />}
         {tab === 'News' && (
@@ -12907,7 +12995,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget key={`${presenting ? 'chat-presenting' : 'chat-live'}-${viewing ? viewAs.name : ''}`} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={d.news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={u.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={u.role === 'owner' ? d.giftCardHistory : null} lpData={u.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} salonQuestions={salonQuestions} payTracker={viewing ? viewTeamPayTracker : (payTracker || teamPayTracker)} myNumbersSummary={viewing ? null : myNumbersSummary} extraContext={u.role === 'owner' ? () => [focusStoresContext(d.focusStores, d.goals, (code, mk) => focusMonthSales(mk)?.[code]?.sales || null, getCurrentMonthRange().end, code => STORE_CODE_TO_NAME[code] || `Store ${code}`), viewing ? '' : couponsContext(couponTilly)].filter(Boolean).join('\n\n') : null} rankToken={!viewing && (u.role === 'manager' || u.role === 'district_leader') ? currentUser.token : null} />
+      <AIChatWidget key={`${presenting ? 'chat-presenting' : 'chat-live'}-${viewing ? viewAs.name : ''}`} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={d.news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={u.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={u.role === 'owner' ? d.giftCardHistory : null} lpData={u.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} salonQuestions={salonQuestions} payTracker={viewing ? viewTeamPayTracker : (payTracker || teamPayTracker)} myNumbersSummary={viewing ? null : myNumbersSummary} extraContext={u.role !== 'owner' ? (canSchedule ? schedTilly : null) : () => [schedTilly(), focusStoresContext(d.focusStores, d.goals, (code, mk) => focusMonthSales(mk)?.[code]?.sales || null, getCurrentMonthRange().end, code => STORE_CODE_TO_NAME[code] || `Store ${code}`), viewing ? '' : couponsContext(couponTilly)].filter(Boolean).join('\n\n')} rankToken={!viewing && (u.role === 'manager' || u.role === 'district_leader') ? currentUser.token : null} />
     </div>
     </FocusNamesContext.Provider>
   );

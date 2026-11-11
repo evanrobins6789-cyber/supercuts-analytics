@@ -19,7 +19,7 @@ import { handleTabFavorites } from './_tab-favorites.js';
 import { handleCouponStats } from './_coupon-stats.js';
 
 const SENSITIVE_KEYS = new Set(['stylist_report', 'reviews', 'store_goals', 'store_managers', 'milestone_goals', 'daily_history', 'weekly_history', 'store_leases', 'focus_stylists', 'salon_checks', 'salon_check_questions', 'employee_name_aliases', 'focus_stores']);
-const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_', 'gift_card_history_', 'tips_history_'];
+const SENSITIVE_PREFIXES = ['daily_history_', 'weekly_history_', 'gift_card_history_', 'tips_history_', 'shift_history_'];
 
 // Goal fields any role may read but only the owner may write.
 const OWNER_ONLY_GOAL_WRITE_PREFIXES = ['salesGoal:'];

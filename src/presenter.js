@@ -458,6 +458,32 @@ function fakePoints(summary) {
 // ones (".", "idk"...) the checks look for.
 const LP_VAGUE = /^(|\.+|\?+|idk|i dont know|na|n\/a|none|no|-+|x+|ok|even)$/i;
 const fakeLpReason = r => (!r || LP_VAGUE.test(r.trim()) ? r : 'Sample reason.');
+// Shift times (Scheduling tab): fake names, every store's day moved by a
+// fixed -45 to +45 minutes, and each shift stretched or shrunk a little (to
+// the nearest 15 minutes), with hours and serviced hours following along.
+function fakeShiftHistory(sh) {
+  if (!sh) return sh;
+  const out = {};
+  const q = m => (m == null ? m : Math.round(m / 15) * 15);
+  Object.entries(sh).forEach(([date, stores]) => {
+    out[date] = {};
+    Object.entries(stores || {}).forEach(([code, recs]) => {
+      const shift = Math.round(between(`shiftoff|${code}`, -3, 3)) * 15;
+      out[date][code] = (recs || []).map(r => {
+        const [name, job, sIn, sOut, segs, actual, serviced, schedHours] = r;
+        const seed = `${code}|${date}|${name}`;
+        const f = between(`shiftlen|${seed}`, 0.85, 1.15);
+        const mv = m => (m == null ? m : m + shift);
+        const newOut = sIn != null && sOut != null ? q(sIn + (sOut - sIn) * f) : sOut;
+        const fsegs = (segs || []).map((m, i) => (m == null ? m : i === segs.length - 1 && i % 2 === 1 ? mv(segs[0] + (m - segs[0]) * f) : mv(m)));
+        const a = Math.round(actual * f * 100) / 100;
+        return [fakePersonName(name), job, mv(sIn), mv(newOut), fsegs, a, Math.min(a, Math.round(serviced * between(`shiftsv|${seed}`, 0.85, 1.15) * 100) / 100), Math.round(schedHours * f * 4) / 4];
+      });
+    });
+  });
+  return out;
+}
+
 function fakeLpData(lp) {
   if (!lp) return lp;
   const money = (code, v) => cents(v * notOne(between(`lp|${code}`, 0.7, 1.3)));
@@ -545,6 +571,7 @@ export function presenterView(real, realEmployeesByStore) {
     newsReads: (real.newsReads || []).map(r => ({ ...r, userName: fakePersonName(r.userName) })),
     pointsSummary: fakePoints(real.pointsSummary),
     lpData: fakeLpData(real.lpData),
+    shiftHistory: fakeShiftHistory(real.shiftHistory),
     focusStylists: fakeFocusStylists(real.focusStylists),
     salonChecks: fakeSalonChecks(real.salonChecks),
     // Focus Stores holds only store codes, months and checkmarks; its sales

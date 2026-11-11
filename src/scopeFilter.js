@@ -64,6 +64,17 @@ export function filterDailyHistory(payload, allowed) {
   return out;
 }
 
+function filterShiftHistory(payload, allowed) {
+  if (!payload) return payload;
+  const out = {};
+  Object.entries(payload).forEach(([date, stores]) => {
+    const kept = {};
+    Object.entries(stores || {}).forEach(([code, v]) => { if (allowed.has(code)) kept[code] = v; });
+    if (Object.keys(kept).length) out[date] = kept;
+  });
+  return out;
+}
+
 function filterWeeklyHistory(payload, allowed) {
   if (!payload) return payload;
   const out = {};
@@ -116,6 +127,10 @@ export function filterPayload(key, payload, employee) {
   // Tips (pay tracker, 2026-11-03): owner only while it's a leadership
   // preview. When each employee sees their own, filter by name here.
   if (key.startsWith('tips_history_')) return {};
+  // Shift times (Scheduling tab, src/scheduling.js): { date: { code: shifts } }.
+  // DLs and managers get their own stores; employees get nothing, since it
+  // holds coworkers' clock times.
+  if (key.startsWith('shift_history_')) return employee.role === 'district_leader' || employee.role === 'manager' ? filterShiftHistory(payload, allowed) : {};
   // POS-name spellings linked to logins (Setup → Employee Access): owner only.
   if (key === 'employee_name_aliases') return {};
   if (key.startsWith('gift_card_history_')) return employee.role === 'district_leader' ? filterDailyHistory(payload, allowed) : {};
