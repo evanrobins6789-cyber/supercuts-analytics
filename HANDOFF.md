@@ -1,6 +1,6 @@
 # Handoff — Supercuts Analytics
 
-## Where things stand (updated 2026-11-10)
+## Where things stand (updated 2026-11-13)
 
 **The user's 2026-10-28 list:**
 1. ~~Bonus + tips as an hourly figure~~ **Built 2026-11-03.** The rules came from the user (see the TSTH/bonus entries below). Tips come from the new Tips report upload. Base pay comes from the Employee Pay Rate Report (locked `pay_rates` table).
@@ -17,6 +17,15 @@
 - **Leadership roll-up email**: the user pasted the new Apps Script `doPost`. Their first test still hit the old code (needs Deploy → Manage deployments → edit → **New version**). Not confirmed fixed.
 - **Open questions**: do DLs get the 30% management bonus rate? (Today 30% = role `manager` or the Tips report Job "Manager".) Should Possible pay project the whole pay period instead of "so far"? (Offered; coaching already projects to the end of the period.)
 - **Nothing from 2026-11-03 has been clicked through in a real browser or with an employee login.** Checks were builds, temp jest tests on real data, and headless screenshots of mocks.
+
+**Scheduling: recommendations by day + schedule ahead (2026-11-13).** User: click a store and see recommendations for each day of the week; gave `Downloads/Attendance(150).xlsx`, the posted schedule for Nov 14–30 (60 stores, scheduled shifts, 0 actual hours, Serviced = Booked hours so far).
+- **Store view** (`StoreDetail` in `src/scheduling.js`): Mon–Sun chips with a badge (−hrs to cut ahead / +hrs short / busy / ok), opening a `DayPanel`: that weekday's history (usual hours, busy %, sales), advice (`weekdayAdvice`: add cover when busy + alone, safe trim, nobody-on days, call-outs, late/early by person), then each upcoming date of that weekday (`upcomingDay` + `upcomingAdvice`) with named cuts and a timeline (hatched = suggested cut). Then "Across the week" (move + payroll tips), the full heatmap, and one worked day up close.
+- **Upcoming math**: need = max(weekday's usual serviced hrs, booked) ÷ busy target. Cut = `safeTrimPlan(recs, over, { scheduled: true })` (everyone scheduled counts as coverage; same ≥2-on, ≥4-hr-shift rules). Short only if under BOTH need and the usual hours worked that weekday (≥2 hrs), so busy stores aren't told to add past normal. Holiday = a date under half the usual number of stores scheduled (Nov 26 detected), shown but not judged; a store's day under half its usual hours = "light", not judged.
+- **Dates**: `lastWorkedDate()` (latest day with hours) is now the tab's/Tilly's range end, not the last stored date; `upcomingDates()` = after that, today on, no clock-ins anywhere. Login now also loads next month's shift row.
+- **Upload**: owner-only "⬆ Upload schedule ahead" on the Scheduling tab (`handleUploadScheduleAhead` → `captureShifts`, shift times only). Historical Import's Attendance upload now detects a file whose every date is after today and saves shift times only (no hours history, no Loss Prevention). **Attendance(150) is NOT uploaded yet** — the user needs to do it.
+- **Tilly**: per store, the next 7 schedule days with something to change (cuts with names for detailed stores, short, nobody on), up to 5; ~42K chars on real data (was ~28K).
+- **Overview Cuts tile**: second line "+$X gained / −$X lost" = cut difference vs last year × this period's avg ticket (same like-for-like stores) — `cutsValueChange` in App.js. Tooltip explains it. Tile only, not store cards.
+- **Verified**: clean build; temp jest tests (deleted) on real files (124 + Nov dailies as history, 150 ahead): 342 cut plans, 0 leave a slot <2 or a shift <4 hrs; holiday detection on Nov 26; render + chip clicks; screenshots at 1280px and 390px (iframe). **Not verified**: live site, real upload, the Overview $ line with live data. **Saved history is thin** (only Nov 11–12 in Supabase), so weekday advice is weak until Attendance 124–132 + dailies are re-uploaded.
 
 **Scheduling tab (2026-11-10, evening).** User: a tab on hours and gaps in the schedule, with tips to grow sales or watch payroll, flagging stores with too many people on at certain times. **Their rule: a suggested cut must never leave someone working alone.** Everything is in **`src/scheduling.js`**.
 - **Data**: the Attendance report's `Schedule` + `Actual Check-Ins` (with break segments), Serviced/Scheduled Hours. The Setup → Historical Import Attendance upload now also saves these (`captureShifts` in App.js) to `shift_history_YYYY-MM` rows, ~300KB a month, **written straight to Supabase with no localStorage mirror** (would fill local storage). Each file replaces its dates, except a store-day that already has hours is never replaced by one with none (an older or mid-day file).

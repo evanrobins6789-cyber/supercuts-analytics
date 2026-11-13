@@ -34,7 +34,7 @@ import { buildMyNumbers, pickOwnRecords, normalizePersonName, buildPeerStats } f
 import { buildPayBreakdown, buildCoaching } from './payCoach';
 import { TabMenu } from './TabMenu';
 import { FocusStoresTab, focusStoresContext } from './focusStores';
-import { SchedulingTab, parseShiftFile, mergeShiftMonth, analyzeSchedules, schedulingContext } from './scheduling';
+import { SchedulingTab, parseShiftFile, mergeShiftMonth, analyzeSchedules, schedulingContext, lastWorkedDate } from './scheduling';
 import { CouponsTab, couponsContext, couponPresets } from './coupons';
 import { CollectiveGoalBars } from './CollectiveGoalBars';
 import { collectiveGoal, goalPace, goalHeat, GIFT_CARD_GOAL_PERIODS, giftCardPeriodFor, giftCardPeriodGoal, periodThrough, periodPace } from './goalProgress';
@@ -381,6 +381,22 @@ function yoyChange(key, cur, ly) {
     dir: diff > 0 ? 'up' : diff < 0 ? 'down' : 'flat',
     pct: `${sign}${Math.abs((diff / ly) * 100).toFixed(1)}%`,
     diff: `${sign}${fmt(Math.abs(diff))}`,
+  };
+}
+// Cuts tile: what the change in cuts vs last year is worth in dollars —
+// cuts gained/lost × this period's average ticket (sales ÷ cuts) for the same
+// like-for-like stores the % compares. "gained"/"lost" in words so it reads
+// at a glance next to the cut count.
+function cutsValueChange(yoy) {
+  const cur = yoy?.cur, ly = yoy?.ly;
+  if (!cur || !ly || cur.haircuts == null || ly.haircuts == null || !cur.avgTicket) return null;
+  const diff = cur.haircuts - ly.haircuts;
+  if (!diff) return null;
+  const dollars = Math.round(Math.abs(diff) * cur.avgTicket);
+  return {
+    dir: diff > 0 ? 'up' : 'down',
+    text: `${diff > 0 ? '+' : '−'}${fmt$(dollars)} ${diff > 0 ? 'gained' : 'lost'}`,
+    title: `${fmtInt(Math.abs(diff))} cuts ${diff > 0 ? 'more' : 'fewer'} than last year × ${fmtRate(cur.avgTicket)} average ticket this period`,
   };
 }
 // Gift card sales (not redemptions) — owner-only, so OverviewTab only adds
@@ -4297,6 +4313,7 @@ function OverviewTab({ report, history, weeklyHistory, dateRange, onDateRangeCha
               <p className="summary-tile-label">{m.label}</p>
               <p className="summary-tile-value">{m.fmt(t[m.key], t)}</p>
               {ch && <p className={`summary-tile-yoy yoy-${ch.dir}`} title="vs same dates last year">{ch.dir === 'up' ? '▲' : ch.dir === 'down' ? '▼' : '•'} {ch.pct} · {ch.diff}</p>}
+              {m.key === 'haircuts' && (() => { const v = cutsValueChange(yoy); return v ? <p className={`summary-tile-yoy yoy-${v.dir}`} title={v.title}>{v.text}</p> : null; })()}
             </button>
           );
         })}
@@ -11241,7 +11258,8 @@ export default function App() {
     setShiftHistory({});
     if (!currentUser || !['owner', 'district_leader', 'manager'].includes(currentUser.role)) return;
     const today = localTodayISO();
-    loadShiftMonths([shiftMonthKey(today.slice(0, 7), -1), today.slice(0, 7)], currentUser.token);
+    // Next month too: a schedule uploaded ahead can run into it.
+    loadShiftMonths([shiftMonthKey(today.slice(0, 7), -1), today.slice(0, 7), shiftMonthKey(today.slice(0, 7), 1)], currentUser.token);
   }, [currentUser, loadShiftMonths]);
 
   useEffect(() => {
@@ -12371,6 +12389,22 @@ export default function App() {
     }
   };
 
+  // Scheduling tab (owner): an Attendance report pulled for upcoming dates.
+  // Shift times only; queued behind any running import like the others.
+  const handleUploadScheduleAhead = fileList => {
+    const task = async () => {
+      const lines = [];
+      for (const file of fileList) {
+        lines.push(`${file.name}`);
+        await captureShifts(file, lines);
+      }
+      return lines;
+    };
+    const queued = importChainRef.current.then(task, task);
+    importChainRef.current = queued.then(() => {}, () => {});
+    return queued;
+  };
+
   const handleImportAttendanceBatch = useCallback(fileList => {
     const task = async () => {
       let working = historyRef.current;
@@ -12380,6 +12414,15 @@ export default function App() {
       for (const file of fileList) {
         try {
           const parsed = await parseAttendanceHistoryFile(file);
+          // A file pulled for upcoming dates (the schedule ahead) has no hours
+          // yet: save its shift times for the Scheduling tab only, so it
+          // doesn't put empty days into the hours history or Loss Prevention.
+          const today = localTodayISO();
+          if (parsed.records.length && parsed.records.every(r => r.date > today)) {
+            lines.push(`✓ ${file.name} — schedule ahead (${parsed.records.length} store-days, no hours yet): saved for the Scheduling tab only`);
+            await captureShifts(file, lines);
+            continue;
+          }
           working = mergeAttendanceIntoHistory(working, parsed.records);
           parsed.records.forEach(r => touchedMonths.add(r.date.slice(0, 7)));
           lines.push(`✓ ${file.name} — ${parsed.records.length} store-days`);
@@ -12799,7 +12842,9 @@ export default function App() {
   const canSchedule = u.role === 'owner' || u.role === 'district_leader' || u.role === 'manager';
   const schedTilly = () => {
     if (!canSchedule) return '';
-    const latest = Object.keys(d.shiftHistory || {}).sort().pop();
+    // Latest day worked, not the last date stored (a schedule ahead adds
+    // future dates with no hours).
+    const latest = lastWorkedDate(d.shiftHistory);
     if (!latest) return '';
     const dt = new Date(`${latest}T12:00:00`); dt.setDate(dt.getDate() - 27);
     const start = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
@@ -12837,7 +12882,7 @@ export default function App() {
             payTracker={viewing ? null : payTracker} onPayPick={setPayFocusName} payFocusName={payFocusName}
           />
         )}
-        {tab === 'Scheduling' && canSchedule && <SchedulingTab shiftHistory={d.shiftHistory} loadedMonths={shiftMonths} onNeedMonths={months => loadShiftMonths(months, currentUser.token)} loading={shiftLoading} salesFor={schedSalesFor} storeName={schedStoreName} dlFor={u.role === 'owner' ? code => getLeaderForStoreCode(code)?.leaderName || null : null} />}
+        {tab === 'Scheduling' && canSchedule && <SchedulingTab shiftHistory={d.shiftHistory} loadedMonths={shiftMonths} onNeedMonths={months => loadShiftMonths(months, currentUser.token)} loading={shiftLoading} salesFor={schedSalesFor} storeName={schedStoreName} dlFor={u.role === 'owner' ? code => getLeaderForStoreCode(code)?.leaderName || null : null} onUploadSchedule={u.role === 'owner' && !presenting ? handleUploadScheduleAhead : null} />}
         {tab === 'Team TSTH' && <TeamTsthTab token={currentUser.token} role={u.role} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={viewing ? viewScope.teamTips : d.tipsHistory} payRates={viewing ? viewScope.full.payRates : d.payRates} nameAliases={viewing ? viewScope.full.nameAliases : d.nameAliases} localData={viewing} />}
         {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={shownUserName} userRole={u.role} presenting={presenting} isOwner={u.role === 'owner'} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={d.tipsHistory} payRates={d.payRates} nameAliases={d.nameAliases} payFocusName={payFocusName} onPayPick={setPayFocusName} localSelf={viewSelf} />}
         {tab === 'News' && (

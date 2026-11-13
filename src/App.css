@@ -1785,3 +1785,36 @@
   .sched-row-name, .sched-day-axis { width: 110px; }
   .sched-day-axis { margin-left: 110px; }
 }
+
+/* Scheduling: recommendations by day + schedule ahead (2026-11-13) */
+.sched-weekdays { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; margin-bottom: 10px; }
+.sched-wd { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; font: inherit; color: var(--navy); font-weight: 700; }
+.sched-wd.active { background: var(--navy); color: #fff; border-color: var(--navy); }
+.sched-badge { font-style: normal; font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 999px; white-space: nowrap; }
+.sched-badge-trim { background: #DCE6F2; color: #1F5FBF; }
+.sched-badge-grow { background: #FBE3D2; color: #B5562A; }
+.sched-badge-ok { background: #DDF1E4; color: #2E7D4F; }
+.sched-badge-none { background: transparent; color: var(--ink-soft); }
+.sched-wd.active .sched-badge-none { color: #B9C6D6; }
+.sched-daypanel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px; }
+.sched-daypanel-title { margin: 0; font-size: 18px; color: var(--navy); }
+.sched-card strong.sched-card-sm { font-size: 15px; }
+.sched-advice { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.sched-advice li { display: flex; gap: 8px; font-size: 13.5px; line-height: 1.4; padding: 8px 10px; border-radius: 8px; background: var(--paper); border-left: 4px solid var(--line); }
+.sched-advice li.sched-advice-trim { border-left-color: #1F5FBF; }
+.sched-advice li.sched-advice-grow { border-left-color: #B5562A; }
+.sched-advice li.sched-advice-gap { border-left-color: var(--red); }
+.sched-advice li.sched-advice-payroll { border-left-color: #C9A227; }
+.sched-advice li.sched-advice-ok { border-left-color: var(--green); }
+.sched-upcoming { border-top: 1px solid var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.sched-upcoming-head { margin: 0; font-size: 14px; }
+.sched-bar-plan { position: absolute; top: 2px; height: 12px; background: var(--navy); border-radius: 3px; }
+.sched-bar-cut { position: absolute; top: 2px; height: 12px; border-radius: 3px; background: repeating-linear-gradient(45deg, #fff 0 3px, var(--red) 3px 6px); opacity: 0.9; }
+.sched-upload { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 8px 0; }
+.sched-upload .btn-secondary { margin-top: 0; padding: 7px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; }
+.sched-upload-log { flex-basis: 100%; margin: 0; font-size: 12px; white-space: pre-wrap; background: var(--paper); padding: 8px 10px; border-radius: 8px; }
+@media (max-width: 640px) {
+  .sched-weekdays { gap: 3px; }
+  .sched-wd { padding: 6px 2px; font-size: 12.5px; }
+  .sched-badge { font-size: 9.5px; padding: 1px 3px; }
+}
