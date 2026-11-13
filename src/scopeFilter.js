@@ -131,6 +131,10 @@ export function filterPayload(key, payload, employee) {
   // DLs and managers get their own stores; employees get nothing, since it
   // holds coworkers' clock times.
   if (key.startsWith('shift_history_')) return employee.role === 'district_leader' || employee.role === 'manager' ? filterShiftHistory(payload, allowed) : {};
+  // Appointments (lost guests + check-ins, src/appointments.js): same
+  // { date: { code: ... } } shape as shift times (plus '_r:' range totals,
+  // also keyed by code), same who-sees-what. No guest names are stored.
+  if (key.startsWith('appt_history_')) return employee.role === 'district_leader' || employee.role === 'manager' ? filterShiftHistory(payload, allowed) : {};
   // POS-name spellings linked to logins (Setup → Employee Access): owner only.
   if (key === 'employee_name_aliases') return {};
   if (key.startsWith('gift_card_history_')) return employee.role === 'district_leader' ? filterDailyHistory(payload, allowed) : {};

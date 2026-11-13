@@ -1818,3 +1818,22 @@
   .sched-wd { padding: 6px 2px; font-size: 12.5px; }
   .sched-badge { font-size: 9.5px; padding: 1px 3px; }
 }
+
+/* Scheduling, simplified store page + heat card views (2026-11-13) */
+.sched-store { display: flex; flex-direction: column; gap: 14px; }
+.sched-summary { margin: 0; font-size: 14px; color: var(--ink); line-height: 1.5; }
+.sched-summary .sched-hot { color: #B5562A; } .sched-summary .sched-cool { color: #1F5FBF; }
+.sched-sub { margin: 6px 0 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); }
+.sched-more { align-self: flex-start; font-size: 13px; }
+.sched-up { border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+.sched-up-line { width: 100%; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 12px; background: none; border: 0; font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; color: var(--ink); }
+.sched-up-line b { min-width: 70px; color: var(--navy); }
+.sched-up-line .sched-badge { font-size: 12px; padding: 2px 8px; }
+.sched-up-caret { margin-left: auto; color: var(--ink-soft); }
+.sched-up-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.sched-heatcard { display: flex; flex-direction: column; gap: 10px; }
+.sched-heat-hour td { width: 30px; min-width: 30px; height: 26px; text-align: center; vertical-align: middle; border: 1px solid #EEF2F7; }
+.sched-dot { display: inline-block; border-radius: 50%; vertical-align: middle; }
+.sched-dot-guest { background: #fff; border: 1.5px solid var(--navy); }
+.sched-dot-lost { background: var(--red); border: 1.5px solid #fff; }
+.sched-store > .link-btn { align-self: flex-start; }

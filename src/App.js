@@ -35,6 +35,7 @@ import { buildPayBreakdown, buildCoaching } from './payCoach';
 import { TabMenu } from './TabMenu';
 import { FocusStoresTab, focusStoresContext } from './focusStores';
 import { SchedulingTab, parseShiftFile, mergeShiftMonth, analyzeSchedules, schedulingContext, lastWorkedDate } from './scheduling';
+import { parseAppointmentsFile, mergeApptMonth, apptMonths, analyzeAppointments, appointmentsContext } from './appointments';
 import { CouponsTab, couponsContext, couponPresets } from './coupons';
 import { CollectiveGoalBars } from './CollectiveGoalBars';
 import { collectiveGoal, goalPace, goalHeat, GIFT_CARD_GOAL_PERIODS, giftCardPeriodFor, giftCardPeriodGoal, periodThrough, periodPace } from './goalProgress';
@@ -10990,6 +10991,9 @@ export default function App() {
   // rows, loaded a month at a time. Login loads this month and last; the tab
   // asks for more when a longer range is picked.
   const [shiftHistory, setShiftHistory] = useState({});
+  // Appointments report (lost guests + check-ins, src/appointments.js):
+  // appt_history_YYYY-MM rows, loaded alongside the same months as shifts.
+  const [apptHistory, setApptHistory] = useState({});
   const [shiftMonths, setShiftMonths] = useState(() => new Set());
   const [shiftLoading, setShiftLoading] = useState(false);
   const shiftMonthsRef = useRef(new Set());
@@ -10998,8 +11002,16 @@ export default function App() {
     if (!todo.length || !token) return;
     todo.forEach(m => shiftMonthsRef.current.add(m));
     setShiftLoading(true);
-    const results = await Promise.all(todo.map(m => loadScoped(`shift_history_${m}`, token)));
+    const [results, appts] = await Promise.all([
+      Promise.all(todo.map(m => loadScoped(`shift_history_${m}`, token))),
+      Promise.all(todo.map(m => loadScoped(`appt_history_${m}`, token))),
+    ]);
     setShiftLoading(false);
+    setApptHistory(prev => {
+      const next = { ...prev };
+      appts.forEach(r => { if (r.data) Object.assign(next, r.data); });
+      return next;
+    });
     const failed = results.filter(r => r.error);
     if (failed.length) {
       todo.forEach((m, i) => { if (results[i].error) shiftMonthsRef.current.delete(m); });
@@ -11256,6 +11268,7 @@ export default function App() {
     shiftMonthsRef.current = new Set();
     setShiftMonths(new Set());
     setShiftHistory({});
+    setApptHistory({});
     if (!currentUser || !['owner', 'district_leader', 'manager'].includes(currentUser.role)) return;
     const today = localTodayISO();
     // Next month too: a schedule uploaded ahead can run into it.
@@ -12405,6 +12418,46 @@ export default function App() {
     return queued;
   };
 
+  // Scheduling tab (owner): the Appointments report. Saved straight to
+  // Supabase (no localStorage mirror), merged into each month it touches.
+  const handleUploadAppointments = fileList => {
+    const task = async () => {
+      const lines = [];
+      for (const file of fileList) {
+        let parsed;
+        try { parsed = await parseAppointmentsFile(file); } catch (err) { lines.push(`✗ ${file.name} — ${err.message}`); continue; }
+        if (!parsed || !parsed.start) { lines.push(`✗ ${file.name} — not an Appointments report (no Guest Name / Center Name / Status columns)`); continue; }
+        if (isWriteBlocked()) { lines.push(`✗ ${file.name} — ${PRESENTER_BLOCKED_ERROR}`); continue; }
+        if (!supabase) { lines.push(`✗ ${file.name} — Supabase is not configured, so nothing was saved`); continue; }
+        const saved = {};
+        let failed = false;
+        for (const m of apptMonths(parsed)) {
+          const key = `appt_history_${m}`;
+          const current = await loadData(key);
+          if (current.error) { lines.push(`  ✗ ${m}: couldn't read what's saved (${current.error}), so nothing was changed`); failed = true; continue; }
+          const merged = mergeApptMonth(current.data || {}, parsed, m);
+          const { error } = await supabase.from('weekly_report').upsert({ report_id: key, payload: merged }, { onConflict: 'report_id' });
+          if (error) { lines.push(`  ✗ ${m}: couldn't save (${error.message})`); failed = true; } else saved[m] = merged;
+        }
+        const t = Object.values(parsed.totals).reduce((a, x) => ({ C: a.C + x.C, N: a.N + x.N, D: a.D + x.D, V: a.V + x.V }), { C: 0, N: 0, D: 0, V: 0 });
+        lines.push(`${failed ? '⚠' : '✓'} ${file.name} — ${parsed.start} to ${parsed.end}: ${t.D} deleted, ${t.N} no-shows, ${t.C} cancelled${t.V ? `, ${t.V} visits` : ''} (${parsed.timed} with a check-in time)${t.V ? '' : '. No completed visits in this file, so the Guests heat map stays empty; export every status to fill it.'}`);
+        if (Object.keys(saved).length) setApptHistory(prev => {
+          const next = { ...prev };
+          // Drop what the merge dropped (overlapping ranges, replaced dates), then add.
+          Object.keys(next).forEach(k => {
+            if (k.startsWith('_r:')) { const [a, b] = k.slice(3).split('_'); if (a <= parsed.end && b >= parsed.start) delete next[k]; } else if (k >= parsed.start && k <= parsed.end) delete next[k];
+          });
+          Object.values(saved).forEach(v => Object.assign(next, v));
+          return next;
+        });
+      }
+      return lines;
+    };
+    const queued = importChainRef.current.then(task, task);
+    importChainRef.current = queued.then(() => {}, () => {});
+    return queued;
+  };
+
   const handleImportAttendanceBatch = useCallback(fileList => {
     const task = async () => {
       let working = historyRef.current;
@@ -12733,7 +12786,7 @@ export default function App() {
   // login would get. Works on top of presenter mode's fakes when both are on.
   const viewScope = useMemo(() => {
     if (!viewAs || currentUser?.role !== 'owner') return null;
-    const src = presenterData || { report, history, weeklyHistory, giftCardHistory, tipsHistory, payRates, nameAliases, goals, milestoneGoals, managers, reviews, focusStylists, salonChecks, shiftHistory };
+    const src = presenterData || { report, history, weeklyHistory, giftCardHistory, tipsHistory, payRates, nameAliases, goals, milestoneGoals, managers, reviews, focusStylists, salonChecks, shiftHistory, apptHistory };
     const emp = { role: 'district_leader', store_codes: viewAs.storeCodes };
     const f = (key, v) => filterPayload(key, v, emp);
     const hist = f('daily_history', src.history || {});
@@ -12745,13 +12798,14 @@ export default function App() {
       goals: f('store_goals', src.goals), milestoneGoals: f('milestone_goals', src.milestoneGoals), managers: f('store_managers', src.managers),
       reviews: f('reviews', src.reviews), focusStylists: f('focus_stylists', src.focusStylists), salonChecks: f('salon_checks', src.salonChecks),
       shiftHistory: f('shift_history_', src.shiftHistory || {}),
+      apptHistory: f('appt_history_', src.apptHistory || {}),
       fallbackEmployeesByStore: getEmployeesByStoreFromHistory(hist, weekly),
       // What a real DL gets from api/_team-numbers.js: tips for their stores
       // and pay rates (only their people are ever looked up).
       teamTips: filterDailyHistory(src.tipsHistory || {}, new Set(viewAs.storeCodes)),
       full: src,
     };
-  }, [viewAs, currentUser, presenterData, report, history, weeklyHistory, giftCardHistory, tipsHistory, payRates, nameAliases, goals, milestoneGoals, managers, reviews, focusStylists, salonChecks, shiftHistory]);
+  }, [viewAs, currentUser, presenterData, report, history, weeklyHistory, giftCardHistory, tipsHistory, payRates, nameAliases, goals, milestoneGoals, managers, reviews, focusStylists, salonChecks, shiftHistory, apptHistory]);
   // My Numbers in DL view: the DL's own lines, from every store (as the server does).
   const viewSelf = useMemo(() => {
     if (!viewScope) return null;
@@ -12830,12 +12884,18 @@ export default function App() {
   const d = viewing ? { ...viewScope, news: presenterData ? presenterData.news : news, employeeRoster: presenterData ? presenterData.employeeRoster : employeeRoster, reviewNotes: presenterData ? presenterData.reviewNotes : reviewNotes, goldCombs: presenterData ? presenterData.goldCombs : goldCombs, hsaSignups: presenterData ? presenterData.hsaSignups : hsaSignups, newsReads: presenterData ? presenterData.newsReads : newsReads, pointsSummary: presenterData ? presenterData.pointsSummary : pointsSummary }
     : presenterData
     ? { ...presenterData, fallbackEmployeesByStore: presenterFallbackEmployees }
-    : { news, tipsHistory, payRates, nameAliases, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, focusStylists, salonChecks, focusStores, shiftHistory, fallbackEmployeesByStore };
+    : { news, tipsHistory, payRates, nameAliases, report, history, weeklyHistory, giftCardHistory, goals, milestoneGoals, managers, employeeRoster, reviews, reviewNotes, goldCombs, leases, hsaSignups, newsReads, pointsSummary, focusStylists, salonChecks, focusStores, shiftHistory, apptHistory, fallbackEmployeesByStore };
   const shownUserName = presenting ? fakePersonName(u.name) : u.name;
   // Scheduling tab + Tilly: each store-day's sales (service + retail).
   const schedSalesFor = (() => {
     const m = new Map();
     Object.values(d.history || {}).forEach(r => { if (r && r.code && r.date) m.set(`${r.code}|${r.date}`, (r.service || 0) + (r.retail || 0)); });
+    return (code, date) => m.get(`${code}|${date}`) || 0;
+  })();
+  // Haircuts per store-day, for lost guests per 100 cuts.
+  const schedCutsFor = (() => {
+    const m = new Map();
+    Object.values(d.history || {}).forEach(r => { if (r && r.code && r.date) m.set(`${r.code}|${r.date}`, r.haircuts || 0); });
     return (code, date) => m.get(`${code}|${date}`) || 0;
   })();
   const schedStoreName = code => STORE_CODE_TO_NAME[code] || `Store ${code}`;
@@ -12848,7 +12908,10 @@ export default function App() {
     if (!latest) return '';
     const dt = new Date(`${latest}T12:00:00`); dt.setDate(dt.getDate() - 27);
     const start = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-    return schedulingContext(analyzeSchedules({ shiftHistory: d.shiftHistory, start, end: latest, salesFor: schedSalesFor }), schedStoreName);
+    const sched = analyzeSchedules({ shiftHistory: d.shiftHistory, start, end: latest, salesFor: schedSalesFor });
+    // Lost guests (Appointments report) for any file overlapping the same 4 weeks.
+    const appt = d.apptHistory ? analyzeAppointments({ apptHistory: d.apptHistory, start, end: latest, cutsFor: schedCutsFor, sched, shiftHistory: d.shiftHistory }) : null;
+    return schedulingContext(sched, schedStoreName) + appointmentsContext(appt, schedStoreName);
   };
   const focusNames = currentFocusNames(d.focusStylists);
 
@@ -12882,7 +12945,7 @@ export default function App() {
             payTracker={viewing ? null : payTracker} onPayPick={setPayFocusName} payFocusName={payFocusName}
           />
         )}
-        {tab === 'Scheduling' && canSchedule && <SchedulingTab shiftHistory={d.shiftHistory} loadedMonths={shiftMonths} onNeedMonths={months => loadShiftMonths(months, currentUser.token)} loading={shiftLoading} salesFor={schedSalesFor} storeName={schedStoreName} dlFor={u.role === 'owner' ? code => getLeaderForStoreCode(code)?.leaderName || null : null} onUploadSchedule={u.role === 'owner' && !presenting ? handleUploadScheduleAhead : null} />}
+        {tab === 'Scheduling' && canSchedule && <SchedulingTab shiftHistory={d.shiftHistory} loadedMonths={shiftMonths} onNeedMonths={months => loadShiftMonths(months, currentUser.token)} loading={shiftLoading} salesFor={schedSalesFor} cutsFor={schedCutsFor} apptHistory={d.apptHistory || null} storeName={schedStoreName} dlFor={u.role === 'owner' ? code => getLeaderForStoreCode(code)?.leaderName || null : null} onUploadSchedule={u.role === 'owner' && !presenting ? handleUploadScheduleAhead : null} onUploadAppointments={u.role === 'owner' && !presenting ? handleUploadAppointments : null} />}
         {tab === 'Team TSTH' && <TeamTsthTab token={currentUser.token} role={u.role} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={viewing ? viewScope.teamTips : d.tipsHistory} payRates={viewing ? viewScope.full.payRates : d.payRates} nameAliases={viewing ? viewScope.full.nameAliases : d.nameAliases} localData={viewing} />}
         {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={shownUserName} userRole={u.role} presenting={presenting} isOwner={u.role === 'owner'} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={d.tipsHistory} payRates={d.payRates} nameAliases={d.nameAliases} payFocusName={payFocusName} onPayPick={setPayFocusName} localSelf={viewSelf} />}
         {tab === 'News' && (
