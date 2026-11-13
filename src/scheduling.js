@@ -718,10 +718,12 @@ function HourHeat({ st, appt, mode }) {
                 if (mode === 'lost') return <td key={h} style={{ background: scaleColor(LOST_SCALE, l, maxL) }} title={`${WEEKDAYS_LONG[w.wd]} ${hourShort(h)}: ${l.toFixed(2)} lost guests a day`} />;
                 const s = staffHour(w, h);
                 const g = appt.heat[gKey][w.wd][h];
-                const size = maxG ? Math.round(4 + (g / maxG) * 14) : 0;
+                const gN = appt.heatN ? appt.heatN[gKey][w.wd][h] : null;
+                // Big enough to hold the count; bigger = more.
+                const size = maxG ? Math.round(15 + (g / maxG) * 11) : 0;
                 return (
-                  <td key={h} style={{ background: s == null ? 'transparent' : heatColor(s) }} title={`${WEEKDAYS_LONG[w.wd]} ${hourShort(h)}: ${s == null ? 'closed' : `${s.toFixed(1)} on`}, ${g.toFixed(hasVisits ? 1 : 2)} ${hasVisits ? 'guests' : 'lost guests'} a day`}>
-                    {g > 0 && <i className={`sched-dot ${hasVisits ? 'sched-dot-guest' : 'sched-dot-lost'}`} style={{ width: size, height: size }} />}
+                  <td key={h} style={{ background: s == null ? 'transparent' : heatColor(s) }} title={`${WEEKDAYS_LONG[w.wd]} ${hourShort(h)}: ${s == null ? 'closed' : `${s.toFixed(1)} on`}, ${gN != null ? `${gN} ${hasVisits ? 'guests' : 'lost guests'} in all, ` : ''}${g.toFixed(hasVisits ? 1 : 2)} a day`}>
+                    {g > 0 && <i className={`sched-dot ${hasVisits ? 'sched-dot-guest' : 'sched-dot-lost'}`} style={{ width: size, height: size }}>{gN != null ? gN : ''}</i>}
                   </td>
                 );
               })}
@@ -732,7 +734,7 @@ function HourHeat({ st, appt, mode }) {
       <div className="sched-legend">
         {mode === 'both' ? <>
           <span><i style={{ background: HEAT.zero }} />Nobody</span><span><i style={{ background: HEAT.solo }} />1 alone</span><span><i style={{ background: HEAT.two }} />2</span><span><i style={{ background: HEAT.three }} />3</span><span><i style={{ background: HEAT.four }} />4+</span>
-          <span><i className="sched-dot sched-dot-lost" style={{ width: 10, height: 10, borderRadius: '50%' }} />{hasVisits ? 'guests' : 'lost guests'} (bigger = more)</span>
+          <span><i className="sched-dot sched-dot-lost" style={{ width: 14, height: 14, borderRadius: '50%' }} />number = {hasVisits ? 'guests' : 'lost guests'} in that hour, all days in range</span>
         </> : <span className="section-hint">{mode === 'guests' ? 'Darker = more guests checking in that hour.' : 'Darker red = more lost guests that hour.'} Average per day.</span>}
       </div>
     </div>

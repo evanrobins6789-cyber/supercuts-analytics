@@ -273,6 +273,8 @@ export function analyzeAppointments({ apptHistory, start, end, cutsFor, sched = 
     });
   });
   Object.values(stores).forEach(s => {
+    // Keep the raw counts (shown inside the heat map's dots), then average per day.
+    s.heatN = { V: s.heat.V.map(r => [...r]), L: s.heat.L.map(r => [...r]) };
     ['V', 'L'].forEach(k => s.heat[k].forEach((row, wd) => { const n = s.daysByWd[wd] || 1; row.forEach((v, h) => { row[h] = v / n; }); }));
     s.lost = s.C + s.N + s.W;
     s.ahead = s.lost - s.door;
