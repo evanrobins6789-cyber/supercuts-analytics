@@ -216,6 +216,7 @@ export function analyzeAppointments({ apptHistory, start, end, cutsFor, sched = 
     code, ...emptyTotals(), d: new Set(), cuts: 0,
     heat: { V: Array.from({ length: 7 }, () => new Array(HOURS).fill(0)), L: Array.from({ length: 7 }, () => new Array(HOURS).fill(0)) },
     daysByWd: new Array(7).fill(0), timedLost: 0,
+    at: [0, 0, 0, 0], openAt: [0, 0, 0, 0], lostByWd: new Array(7).fill(0),
   });
   ranges.forEach(r => Object.entries(r.totals || {}).forEach(([code, t]) => {
     if (!keep(code)) return;
@@ -246,11 +247,11 @@ export function analyzeAppointments({ apptHistory, start, end, cutsFor, sched = 
         if (h < 0 || h >= HOURS) return;
         if (status === 'V') { s.heat.V[wd][h]++; if (worked) atCount.V[Math.min(3, onAt(shifts, min))]++; return; }
         if (!isLost(status)) return;
-        s.heat.L[wd][h]++; byHour.L[h]++; lostByWd[wd]++; s.timedLost++;
+        s.heat.L[wd][h]++; byHour.L[h]++; lostByWd[wd]++; s.timedLost++; s.lostByWd[wd]++;
         if (status === 'W') byHour.W[h]++;
         if (worked) {
           const n = Math.min(3, onAt(shifts, min));
-          if (status !== 'C') atCount.L[n]++; // a cancellation was made ahead, so who was on then says little
+          if (status !== 'C') { atCount.L[n]++; s.at[n]++; } // a cancellation was made ahead, so who was on then says little
           if (status === 'W') atCount.W[n]++;
         }
       });
@@ -278,7 +279,7 @@ export function analyzeAppointments({ apptHistory, start, end, cutsFor, sched = 
     const ivs = recs.filter(r => r[2] != null && r[3] != null);
     if (!ivs.length) return;
     const o = Math.min(...ivs.map(r => r[2])), c = Math.max(...ivs.map(r => r[3]));
-    for (let m = o; m < c; m += 15) openAt[Math.min(3, onAt(recs, m))]++;
+    for (let m = o; m < c; m += 15) { const n = Math.min(3, onAt(recs, m)); openAt[n]++; stores[code].openAt[n]++; }
   }));
 
   const findings = [];
@@ -330,15 +331,15 @@ export function analyzeAppointments({ apptHistory, start, end, cutsFor, sched = 
     const pts = list.filter(s => s.cuts >= 50 && s.per100 && sched.stores[s.code] && sched.stores[s.code].busy != null);
     if (pts.length >= 10) {
       const tests = [
-        ['how busy the store runs (busy %)', s => sched.stores[s.code].busy],
-        ['time with one person alone', s => sched.stores[s.code].soloPerWeek],
-        ['staff hours per week', s => sched.stores[s.code].hoursPerWeek],
-        ['bookings made in the app', s => (s.lost ? s.app / s.lost : 0)],
+        ['Busier stores (higher busy %)', s => sched.stores[s.code].busy],
+        ['Stores with more time with one person alone', s => sched.stores[s.code].soloPerWeek],
+        ['Stores with more staff hours a week', s => sched.stores[s.code].hoursPerWeek],
+        ['Stores with more bookings made in the app', s => (s.lost ? s.app / s.lost : 0)],
       ];
       const links = [];
       [['W', 'walkouts'], ['N', 'no-shows'], ['C', 'cancellations']].forEach(([k, label]) => tests.forEach(([whatX, fn]) => {
         const r = pearson(pts.map(s => s.per100[k]), pts.map(fn));
-        if (r != null && Math.abs(r) >= 0.3) links.push({ r, text: `Stores with more ${whatX} have ${r > 0 ? 'more' : 'fewer'} ${label} per cut (r = ${r.toFixed(2)}, ${Math.abs(r) >= 0.5 ? 'a clear link' : 'a modest link'}).` });
+        if (r != null && Math.abs(r) >= 0.3) links.push({ r, text: `${whatX} have ${r > 0 ? 'more' : 'fewer'} ${label} per cut (r = ${r.toFixed(2)}, ${Math.abs(r) >= 0.5 ? 'a clear link' : 'a modest link'}).` });
       }));
       links.sort((a, b) => Math.abs(b.r) - Math.abs(a.r)).slice(0, 3).forEach(l => findings.push({ kind: 'link', text: l.text }));
       if (!links.length) findings.push({ kind: 'info', text: `Across ${pts.length} stores, no strong link between lost guests and busy %, time alone or staff hours (all |r| < 0.3).` });

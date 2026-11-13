@@ -12438,23 +12438,7 @@ export default function App() {
     }
   };
 
-  // Scheduling tab (owner): an Attendance report pulled for upcoming dates.
-  // Shift times only; queued behind any running import like the others.
-  const handleUploadScheduleAhead = fileList => {
-    const task = async () => {
-      const lines = [];
-      for (const file of fileList) {
-        lines.push(`${file.name}`);
-        await captureShifts(file, lines);
-      }
-      return lines;
-    };
-    const queued = importChainRef.current.then(task, task);
-    importChainRef.current = queued.then(() => {}, () => {});
-    return queued;
-  };
-
-  // Scheduling tab (owner): the Appointments report. Saved straight to
+  // Historical Import (owner): the Appointments report. Saved straight to
   // Supabase (no localStorage mirror), merged into each month it touches.
   const handleUploadAppointments = fileList => {
     const task = async () => {
@@ -13001,7 +12985,7 @@ export default function App() {
             payTracker={viewing ? null : payTracker} onPayPick={setPayFocusName} payFocusName={payFocusName}
           />
         )}
-        {tab === 'Scheduling' && canSchedule && <SchedulingTab shiftHistory={d.shiftHistory} loadedMonths={shiftMonths} onNeedMonths={months => loadShiftMonths(months, currentUser.token)} loading={shiftLoading} salesFor={schedSalesFor} cutsFor={schedCutsFor} apptHistory={d.apptHistory || null} storeName={schedStoreName} dlFor={u.role === 'owner' ? code => getLeaderForStoreCode(code)?.leaderName || null : null} onUploadSchedule={u.role === 'owner' && !presenting ? handleUploadScheduleAhead : null} onUploadAppointments={u.role === 'owner' && !presenting ? handleUploadAppointments : null} />}
+        {tab === 'Scheduling' && canSchedule && <SchedulingTab shiftHistory={d.shiftHistory} loadedMonths={shiftMonths} onNeedMonths={months => loadShiftMonths(months, currentUser.token)} loading={shiftLoading} salesFor={schedSalesFor} cutsFor={schedCutsFor} apptHistory={d.apptHistory || null} storeName={schedStoreName} dlFor={u.role === 'owner' ? code => getLeaderForStoreCode(code)?.leaderName || null : null} />}
         {tab === 'Team TSTH' && <TeamTsthTab token={currentUser.token} role={u.role} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={viewing ? viewScope.teamTips : d.tipsHistory} payRates={viewing ? viewScope.full.payRates : d.payRates} nameAliases={viewing ? viewScope.full.nameAliases : d.nameAliases} localData={viewing} />}
         {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={shownUserName} userRole={u.role} presenting={presenting} isOwner={u.role === 'owner'} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={d.tipsHistory} payRates={d.payRates} nameAliases={d.nameAliases} payFocusName={payFocusName} onPayPick={setPayFocusName} localSelf={viewSelf} />}
         {tab === 'News' && (

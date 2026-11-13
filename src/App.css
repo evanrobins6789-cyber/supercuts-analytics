@@ -1837,3 +1837,53 @@
 .sched-dot-guest { background: #fff; border: 1.5px solid var(--navy); }
 .sched-dot-lost { background: var(--red); border: 1.5px solid #fff; }
 .sched-store > .link-btn { align-self: flex-start; }
+
+/* Scheduling round 3: no toggles, everything shown + printable report (2026-11-13) */
+.sched-controls select { padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; background: var(--card); }
+.sched-report-btn { margin-top: 0; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+.sched-storelink { color: var(--navy); font-weight: 600; text-decoration: underline; text-decoration-color: var(--line); }
+.sched-daycards { display: flex; flex-direction: column; gap: 10px; }
+.sched-daycard { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow); }
+.sched-daycard-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: 13.5px; }
+.sched-daycard-head > b { font-size: 16px; color: var(--navy); min-width: 100px; }
+.sched-daycard-head .sched-hot { color: #B5562A; } .sched-daycard-head .sched-cool { color: #1F5FBF; }
+.sched-ok { margin: 0; font-size: 13.5px; }
+.sched-upflat { border-top: 1px dashed var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 5px; }
+.sched-upflat > p { margin: 0; font-size: 13.5px; }
+.sched-cutline { font-size: 12.5px !important; color: var(--ink-soft); line-height: 1.5; }
+.sched-advice-sm li { font-size: 12.5px; padding: 5px 8px; }
+.report-overlay { position: fixed; inset: 0; z-index: 1000; background: #E9EDF2; overflow: auto; }
+.report-bar { position: sticky; top: 0; display: flex; gap: 12px; align-items: center; padding: 10px 16px; background: #fff; border-bottom: 1px solid var(--line); z-index: 1; }
+.report-bar .btn-primary { margin: 0; }
+.report { max-width: 900px; margin: 16px auto; display: flex; flex-direction: column; gap: 16px; }
+.report-page, .report-foot { background: #fff; padding: 28px 32px; border-radius: 6px; box-shadow: var(--shadow); color: #1b2430; }
+.report h1 { margin: 0; font-size: 24px; color: var(--navy); }
+.report h2 { font-size: 18px; color: var(--navy); margin: 18px 0 8px; }
+.report h3 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: #5b6676; margin: 16px 0 6px; }
+.report-dl { font-weight: 400; color: #5b6676; font-size: 15px; }
+.report-sub { margin: 4px 0 14px; color: #5b6676; font-size: 13px; }
+.report-note { font-size: 12px; color: #5b6676; margin: 6px 0; line-height: 1.45; }
+.report-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.report-cards > div { border: 1px solid #DDE3EA; border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; }
+.report-cards span { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #5b6676; }
+.report-cards strong { font-size: 20px; color: var(--navy); }
+.report-cards em { font-style: normal; font-size: 11px; color: #5b6676; }
+.report-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.report-table th { text-align: left; background: #1F3A5F; color: #fff; padding: 5px 6px; font-weight: 600; }
+.report-table td { padding: 5px 6px; border-bottom: 1px solid #E3E8EE; vertical-align: top; }
+.report-table td.report-wrap { min-width: 220px; }
+.report .sched-advice li { font-size: 12.5px; padding: 6px 9px; }
+.report .sched-heat-wrap { box-shadow: none; border: 1px solid #DDE3EA; overflow: visible; }
+@media print {
+  @page { size: letter; margin: 0.45in; }
+  body * { visibility: hidden; }
+  .report-overlay, .report-overlay * { visibility: visible; }
+  .report-overlay { position: absolute; inset: 0 auto auto 0; width: 100%; background: #fff; overflow: visible; }
+  .no-print { display: none !important; }
+  .report { margin: 0; max-width: none; gap: 0; }
+  .report-page, .report-foot { box-shadow: none; padding: 0; border-radius: 0; }
+  .report-page { break-after: page; }
+  .report * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .report-table tr, .report .sched-advice li { break-inside: avoid; }
+}
+.report-table td.report-nowrap { white-space: nowrap; }
