@@ -35,7 +35,7 @@ import { buildPayBreakdown, buildCoaching } from './payCoach';
 import { TabMenu } from './TabMenu';
 import { FocusStoresTab, focusStoresContext } from './focusStores';
 import { SchedulingTab, parseShiftFile, mergeShiftMonth, analyzeSchedules, schedulingContext, lastWorkedDate } from './scheduling';
-import { parseAppointmentsFile, classifyAppointments, mergeApptMonth, apptMonths, analyzeAppointments, appointmentsContext } from './appointments';
+import { parseAppointmentsFile, classifyAppointments, mergeApptMonth, apptMonths, analyzeAppointments, appointmentsContext, lostForSchedules } from './appointments';
 import { CouponsTab, couponsContext, couponPresets } from './coupons';
 import { CollectiveGoalBars } from './CollectiveGoalBars';
 import { collectiveGoal, goalPace, goalHeat, GIFT_CARD_GOAL_PERIODS, giftCardPeriodFor, giftCardPeriodGoal, periodThrough, periodPace } from './goalProgress';
@@ -12948,8 +12948,11 @@ export default function App() {
     if (!latest) return '';
     const dt = new Date(`${latest}T12:00:00`); dt.setDate(dt.getDate() - 27);
     const start = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-    const sched = analyzeSchedules({ shiftHistory: d.shiftHistory, start, end: latest, salesFor: schedSalesFor });
-    // Lost guests (Appointments report) for any file overlapping the same 4 weeks.
+    // Lost guests (Appointments report) for any file overlapping the same 4
+    // weeks: first by weekday so no cuts are suggested on days losing guests,
+    // then again against the schedule result.
+    const lost = d.apptHistory ? lostForSchedules(analyzeAppointments({ apptHistory: d.apptHistory, start, end: latest, cutsFor: schedCutsFor })) : null;
+    const sched = analyzeSchedules({ shiftHistory: d.shiftHistory, start, end: latest, salesFor: schedSalesFor, lost });
     const appt = d.apptHistory ? analyzeAppointments({ apptHistory: d.apptHistory, start, end: latest, cutsFor: schedCutsFor, sched, shiftHistory: d.shiftHistory }) : null;
     return schedulingContext(sched, schedStoreName) + appointmentsContext(appt, schedStoreName);
   };

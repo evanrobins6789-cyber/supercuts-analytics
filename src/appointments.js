@@ -26,7 +26,7 @@ import { guestKey } from './lossPrevention';
 // shift_history (src/scopeFilter.js). Guest names are never stored:
 //   { [isoDate]: { [code]: [[minuteOfDay, status, flags], ...] },        ← C N W F V
 //     ['_r:' + start + '_' + end]: { [code]: totals } }                   ← every row, plus `d`: dates checked against sales
-//   flags: 1 booked in the app, 2 asked for a specific stylist, 4 first visit
+//   flags: 1 booked in the app, 2 asked for a specific stylist, 4 first visit, 8 at the door (lost rows)
 // F rows with names (stylist, who deleted, times) go to lp_appt_YYYY-MM in
 // the owner-only loss_prevention table instead.
 
@@ -45,7 +45,14 @@ function stamp(t) {
 const isoOf = t => { const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(String(t || '').trim()); return m ? `${m[3]}-${pad(m[1])}-${pad(m[2])}` : null; };
 const headerDate = s => { const m = /(\d{1,2})\s+([A-Za-z]{3})\w*\s+(\d{4})/.exec(s || ''); return m && MONTHS[m[2].toLowerCase()] ? `${m[3]}-${pad(MONTHS[m[2].toLowerCase()])}-${pad(m[1])}` : null; };
 const durMin = t => { const m = /^(\d+):(\d\d)$/.exec(String(t || '').trim()); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
-export const emptyTotals = () => ({ C: 0, N: 0, W: 0, F: 0, S: 0, X: 0, U: 0, V: 0, wait: 0, app: 0, spec: 0, first: 0, n: 0, d: [] });
+// Minutes from when the row was last changed (cancelled / marked) to the
+// appointment's start: negative = after the start time.
+const absMin = st => (st ? Date.UTC(...st.date.split('-').map((v, i) => (i === 1 ? Number(v) - 1 : Number(v)))) / 60000 + st.min : null);
+// "At the door": the guest checked in, or it was cancelled/marked within this
+// many minutes of the appointment time or after it. The stylist's label
+// (cancelled / no-show / walked out) is a judgment call; the timing isn't.
+export const DOOR_MINUTES = 60;
+export const emptyTotals = () => ({ C: 0, N: 0, W: 0, F: 0, S: 0, X: 0, U: 0, V: 0, door: 0, wait: 0, app: 0, spec: 0, first: 0, n: 0, d: [] });
 
 // Reads the file into plain rows (in memory only; names never saved).
 export function parseAppointmentsGrid(grid) {
@@ -73,10 +80,13 @@ export function parseAppointmentsGrid(grid) {
     const aEnd = stamp(get(row, 'actual endtime'));
     const date = isoOf(get(row, 'appointment date')) || startAt?.date || checkin?.date || null;
     if (!date) continue;
+    const modAt = stamp(get(row, 'modified on'));
+    const lead = startAt && modAt ? absMin(startAt) - absMin(modAt) : null;
     rows.push({
       code, date, status: status.toLowerCase(), reason: get(row, 'reason'),
       guest: guestKey(get(row, 'guest name')),
       start: startAt?.min ?? null, checkin: checkin?.min ?? null, aStart: aStart?.min ?? null, aEnd: aEnd?.min ?? null,
+      door: !!checkin || (lead != null && lead <= DOOR_MINUTES),
       mins: aStart && aEnd ? Math.max(0, aEnd.min - aStart.min) : durMin(get(row, 'actual duration')),
       stylist: get(row, 'stylist'), by: get(row, 'modified by'), service: get(row, 'service name'),
       flags: (/clientapp/i.test(get(row, 'booking source')) ? 1 : 0) | (/specific/i.test(get(row, 'request type')) ? 2 : 0) | (/^y/i.test(get(row, 'first visit')) ? 4 : 0),
@@ -119,13 +129,16 @@ export function classifyAppointments(parsed, salesFor) {
     else if (r.status === 'no show' && !/cancel/i.test(r.reason)) s = 'N';
     else s = 'C';
     t[s]++;
-    if (s === 'W' && /long wait/i.test(r.reason)) t.wait++;
+    if (/long wait/i.test(r.reason)) t.wait++;
     if (s !== 'F') {
       if (r.flags & 1) t.app++;
       if (r.flags & 2) t.spec++;
       if (r.flags & 4) t.first++;
+      if (r.door) t.door++;
     }
-    push(r, s, s === 'F' ? r.aStart : s === 'W' ? (r.checkin ?? r.start) : (r.start ?? r.checkin));
+    const fl = r.flags | (s !== 'F' && r.door ? 8 : 0);
+    const at = s === 'F' ? r.aStart : s === 'W' ? (r.checkin ?? r.start) : (r.start ?? r.checkin);
+    if (at != null) ((days[r.date] = days[r.date] || {})[r.code] = days[r.date][r.code] || []).push([at, s, fl]);
     if (s === 'F') ((lp[r.date] = lp[r.date] || {})[r.code] = lp[r.date][r.code] || []).push([r.stylist, r.by, r.service, r.checkin, r.aStart, r.aEnd, r.mins ?? 0]);
   });
   // Dates each store had sales guest data for, across the whole file range
@@ -166,7 +179,6 @@ export function mergeApptMonth(existing, c, month) {
 
 // ─── Analysis ───────────────────────────────────────────────────────────────
 const HOURS = 24;
-const LOST_KEYS = ['C', 'N', 'W'];
 const isLost = s => s === 'C' || s === 'N' || s === 'W';
 const datesBetween = (a, b) => { const out = []; const d = new Date(`${a}T12:00:00`); const e = new Date(`${b}T12:00:00`); while (d <= e) { out.push(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`); d.setDate(d.getDate() + 1); } return out; };
 const weekdayOf = iso => new Date(`${iso}T12:00:00`).getDay();
@@ -200,7 +212,8 @@ function pearson(a, b) {
 // [start, end] (whole range). Rates are per 100 cuts over the store-days that
 // were checked against sales (`d`), so unchecked days don't dilute them.
 // sched: analyzeSchedules() result for busy % / time alone; shiftHistory for
-// who was on at the moment.
+// who was on at the moment. Findings are plain text (no icons) so the PDF
+// report can print them as data.
 export function analyzeAppointments({ apptHistory, start, end, cutsFor, sched = null, shiftHistory = null, codes = null }) {
   const ranges = Object.entries(apptHistory || {}).filter(([k]) => k.startsWith('_r:')).map(([k, v]) => {
     const [a, b] = k.slice(3).split('_');
@@ -215,8 +228,8 @@ export function analyzeAppointments({ apptHistory, start, end, cutsFor, sched = 
   const st = code => (stores[code] = stores[code] || {
     code, ...emptyTotals(), d: new Set(), cuts: 0,
     heat: { V: Array.from({ length: 7 }, () => new Array(HOURS).fill(0)), L: Array.from({ length: 7 }, () => new Array(HOURS).fill(0)) },
-    daysByWd: new Array(7).fill(0), timedLost: 0,
-    at: [0, 0, 0, 0], openAt: [0, 0, 0, 0], lostByWd: new Array(7).fill(0),
+    daysByWd: new Array(7).fill(0), cutsByWd: new Array(7).fill(0), lostByWd: new Array(7).fill(0), doorByWd: new Array(7).fill(0),
+    timedLost: 0, at: [0, 0, 0, 0], openAt: [0, 0, 0, 0],
   });
   ranges.forEach(r => Object.entries(r.totals || {}).forEach(([code, t]) => {
     if (!keep(code)) return;
@@ -226,15 +239,18 @@ export function analyzeAppointments({ apptHistory, start, end, cutsFor, sched = 
   }));
   const checkedDates = new Set();
   Object.values(stores).forEach(s => {
-    s.d.forEach(d => { s.cuts += cutsFor ? (cutsFor(s.code, d) || 0) : 0; s.daysByWd[weekdayOf(d)]++; checkedDates.add(d); });
+    s.d.forEach(d => {
+      const c = cutsFor ? (cutsFor(s.code, d) || 0) : 0;
+      const wd = weekdayOf(d);
+      s.cuts += c; s.cutsByWd[wd] += c; s.daysByWd[wd]++; checkedDates.add(d);
+    });
   });
 
-  // Timed rows on checked store-days: heat by weekday × hour, by hour, by
-  // weekday, and who was on at that moment.
-  const byHour = { L: new Array(HOURS).fill(0), W: new Array(HOURS).fill(0) };
+  // Timed rows on checked store-days.
+  const byHour = new Array(HOURS).fill(0);
   const lostByWd = new Array(7).fill(0), cutsByWd = new Array(7).fill(0);
-  const atCount = { L: [0, 0, 0, 0], V: [0, 0, 0, 0], W: [0, 0, 0, 0] };
-  Object.values(stores).forEach(s => s.d.forEach(d => { cutsByWd[weekdayOf(d)] += cutsFor ? (cutsFor(s.code, d) || 0) : 0; }));
+  const atDoor = [0, 0, 0, 0], atVisit = [0, 0, 0, 0];
+  Object.values(stores).forEach(s => s.cutsByWd.forEach((c, wd) => { cutsByWd[wd] += c; }));
   checkedDates.forEach(d => {
     const wd = weekdayOf(d);
     Object.entries((apptHistory || {})[d] || {}).forEach(([code, recs]) => {
@@ -242,17 +258,16 @@ export function analyzeAppointments({ apptHistory, start, end, cutsFor, sched = 
       if (!keep(code) || !s || !s.d.has(d)) return;
       const shifts = shiftHistory?.[d]?.[code];
       const worked = shifts && shifts.some(r => r[5] > 0);
-      recs.forEach(([min, status]) => {
+      recs.forEach(([min, status, flags]) => {
         const h = Math.floor(min / 60);
         if (h < 0 || h >= HOURS) return;
-        if (status === 'V') { s.heat.V[wd][h]++; if (worked) atCount.V[Math.min(3, onAt(shifts, min))]++; return; }
+        if (status === 'V') { s.heat.V[wd][h]++; if (worked) atVisit[Math.min(3, onAt(shifts, min))]++; return; }
         if (!isLost(status)) return;
-        s.heat.L[wd][h]++; byHour.L[h]++; lostByWd[wd]++; s.timedLost++; s.lostByWd[wd]++;
-        if (status === 'W') byHour.W[h]++;
-        if (worked) {
-          const n = Math.min(3, onAt(shifts, min));
-          if (status !== 'C') { atCount.L[n]++; s.at[n]++; } // a cancellation was made ahead, so who was on then says little
-          if (status === 'W') atCount.W[n]++;
+        s.heat.L[wd][h]++; byHour[h]++; lostByWd[wd]++; s.lostByWd[wd]++; s.timedLost++;
+        if (flags & 8) {
+          s.doorByWd[wd]++;
+          // Who was on when an at-the-door guest was lost (whatever the label).
+          if (worked) { const n = Math.min(3, onAt(shifts, min)); atDoor[n]++; s.at[n]++; }
         }
       });
     });
@@ -260,7 +275,8 @@ export function analyzeAppointments({ apptHistory, start, end, cutsFor, sched = 
   Object.values(stores).forEach(s => {
     ['V', 'L'].forEach(k => s.heat[k].forEach((row, wd) => { const n = s.daysByWd[wd] || 1; row.forEach((v, h) => { row[h] = v / n; }); }));
     s.lost = s.C + s.N + s.W;
-    s.per100 = s.cuts > 0 ? { C: (s.C / s.cuts) * 100, N: (s.N / s.cuts) * 100, W: (s.W / s.cuts) * 100, all: (s.lost / s.cuts) * 100 } : null;
+    s.ahead = s.lost - s.door;
+    s.per100 = s.cuts > 0 ? { C: (s.C / s.cuts) * 100, N: (s.N / s.cuts) * 100, W: (s.W / s.cuts) * 100, door: (s.door / s.cuts) * 100, ahead: (s.ahead / s.cuts) * 100, all: (s.lost / s.cuts) * 100 } : null;
   });
 
   const list = Object.values(stores);
@@ -269,7 +285,8 @@ export function analyzeAppointments({ apptHistory, start, end, cutsFor, sched = 
   const company = { cuts };
   Object.keys(emptyTotals()).forEach(k => { if (k !== 'd') company[k] = sum(k); });
   company.lost = company.C + company.N + company.W;
-  company.per100 = cuts > 0 ? { C: (company.C / cuts) * 100, N: (company.N / cuts) * 100, W: (company.W / cuts) * 100, all: (company.lost / cuts) * 100 } : null;
+  company.ahead = company.lost - company.door;
+  company.per100 = cuts > 0 ? { C: (company.C / cuts) * 100, N: (company.N / cuts) * 100, W: (company.W / cuts) * 100, door: (company.door / cuts) * 100, ahead: (company.ahead / cuts) * 100, all: (company.lost / cuts) * 100 } : null;
   const hasVisits = company.V > 0;
 
   // Share of open time at each headcount on the same store-days.
@@ -286,47 +303,37 @@ export function analyzeAppointments({ apptHistory, start, end, cutsFor, sched = 
   const pct = v => `${Math.round(v * 100)}%`;
   const fmt1 = v => v.toFixed(1);
   const marked = company.lost + company.F + company.S + company.X;
-  if (marked) {
-    findings.push({ kind: 'info', text: `Of ${marked.toLocaleString()} appointments marked cancelled, no-show or deleted, ${company.S.toLocaleString()} (${pct(company.S / marked)}) were serviced at that store the same day anyway (mostly ticket edits) and ${company.X.toLocaleString()} were marked incorrect, duplicate or test. Those aren't counted.${company.U ? ` ${company.U.toLocaleString()} more couldn't be checked (no Sales-Accrual guest names for those days) and are left out too.` : ''}` });
-  }
+  if (marked) findings.push({ kind: 'info', text: `${marked.toLocaleString()} appointments were marked cancelled, no-show or deleted. Not counted as lost: ${company.S.toLocaleString()} (${pct(company.S / marked)}) where the guest was serviced at that store the same day, and ${company.X.toLocaleString()} marked incorrect, duplicate or test.${company.U ? ` ${company.U.toLocaleString()} couldn't be checked (no Sales-Accrual guest names for those days) and are left out.` : ''}` });
   if (company.per100) {
-    findings.push({ kind: 'total', text: `Real lost guests per 100 cuts: ${fmt1(company.per100.C)} cancelled, ${fmt1(company.per100.N)} no-shows, ${fmt1(company.per100.W)} walked out (${company.lost.toLocaleString()} in all).${company.wait ? ` ${company.wait} walkouts were marked "long wait".` : ''}` });
+    findings.push({ kind: 'total', text: `Lost guests: ${company.lost.toLocaleString()}, ${fmt1(company.per100.all)} per 100 cuts. At the door (checked in, or cancelled/marked within ${DOOR_MINUTES} minutes of the appointment or after it): ${company.door.toLocaleString()} (${pct(company.door / (company.lost || 1))}). Cancelled further ahead: ${company.ahead.toLocaleString()}.` });
+    findings.push({ kind: 'info', text: `As entered by staff: ${company.C.toLocaleString()} cancelled, ${company.N.toLocaleString()} no-show, ${company.W.toLocaleString()} walked out; ${company.wait} with the reason "long wait". The labels are each stylist's call, so the timing above is the better split.` });
   }
-  if (company.F) findings.push({ kind: 'payroll', text: `${company.F} service${company.F === 1 ? ' was' : 's were'} started, then deleted, with no sale for that guest that day. They're listed on the Loss Prevention tab.` });
-  // When.
-  const lostTimed = byHour.L.reduce((a, b) => a + b, 0);
+  if (company.F) findings.push({ kind: 'payroll', text: `${company.F} services were started, then deleted, with no sale for that guest that day (Loss Prevention tab).` });
+  const lostTimed = byHour.reduce((a, b) => a + b, 0);
   if (lostTimed >= 30) {
     let best = 0, bestH = 0;
-    for (let h = 0; h < HOURS - 2; h++) { const w = byHour.L[h] + byHour.L[h + 1] + byHour.L[h + 2]; if (w > best) { best = w; bestH = h; } }
-    findings.push({ kind: 'when', text: `Lost guests bunch up ${hourText(bestH)}–${hourText(bestH + 3)}: ${pct(best / lostTimed)} of them.${hasVisits ? '' : ' Guests come in most then too, so that alone isn\'t a problem.'}` });
+    for (let h = 0; h < HOURS - 2; h++) { const w = byHour[h] + byHour[h + 1] + byHour[h + 2]; if (w > best) { best = w; bestH = h; } }
+    findings.push({ kind: 'when', text: `Busiest stretch for lost guests: ${hourText(bestH)}–${hourText(bestH + 3)}, ${pct(best / lostTimed)} of them.` });
   }
   const wdRates = lostByWd.map((n, wd) => ({ wd, n, rate: cutsByWd[wd] > 0 ? (n / cutsByWd[wd]) * 100 : null })).filter(x => x.rate != null && cutsByWd[x.wd] >= 200);
   if (wdRates.length >= 4) {
     const avg = (wdRates.reduce((t, x) => t + x.n, 0) / wdRates.reduce((t, x) => t + cutsByWd[x.wd], 0)) * 100;
     const top = [...wdRates].sort((a, b) => b.rate - a.rate)[0];
-    const nDays = [...checkedDates].filter(d => weekdayOf(d) === top.wd).length;
-    if (top.rate >= avg * 1.2) findings.push({ kind: 'when', text: `${DAYS_LONG[top.wd]}s lose the most for the cuts done: ${fmt1(top.rate)} per 100 cuts vs ${fmt1(avg)} on an average day${nDays <= 2 ? ` (only ${nDays} ${DAYS_LONG[top.wd]}${nDays === 1 ? '' : 's'} so far)` : ''}.` });
+    if (top.rate >= avg * 1.15) findings.push({ kind: 'when', text: `${DAYS_LONG[top.wd]}s lose the most for the cuts done: ${fmt1(top.rate)} per 100 cuts vs ${fmt1(avg)} on an average day.` });
   }
-  // Staffing at the moment (walkouts first: they're the ones staffing can fix).
+  // Staffing when at-the-door guests were lost.
+  const doorTot = atDoor.reduce((a, b) => a + b, 0);
   const openTot = openAt.reduce((a, b) => a + b, 0);
-  const useW = atCount.W.reduce((a, b) => a + b, 0) >= 30;
-  const at = useW ? atCount.W : atCount.L;
-  const atTot = at.reduce((a, b) => a + b, 0);
-  const what = useW ? 'walkouts' : 'no-shows and walkouts';
-  if (atTot >= 30 && openTot) {
-    if (hasVisits && atCount.V.reduce((a, b) => a + b, 0) >= 30) {
-      const rate = i => (at[i] + atCount.V[i] > 0 ? at[i] / (at[i] + atCount.V[i]) : null);
+  if (doorTot >= 30 && openTot) {
+    if (hasVisits && atVisit.reduce((a, b) => a + b, 0) >= 30) {
+      const rate = i => (atDoor[i] + atVisit[i] > 0 ? atDoor[i] / (atDoor[i] + atVisit[i]) : null);
       const r1 = rate(1), r3 = rate(3);
-      if (r1 != null && r3 != null) findings.push({ kind: r1 > r3 * 1.2 ? 'staff' : 'info', text: `Of guests who came in with one person on, ${pct(r1)} became ${what}, vs ${pct(r3)} with 3+ on.${r1 > r3 * 1.2 ? ' Time alone is costing guests.' : ''}` });
+      if (r1 != null && r3 != null) findings.push({ kind: 'staff', text: `Guests lost at the door: ${pct(r1)} of arrivals when one person was on, ${pct(r3)} with 3+ on.` });
     } else {
-      const s1 = at[1] / atTot, o1 = openAt[1] / openTot, s0 = at[0] / atTot;
-      findings.push({ kind: s1 > o1 * 1.2 ? 'staff' : 'info', text: s1 > o1 * 1.2
-        ? `${pct(s1)} of ${what} came while one person was on, though one person is on only ${pct(o1)} of open hours. Time alone looks like it's losing guests.`
-        : `${pct(s1)} of ${what} came while one person was on (one person is on ${pct(o1)} of open hours), so time alone doesn't stand out.` });
-      if (s0 >= 0.03) findings.push({ kind: 'staff', text: `${pct(s0)} came while nobody was clocked in.` });
+      const s1 = atDoor[1] / doorTot, o1 = openAt[1] / openTot, s0 = atDoor[0] / doorTot;
+      findings.push({ kind: 'staff', text: `Guests lost at the door with one person on: ${pct(s1)}. Share of open hours with one person on: ${pct(o1)}.${s0 >= 0.03 ? ` With nobody clocked in: ${pct(s0)}.` : ''}` });
     }
   }
-  // Store-level links.
   if (sched) {
     const pts = list.filter(s => s.cuts >= 50 && s.per100 && sched.stores[s.code] && sched.stores[s.code].busy != null);
     if (pts.length >= 10) {
@@ -334,40 +341,50 @@ export function analyzeAppointments({ apptHistory, start, end, cutsFor, sched = 
         ['Busier stores (higher busy %)', s => sched.stores[s.code].busy],
         ['Stores with more time with one person alone', s => sched.stores[s.code].soloPerWeek],
         ['Stores with more staff hours a week', s => sched.stores[s.code].hoursPerWeek],
-        ['Stores with more bookings made in the app', s => (s.lost ? s.app / s.lost : 0)],
       ];
       const links = [];
-      [['W', 'walkouts'], ['N', 'no-shows'], ['C', 'cancellations']].forEach(([k, label]) => tests.forEach(([whatX, fn]) => {
+      [['door', 'guests lost at the door'], ['all', 'lost guests']].forEach(([k, label]) => tests.forEach(([who, fn]) => {
         const r = pearson(pts.map(s => s.per100[k]), pts.map(fn));
-        if (r != null && Math.abs(r) >= 0.3) links.push({ r, text: `${whatX} have ${r > 0 ? 'more' : 'fewer'} ${label} per cut (r = ${r.toFixed(2)}, ${Math.abs(r) >= 0.5 ? 'a clear link' : 'a modest link'}).` });
+        if (r != null && Math.abs(r) >= 0.3) links.push({ r, text: `${who} have ${r > 0 ? 'more' : 'fewer'} ${label} per cut (r = ${r.toFixed(2)}, ${Math.abs(r) >= 0.5 ? 'clear' : 'modest'}).` });
       }));
       links.sort((a, b) => Math.abs(b.r) - Math.abs(a.r)).slice(0, 3).forEach(l => findings.push({ kind: 'link', text: l.text }));
-      if (!links.length) findings.push({ kind: 'info', text: `Across ${pts.length} stores, no strong link between lost guests and busy %, time alone or staff hours (all |r| < 0.3).` });
+      if (!links.length) findings.push({ kind: 'info', text: `Across ${pts.length} stores: no strong link between lost guests and busy %, time alone or staff hours (all |r| < 0.3).` });
     }
   }
-  if (company.lost >= 50) findings.push({ kind: 'who', text: `Of the real lost guests, ${pct(company.app / company.lost)} booked in the app, ${pct(company.spec / company.lost)} asked for a specific stylist, ${pct(company.first / company.lost)} were first visits.` });
-  const worst = list.filter(s => s.cuts >= 50 && s.per100).sort((a, b) => b.per100.all - a.per100.all).slice(0, 3);
-  if (worst.length && company.per100) findings.push({ kind: 'stores', text: `Most lost per 100 cuts: ${worst.map(s => `{${s.code}} ${fmt1(s.per100.all)}`).join(', ')} (company ${fmt1(company.per100.all)}).` });
+  if (company.lost >= 50) findings.push({ kind: 'who', text: `Lost guests who booked in the app: ${pct(company.app / company.lost)}. Asked for a specific stylist: ${pct(company.spec / company.lost)}. First visit: ${pct(company.first / company.lost)}.` });
 
-  return { from, to, stores, company, findings, hasVisits, byHour, timedLost: lostTimed };
+  return { from, to, stores, company, findings, hasVisits, timedLost: lostTimed, companyRateByWd: lostByWd.map((n, wd) => (cutsByWd[wd] > 0 ? (n / cutsByWd[wd]) * 100 : null)) };
 }
 
-// What to say about one store.
+// For analyzeSchedules: each store's lost guests by weekday, so hours aren't
+// cut on a day that's losing guests, and lost guests count toward the hours a
+// day needs. rate = lost per 100 cuts that weekday (null if too little data).
+export function lostForSchedules(a) {
+  if (!a || !a.company.per100) return null;
+  const stores = {};
+  Object.values(a.stores).forEach(s => {
+    stores[s.code] = {
+      perDay: s.daysByWd.map((n, wd) => (n ? s.lostByWd[wd] / n : 0)),
+      rate: s.daysByWd.map((n, wd) => (n >= 2 && s.cutsByWd[wd] >= 30 ? (s.lostByWd[wd] / s.cutsByWd[wd]) * 100 : null)),
+    };
+  });
+  return { stores, companyRate: a.company.per100.all };
+}
+
+// What to say about one store (plain text).
 export function storeApptFindings(a, code) {
   const s = a?.stores?.[code];
   if (!s || !s.per100) return [];
   const out = [];
   const c = a.company.per100;
-  const vs = (v, base) => (base ? (v >= base * 1.25 ? 'well above' : v <= base * 0.75 ? 'well below' : 'about the same as') : '');
-  out.push({ kind: 'total', text: `${s.lost} lost guests for ${s.cuts.toLocaleString()} cuts: ${s.per100.C.toFixed(1)} cancelled, ${s.per100.N.toFixed(1)} no-shows, ${s.per100.W.toFixed(1)} walked out per 100 cuts, ${vs(s.per100.all, c.all)} the company's ${c.all.toFixed(1)}.${s.S ? ` (${s.S} more were serviced the same day and aren't counted.)` : ''}` });
-  if (s.wait) out.push({ kind: 'staff', text: `${s.wait} walked out over a long wait.` });
-  if (s.F) out.push({ kind: 'payroll', text: `${s.F} service${s.F === 1 ? '' : 's'} started then deleted with no sale (see Loss Prevention).` });
+  out.push({ kind: 'total', text: `Lost guests: ${s.lost} for ${s.cuts.toLocaleString()} cuts, ${s.per100.all.toFixed(1)} per 100 (company ${c.all.toFixed(1)}). At the door: ${s.door}. Cancelled ahead: ${s.ahead}. As entered: ${s.C} cancelled, ${s.N} no-show, ${s.W} walked out${s.wait ? `, ${s.wait} "long wait"` : ''}. Not counted: ${s.S} serviced the same day.` });
+  if (s.F) out.push({ kind: 'payroll', text: `${s.F} service${s.F === 1 ? '' : 's'} started then deleted with no sale (Loss Prevention).` });
   if (s.timedLost >= 8) {
     const cells = [];
     s.heat.L.forEach((row, wd) => row.forEach((v, h) => { if (v > 0) cells.push({ wd, h, v }); }));
     cells.sort((x, y) => y.v - x.v);
     const top = cells.slice(0, 2).map(x => `${DAYS_LONG[x.wd]}s ${hourText(x.h)}`);
-    if (top.length) out.push({ kind: 'when', text: `Most often around ${top.join(' and ')}.` });
+    if (top.length) out.push({ kind: 'when', text: `Most often: ${top.join(', ')}.` });
   }
   return out;
 }
@@ -375,10 +392,10 @@ export function storeApptFindings(a, code) {
 // ─── Tilly ──────────────────────────────────────────────────────────────────
 export function appointmentsContext(a, storeName) {
   if (!a) return '';
-  const lines = ['', `LOST GUESTS (Appointments report, ${a.from} to ${a.to}). Rows marked cancelled/no-show/deleted were checked against Sales-Accrual: if the same guest had a sale at that store that day (usually a ticket edit) or the row was marked incorrect/duplicate/test, it is NOT counted. "Walked out" = a walked-out reason, or checked in then deleted with no sale. Times are the appointment start (check-in for walkouts):`];
-  a.findings.forEach(f => lines.push(`- ${f.text.replace(/\{(\d+)\}/g, (_, c) => storeName(c))}`));
+  const lines = ['', `LOST GUESTS (Appointments report, ${a.from} to ${a.to}). Rows marked cancelled/no-show/deleted were checked against Sales-Accrual: if the same guest had a sale at that store that day (usually a ticket edit) or the row was marked incorrect/duplicate/test, it is NOT counted. The cancelled/no-show/walked-out labels are each stylist's call and blur together (a "cancel" can be a guest leaving over a long wait), so the better split is by timing: "at the door" = checked in, or cancelled/marked within ${DOOR_MINUTES} minutes of the appointment or after it; "ahead" = cancelled earlier. Scheduling never suggests cutting hours on a weekday where a store loses more per cut than the company average:`];
+  a.findings.forEach(f => lines.push(`- ${f.text}`));
   Object.values(a.stores).filter(s => s.per100).sort((x, y) => y.per100.all - x.per100.all).forEach(s => {
-    lines.push(`${storeName(s.code)}: ${s.C} cancelled, ${s.N} no-shows, ${s.W} walked out${s.wait ? ` (${s.wait} long wait)` : ''}, ${s.cuts} cuts (${s.per100.all.toFixed(1)} lost per 100 cuts); ${s.S} serviced anyway, ${s.F} started-then-deleted.`);
+    lines.push(`${storeName(s.code)}: ${s.lost} lost (${s.per100.all.toFixed(1)}/100 cuts; ${s.door} at the door, ${s.ahead} ahead; entered as ${s.C} cancelled, ${s.N} no-show, ${s.W} walked out${s.wait ? `, ${s.wait} long wait` : ''}), ${s.cuts} cuts, ${s.S} serviced anyway, ${s.F} started-then-deleted.`);
   });
   return lines.join('\n');
 }

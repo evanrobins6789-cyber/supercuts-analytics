@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { readWorkbookGrid } from './parser';
-import { analyzeAppointments, storeApptFindings } from './appointments';
+import { analyzeAppointments, storeApptFindings, lostForSchedules, DOOR_MINUTES } from './appointments';
 
 // ─── Scheduling tab ─────────────────────────────────────────────────────────
 // Hours, coverage gaps and payroll, from the Attendance report's shift times
@@ -223,7 +223,12 @@ export function upcomingDates(shiftHistory, end, today = localISO(new Date())) {
 
 // One upcoming day for one store, judged against that weekday's history `w`.
 // need = hours that day should take at the busy target: the usual serviced
-// hours for that weekday (or what's already booked, if more) ÷ target.
+// hours for that weekday plus the guests it usually loses (GUEST_HOURS each),
+// or what's already booked if more, ÷ target. A held weekday (losing more
+// guests per cut than the company) never gets a cut plan.
+// Hours of stylist time one lost guest would have taken: 20 minutes, the
+// Appointments report's default Supercut duration (display choice).
+const GUEST_HOURS = 1 / 3;
 const LIGHT_DAY = 0.5; // scheduled under half a usual day: a holiday or short day, not judged (display choice)
 function upcomingDay(date, recs, w, target, holiday = false) {
   const sched = recs.map(schedInterval);
@@ -235,10 +240,10 @@ function upcomingDay(date, recs, w, target, holiday = false) {
   const close = ivs.length ? Math.max(...ivs.map(s => s[1])) : null;
   const hasHistory = !!(w && w.n);
   const light = holiday || (hasHistory && w.actual > 0 && schedHours < w.actual * LIGHT_DAY);
-  const expected = hasHistory ? Math.max(w.serviced, booked) : null;
+  const expected = hasHistory ? Math.max(w.serviced + (w.lostDay || 0) * GUEST_HOURS, booked) : null;
   const need = expected != null && target ? expected / target : null;
   const over = need != null && !light ? schedHours - need : null;
-  const plan = over != null && over >= 0.5 ? safeTrimPlan(recs, over, { scheduled: true }) : null;
+  const plan = over != null && over >= 0.5 && !(w && w.hold) ? safeTrimPlan(recs, over, { scheduled: true }) : null;
   // Short only when under both what the day needs and what it usually gets:
   // a store busier than the target isn't told to add past its usual hours
   // (the weekday advice already says it can use more).
@@ -247,7 +252,7 @@ function upcomingDay(date, recs, w, target, holiday = false) {
   const aloneRuns = open != null ? runsWhere(counts, open, close, c => c === 1) : [];
   const zeroRuns = open != null ? runsWhere(counts, open, close, c => c === 0) : [];
   const aloneHours = aloneRuns.reduce((t, [a, b]) => t + ((b - a) * SLOT) / 60, 0);
-  return { date, wd: weekdayOf(date), recs, counts, schedHours, booked, people: ivs.length, open, close, light, holiday, expected, need, over, plan, short, aloneRuns, zeroRuns, aloneHours };
+  return { date, wd: weekdayOf(date), recs, counts, schedHours, booked, people: ivs.length, open, close, light, holiday, expected, need, over, plan, short, aloneRuns, zeroRuns, aloneHours, hold: !!(w && w.hold) };
 }
 
 // What to do on one weekday, in plain words. History first (how that day
@@ -256,6 +261,9 @@ function weekdayAdvice(st, w) {
   const out = [];
   const day = WEEKDAYS_LONG[w.wd];
   const t = st.target;
+  if (w.hold) {
+    out.push({ kind: 'grow', text: `Hold hours on ${day}s: losing ${w.lostRate.toFixed(1)} guests per 100 cuts (company ${w.companyRate.toFixed(1)}), ${w.lostDay.toFixed(1)} a day. No cuts suggested.` });
+  }
   if (w.n && t != null) {
     const hot = w.busy != null && w.busy >= t + BUSY_GAP_PTS;
     if (hot && w.soloHours >= 0.5) {
@@ -291,6 +299,8 @@ function upcomingAdvice(u, w, t) {
   if (u.plan && u.plan.cuts.length) {
     const rest = u.over - u.plan.hours;
     out.push({ kind: 'trim', text: `${hrs(u.schedHours)} scheduled; a usual ${WEEKDAYS_LONG[u.wd]} needs about ${hrs(u.need)} at ${pct(t)} busy. Cut ${hrs(u.plan.hours)} as below${rest >= 0.5 ? ` (the other ${hrs(rest)} can't come off without leaving someone alone)` : ''}.` });
+  } else if (u.over != null && u.over >= 0.5 && u.hold) {
+    out.push({ kind: 'info', text: `${hrs(u.schedHours)} scheduled vs about ${hrs(u.need)} usually needed. Not cut: ${WEEKDAYS_LONG[u.wd]}s lose more guests than average.` });
   } else if (u.over != null && u.over >= 0.5) {
     out.push({ kind: 'trim', text: `${hrs(u.schedHours)} scheduled vs about ${hrs(u.need)} needed, but no cut works without leaving someone alone or a shift under ${MIN_SHIFT_HOURS} hrs.` });
   }
@@ -312,7 +322,10 @@ function upcomingAdvice(u, w, t) {
 // shiftHistory: { date: { code: recs } }; salesFor(code, date) → $ (service + retail).
 // Returns per-store results for dates in [start, end], plus the schedule
 // still to come (dates after `end` with no clock-ins yet) judged by weekday.
-export function analyzeSchedules({ shiftHistory, start, end, salesFor, codes = null, targetBusy = null, today = undefined }) {
+// lost: lostForSchedules() from src/appointments.js (optional). Lost guests
+// count toward the hours a weekday needs, and a weekday losing more guests
+// per 100 cuts than the company is "held": no cuts suggested.
+export function analyzeSchedules({ shiftHistory, start, end, salesFor, codes = null, targetBusy = null, today = undefined, lost = null }) {
   const ahead = {};
   const aheadDates = upcomingDates(shiftHistory, end, today);
   // A date most stores aren't scheduled at all (under half the usual number
@@ -416,20 +429,28 @@ export function analyzeSchedules({ shiftHistory, start, end, salesFor, codes = n
       const serviced = ds.reduce((t, d) => t + d.serviced, 0);
       const sales = ds.reduce((t, d) => t + d.sales, 0);
       const busy = actual > 0 ? serviced / actual : null;
+      // Lost guests (Appointments report) that weekday: they count toward the
+      // hours the day needs, and a weekday losing more per 100 cuts than the
+      // company is held (no cuts).
+      const li = lost?.stores?.[st.code];
+      const lostDay = li ? li.perDay[wd] || 0 : 0;
+      const lostRate = li ? li.rate[wd] : null;
+      const hold = lostRate != null && lost.companyRate != null && lostRate > lost.companyRate;
       // Extra hours: clocked beyond what the busy target needs, capped at what
       // can be cut without leaving anyone alone (from each day's schedule).
       let extra = 0, trimmable = 0;
       ds.forEach(d => {
-        const over = st.target ? Math.max(0, d.actual - d.serviced / st.target) : 0;
+        const over = st.target ? Math.max(0, d.actual - (d.serviced + lostDay * GUEST_HOURS) / st.target) : 0;
         extra += over;
-        if (over >= 0.25) trimmable += safeTrimPlan(d.recs, over).hours;
+        if (over >= 0.25 && !hold) trimmable += safeTrimPlan(d.recs, over).hours;
       });
       const latest = ds[ds.length - 1];
-      const latestOver = st.target ? Math.max(0, latest.actual - latest.serviced / st.target) : 0;
+      const latestOver = st.target && !hold ? Math.max(0, latest.actual - (latest.serviced + lostDay * GUEST_HOURS) / st.target) : 0;
       const lateBy = {};
       ds.forEach(d => d.lateStays.forEach(l => { lateBy[l.name] = (lateBy[l.name] || 0) + l.mins; }));
       return {
         wd, n, open, close, avg, dates: ds.map(d => d.date),
+        lostDay, lostRate, hold, companyRate: lost ? lost.companyRate : null,
         callOuts: ds.flatMap(d => d.callOuts),
         lateStays: Object.entries(lateBy).map(([name, mins]) => ({ name, hours: mins / 60 })).sort((a, b) => b.hours - a.hours),
         earlyHours: ds.reduce((t, d) => t + d.earlyHours, 0),
@@ -809,48 +830,50 @@ export function reportStores(result, appt, n = 5) {
     .slice(0, n);
 }
 
-// Plain-language hours and staffing read for one store, for the report.
-export function staffingRead(st, a) {
+// Hours and staffing lines for one store in the PDF report (plain data, no icons).
+export function staffingRead(st, a, companyRate) {
   const out = [];
+  const lostHigh = companyRate != null && a.per100 && a.per100.all > companyRate;
   const atTot = a.at.reduce((x, y) => x + y, 0);
   const openTot = a.openAt.reduce((x, y) => x + y, 0);
   if (atTot >= 5 && openTot) {
     const s1 = a.at[1] / atTot, o1 = a.openAt[1] / openTot, s0 = a.at[0] / atTot;
-    out.push({ kind: s1 > o1 * 1.2 ? 'staff' : 'info', text: `${pct(s1)} of its no-shows and walkouts came while one person was on; one person is on ${pct(o1)} of its open hours. ${s1 > o1 * 1.2 ? 'Time alone looks like it\'s costing guests here.' : 'Time alone doesn\'t stand out.'}${s0 >= 0.05 ? ` ${pct(s0)} came with nobody clocked in.` : ''}` });
+    out.push(`Guests lost at the door with one person on: ${pct(s1)} (${a.at[1]} of ${atTot}). Share of its open hours with one person on: ${pct(o1)}.${s0 >= 0.05 ? ` With nobody clocked in: ${pct(s0)}.` : ''}`);
   }
   if (st.busy != null && st.target != null) {
-    if (st.busy < st.target - 0.05) out.push({ kind: 'trim', text: `Staff hours run ahead of guests: ${pct(st.busy)} busy vs the ${pct(st.target)} target. About ${hrs(st.trimPerWeek)} a week could come off without anyone working alone, so losing guests here isn't from being short on hours overall.` });
-    else if (st.busy > st.target + BUSY_GAP_PTS) out.push({ kind: 'grow', text: `Runs ${pct(st.busy)} busy vs the ${pct(st.target)} target: stylists are booked up, so guests may be cancelling or walking for lack of open times. More hours on the busiest days is the first thing to try.` });
-    else out.push({ kind: 'info', text: `${pct(st.busy)} busy, close to the ${pct(st.target)} target: overall hours fit the guests.` });
+    out.push(`Busy ${pct(st.busy)} (serviced hours ÷ clocked hours), target ${pct(st.target)}. Staff hours ${st.hoursPerWeek.toFixed(0)} a week, ${st.soloPerWeek.toFixed(1)} with one person alone${st.zeroPerWeek >= 0.5 ? `, ${st.zeroPerWeek.toFixed(1)} with nobody on` : ''}.`);
   }
-  if (st.soloPerWeek >= 5) out.push({ kind: 'staff', text: `${hrs(st.soloPerWeek)} a week with one person alone${st.zeroPerWeek >= 0.5 ? ` and ${hrs(st.zeroPerWeek)} with nobody on` : ''}.` });
+  if (lostHigh) out.push(`Losing ${a.per100.all.toFixed(1)} guests per 100 cuts vs ${companyRate.toFixed(1)} company: hold hours, no cuts.`);
+  const held = WEEK_ORDER.filter(i => st.weekdays[i].hold);
+  if (held.length) out.push(`Weekdays held (losing more per cut than the company): ${held.map(i => WEEKDAYS[i]).join(', ')}.`);
   const wd = WEEK_ORDER.map(i => ({ i, lost: a.daysByWd[i] ? a.lostByWd[i] / a.daysByWd[i] : null })).filter(x => x.lost != null);
   if (wd.length >= 3) {
     const top = [...wd].sort((x, y) => y.lost - x.lost)[0];
     const avg = wd.reduce((t, x) => t + x.lost, 0) / wd.length;
     const w = st.weekdays[top.i];
-    if (top.lost >= avg * 1.3 && top.lost >= 0.5) out.push({ kind: 'when', text: `${WEEKDAYS_LONG[top.i]}s lose the most: ${top.lost.toFixed(1)} a day vs ${avg.toFixed(1)} on its average day${w.n ? `; ${WEEKDAYS_LONG[top.i]}s run ${pct(w.busy)} busy with ${hrs(w.soloHours)} alone` : ''}.` });
+    if (top.lost >= avg * 1.3 && top.lost >= 0.5) out.push(`Most lost on ${WEEKDAYS_LONG[top.i]}s: ${top.lost.toFixed(1)} a day vs ${avg.toFixed(1)} average${w.n ? `; ${pct(w.busy)} busy, ${w.soloHours.toFixed(1)} hrs alone` : ''}.`);
   }
-  if (a.wait) out.push({ kind: 'staff', text: `${a.wait} guest${a.wait === 1 ? '' : 's'} walked out over a long wait.` });
+  if (a.wait) out.push(`Reason "long wait": ${a.wait}.`);
   if (st.upcoming.length) {
     const thru = shortDate(st.upcoming[st.upcoming.length - 1].date);
-    const cut = st.upcomingCut >= 0.5, short = st.upcomingShort >= 2;
-    if (cut && short) out.push({ kind: 'move', text: `Posted schedule through ${thru} is uneven: some days have about ${hrs(st.upcomingCut)} in all that could come off without anyone alone, other days are about ${hrs(st.upcomingShort)} short of what they usually need. Moving hours between them is the fix.` });
-    else if (cut) out.push({ kind: 'trim', text: `Posted schedule through ${thru}: about ${hrs(st.upcomingCut)} could come off without anyone alone.` });
-    else if (short) out.push({ kind: 'grow', text: `Posted schedule through ${thru} is about ${hrs(st.upcomingShort)} short of what those weekdays usually need.` });
+    const parts = [];
+    if (st.upcomingShort >= 2) parts.push(`${hrs(st.upcomingShort)} short of usual need on some days`);
+    if (st.upcomingCut >= 0.5) parts.push(`${hrs(st.upcomingCut)} over on days that aren't losing guests`);
+    if (parts.length) out.push(`Posted schedule through ${thru}: ${parts.join('; ')}.`);
   }
   return out;
 }
 
+const PlainList = ({ items }) => (items && items.length ? <ul className="report-list">{items.map((t, i) => <li key={i}>{typeof t === 'string' ? t : t.text}</li>)}</ul> : null);
+
 function StaffingReport({ result, appt, storeName, dlFor, onClose }) {
   const top = reportStores(result, appt);
-  const named = items => items.map(f => ({ ...f, text: f.text.replace(/\{(\d+)\}/g, (_, c) => storeName(c)) }));
   const c = appt.company;
   const today = new Date();
   const list = Object.values(result.stores);
-  const tot = k => list.reduce((t, s) => t + (s[k] || 0), 0);
   const allA = list.reduce((t, s) => t + s.days.reduce((x, d) => x + d.actual, 0), 0);
   const allS = list.reduce((t, s) => t + s.days.reduce((x, d) => x + d.serviced, 0), 0);
+  const heldDays = list.reduce((t, s) => t + s.weekdays.filter(w => w.hold).length, 0);
   return (
     <div className="report-overlay">
       <div className="report-bar no-print">
@@ -863,59 +886,60 @@ function StaffingReport({ result, appt, storeName, dlFor, onClose }) {
           <h1>Lost bookings &amp; staffing</h1>
           <p className="report-sub">Appointments {fmtLong(appt.from)} – {fmtLong(appt.to)} · clock-ins {fmtLong(result.start)} – {fmtLong(result.end)} · made {today.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</p>
           <div className="report-cards">
-            <div><span>Lost per 100 cuts</span><strong>{c.per100 ? c.per100.all.toFixed(1) : '—'}</strong></div>
-            <div><span>Cancelled</span><strong>{c.C.toLocaleString()}</strong></div>
-            <div><span>No-shows</span><strong>{c.N.toLocaleString()}</strong></div>
-            <div><span>Walked out</span><strong>{c.W.toLocaleString()}</strong></div>
-            <div><span>Busy %</span><strong>{pct(allA ? allS / allA : null)}</strong></div>
-            <div><span>Could cut / week</span><strong>{tot('trimPerWeek').toFixed(0)} hrs</strong></div>
+            <div><span>Lost guests</span><strong>{c.lost.toLocaleString()}</strong><em>{c.per100.all.toFixed(1)} per 100 cuts</em></div>
+            <div><span>At the door</span><strong>{c.door.toLocaleString()}</strong><em>{c.per100.door.toFixed(1)} per 100 cuts</em></div>
+            <div><span>Cancelled ahead</span><strong>{c.ahead.toLocaleString()}</strong><em>{c.per100.ahead.toFixed(1)} per 100 cuts</em></div>
+            <div><span>Serviced anyway</span><strong>{c.S.toLocaleString()}</strong><em>not counted</em></div>
+            <div><span>Busy %</span><strong>{pct(allA ? allS / allA : null)}</strong><em>serviced ÷ clocked hours</em></div>
+            <div><span>Store-weekdays held</span><strong>{heldDays}</strong><em>losing more than average, no cuts</em></div>
           </div>
-          <h2>What the numbers say</h2>
-          <AdviceList items={named(appt.findings)} />
+          <h2>Findings</h2>
+          <PlainList items={appt.findings.map(f => f.text.replace(/\{(\d+)\}/g, (_, x) => storeName(x)))} />
           <h2>The 5 stores losing the most bookings</h2>
-          <p className="report-note">Ranked by lost guests (cancelled + no-show + walked out) per 100 cuts, among stores with {REPORT_MIN_CUTS}+ cuts. Appointments where the guest was serviced at that store the same day, or marked incorrect/duplicate/test, aren't counted.</p>
           <table className="report-table">
-            <thead><tr><th>#</th><th>Store</th>{dlFor && <th>DL</th>}<th>Lost / 100 cuts</th><th>Cancelled</th><th>No-shows</th><th>Walked out</th><th>Cuts</th><th>Busy %</th><th>Alone hrs/wk</th><th>Could cut/wk</th></tr></thead>
+            <thead><tr><th>#</th><th>Store</th>{dlFor && <th>DL</th>}<th>Lost / 100 cuts</th><th>Lost</th><th>At the door</th><th>Ahead</th><th>Cuts</th><th>Busy %</th><th>Staff hrs/wk</th><th>Alone hrs/wk</th></tr></thead>
             <tbody>
               {top.map((a, i) => {
                 const st = result.stores[a.code];
                 return (
-                  <tr key={a.code}><td>{i + 1}</td><td>{storeName(a.code)}</td>{dlFor && <td>{dlFor(a.code) || '—'}</td>}<td><b>{a.per100.all.toFixed(1)}</b></td><td>{a.C}</td><td>{a.N}</td><td>{a.W}</td><td>{a.cuts.toLocaleString()}</td><td>{pct(st.busy)}</td><td>{st.soloPerWeek.toFixed(1)}</td><td>{st.trimPerWeek.toFixed(1)}</td></tr>
+                  <tr key={a.code}><td>{i + 1}</td><td>{storeName(a.code)}</td>{dlFor && <td>{dlFor(a.code) || '—'}</td>}<td><b>{a.per100.all.toFixed(1)}</b></td><td>{a.lost}</td><td>{a.door}</td><td>{a.ahead}</td><td>{a.cuts.toLocaleString()}</td><td>{pct(st.busy)}</td><td>{st.hoursPerWeek.toFixed(0)}</td><td>{st.soloPerWeek.toFixed(1)}</td></tr>
                 );
               })}
             </tbody>
           </table>
+          <p className="report-note">Ranked by lost guests per 100 cuts, stores with {REPORT_MIN_CUTS}+ cuts. Lost = marked cancelled, no-show or deleted with no sale for that guest at that store that day, excluding incorrect/duplicate/test. At the door = checked in, or cancelled/marked within {DOOR_MINUTES} minutes of the appointment time or after it. Ahead = cancelled earlier.</p>
         </section>
 
         {top.map((a, i) => {
           const st = result.stores[a.code];
           return (
             <section className="report-page" key={a.code}>
-              <h2>#{i + 1} {storeName(a.code)}{dlFor && dlFor(a.code) ? <span className="report-dl"> · {dlFor(a.code)}</span> : null}</h2>
+              <h2>{i + 1}. {storeName(a.code)}{dlFor && dlFor(a.code) ? <span className="report-dl"> · {dlFor(a.code)}</span> : null}</h2>
               <div className="report-cards">
-                <div><span>Lost per 100 cuts</span><strong>{a.per100.all.toFixed(1)}</strong><em>company {c.per100.all.toFixed(1)}</em></div>
-                <div><span>Cancelled</span><strong>{a.C}</strong><em>{a.per100.C.toFixed(1)} / 100 cuts</em></div>
-                <div><span>No-shows</span><strong>{a.N}</strong><em>{a.per100.N.toFixed(1)} / 100 cuts</em></div>
-                <div><span>Walked out</span><strong>{a.W}</strong><em>{a.wait ? `${a.wait} long wait` : `${a.per100.W.toFixed(1)} / 100 cuts`}</em></div>
+                <div><span>Lost / 100 cuts</span><strong>{a.per100.all.toFixed(1)}</strong><em>company {c.per100.all.toFixed(1)}</em></div>
+                <div><span>At the door</span><strong>{a.door}</strong><em>{a.per100.door.toFixed(1)} / 100 cuts</em></div>
+                <div><span>Cancelled ahead</span><strong>{a.ahead}</strong><em>{a.per100.ahead.toFixed(1)} / 100 cuts</em></div>
                 <div><span>Busy %</span><strong>{pct(st.busy)}</strong><em>target {pct(st.target)}</em></div>
-                <div><span>Staff hrs / week</span><strong>{st.hoursPerWeek.toFixed(0)}</strong><em>{st.soloPerWeek.toFixed(1)} alone · {st.trimPerWeek.toFixed(1)} could cut</em></div>
+                <div><span>Staff hrs / week</span><strong>{st.hoursPerWeek.toFixed(0)}</strong><em>{st.soloPerWeek.toFixed(1)} alone</em></div>
+                <div><span>Cuts</span><strong>{a.cuts.toLocaleString()}</strong><em>{a.S} serviced anyway, not counted</em></div>
               </div>
-              <p className="report-note">{a.S} more were serviced the same day and {a.X} were marked incorrect/duplicate/test (not counted).{a.F ? ` ${a.F} service${a.F === 1 ? ' was' : 's were'} started then deleted with no sale (owner's Loss Prevention tab).` : ''}</p>
               <h3>Hours and staffing</h3>
-              <AdviceList items={staffingRead(st, a)} />
+              <PlainList items={staffingRead(st, a, c.per100.all)} />
+              <p className="report-note">As entered by staff: {a.C} cancelled, {a.N} no-show, {a.W} walked out. {a.X} marked incorrect/duplicate/test (not counted).{a.F ? ` ${a.F} started then deleted with no sale (Loss Prevention).` : ''}</p>
               <h3>By day of the week</h3>
               <table className="report-table">
-                <thead><tr><th>Day</th><th>Usual hours</th><th>Staff hrs</th><th>Busy %</th><th>Alone hrs</th><th>Lost / day</th><th>What to change</th></tr></thead>
+                <thead><tr><th>Day</th><th>Usual hours</th><th>Staff hrs</th><th>Busy %</th><th>Alone hrs</th><th>Lost / day</th><th>Lost / 100 cuts</th><th>Notes</th></tr></thead>
                 <tbody>
                   {WEEK_ORDER.map(wdI => st.weekdays[wdI]).filter(w => w.n).map(w => (
-                    <tr key={w.wd}>
+                    <tr key={w.wd} className={w.hold ? 'report-hold' : ''}>
                       <td>{WEEKDAYS[w.wd]}</td>
                       <td className="report-nowrap">{w.open != null ? `${slotLabel(w.open).replace(':00', '')}–${slotLabel(w.close).replace(':00', '')}` : '—'}</td>
                       <td>{w.actual.toFixed(1)}</td>
                       <td>{pct(w.busy)}</td>
                       <td>{w.soloHours.toFixed(1)}</td>
                       <td>{a.daysByWd[w.wd] ? (a.lostByWd[w.wd] / a.daysByWd[w.wd]).toFixed(1) : '—'}</td>
-                      <td className="report-wrap">{w.advice.filter(x => x.kind !== 'payroll').slice(0, 2).map(x => x.text).join(' ') || 'Nothing stands out.'}</td>
+                      <td>{w.lostRate != null ? w.lostRate.toFixed(1) : '—'}</td>
+                      <td className="report-wrap">{w.hold ? 'Hold hours. ' : ''}{w.advice.filter(x => x.kind !== 'payroll' && !/^Hold hours/.test(x.text)).slice(0, 2).map(x => x.text).join(' ')}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -926,7 +950,7 @@ function StaffingReport({ result, appt, storeName, dlFor, onClose }) {
           );
         })}
         <section className="report-foot">
-          <p className="report-note">How this is figured: lost guests come from the Appointments report, checked against Sales-Accrual (same guest, same store, same day = serviced, not lost; Sales-Accrual has no time of sale). "Walked out" = a walked-out reason, or checked in then deleted with no sale. Busy % = serviced hours ÷ clocked hours, from the Attendance report. "Could cut" only trims shift edges where 3+ are on, so nobody is ever left alone and no shift goes under {MIN_SHIFT_HOURS} hours. Days before {fmtLong(appt.from)} or without Sales-Accrual guest names aren't counted.</p>
+          <p className="report-note">Method. Lost guests: Appointments report rows marked cancelled, no-show or deleted, checked against Sales-Accrual (same guest, same store, same day = serviced, not lost; Sales-Accrual has no time of sale). Labels are entered by staff and overlap, so the report splits by timing instead. Busy % = serviced hours ÷ clocked hours (Attendance report). Each lost guest counts as {Math.round(GUEST_HOURS * 60)} minutes of needed stylist time. A store-weekday losing more guests per 100 cuts than the company is held: no cut suggestions. Elsewhere, suggested cuts only trim shift edges where 3+ are on, never leave one person alone and never shorten a shift under {MIN_SHIFT_HOURS} hours.</p>
         </section>
       </div>
     </div>
@@ -953,7 +977,11 @@ export function SchedulingTab({ shiftHistory, loadedMonths, onNeedMonths, salesF
     if (missing.length) onNeedMonths(missing);
   }, [start, end, loadedMonths, onNeedMonths]);
 
-  const result = useMemo(() => (start || hasAhead ? analyzeSchedules({ shiftHistory, start: start || '9999', end: end || '', salesFor, targetBusy: target ? target / 100 : null }) : null), [shiftHistory, start, end, salesFor, target, hasAhead]);
+  // Lost guests first (by store and weekday), so the schedule math never
+  // suggests cutting hours on a day that's losing guests; then again with the
+  // schedule result for the store-level comparisons.
+  const lost = useMemo(() => (apptHistory ? lostForSchedules(analyzeAppointments({ apptHistory, start: start || '0000', end: end || '9999', cutsFor })) : null), [apptHistory, start, end, cutsFor]);
+  const result = useMemo(() => (start || hasAhead ? analyzeSchedules({ shiftHistory, start: start || '9999', end: end || '', salesFor, targetBusy: target ? target / 100 : null, lost }) : null), [shiftHistory, start, end, salesFor, target, hasAhead, lost]);
   const appt = useMemo(() => (apptHistory ? analyzeAppointments({ apptHistory, start: start || '0000', end: end || '9999', cutsFor, sched: result, shiftHistory }) : null), [apptHistory, start, end, cutsFor, result, shiftHistory]);
   const saveTarget = v => { setTarget(v); try { if (v) localStorage.setItem(TARGET_KEY, String(v)); else localStorage.removeItem(TARGET_KEY); } catch { /* per-viewer only */ } };
   const named = items => items.map(f => ({ ...f, text: f.text.replace(/\{(\d+)\}/g, (_, c) => storeName(c)) }));
