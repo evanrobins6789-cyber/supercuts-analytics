@@ -518,6 +518,7 @@ function fakeLpData(lp) {
       return [fakePersonName(n), [cents(hrs * f), cents(svcH * f), fakeIn, fakeOut, isStylist]];
     })))),
     reg: mapDays(lp.reg, rows => rows.map(([code, adj, reason, by, paid]) => [code, money(code, adj), fakeLpReason(reason), by ? fakePersonName(by) : by, money(code, paid)])),
+    appt: mapDays(lp.appt, stores => mapStores(stores, rows => (rows || []).map(([sty, by, ...rest]) => [sty ? fakePersonName(sty) : sty, by ? fakePersonName(by) : by, ...rest]))),
   };
 }
 

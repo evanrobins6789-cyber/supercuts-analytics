@@ -31,7 +31,20 @@ export const LP_RULES = {
   idleHours: 4,            // clocked this long with 0 tickets and 0 serviced hours...
   idleDaysMin: 2,          // ...on at least this many days
   missedPunchMin: 3,       // missed check-ins + checkouts
+  startedDeletedMin: 2,    // services started then deleted with no sale for that guest that day...
+  startedDeletedMins: 5,   // ...counting only ones that ran at least this many minutes
 };
+
+// A short code for a guest name (normalized), so sales can be matched to
+// appointments without keeping names. FNV-1a, base 36. Used by
+// src/appointments.js to tell a lost guest from one who was serviced anyway.
+export function guestKey(name) {
+  const s = lpNorm(name);
+  if (!s) return '';
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(36);
+}
 
 const cellText = c => String(c?.w ?? c?.v ?? '').trim();
 const numOf = c => {
@@ -79,6 +92,7 @@ function finishRange(h, days) {
 const LP_SALES_COLS = ['Center Name', 'Item Type', 'Item Name', 'Qty', 'Sales (Exc. Tax)', 'Sale Date', 'Invoice No', 'Guest Name', 'Stylist', 'Sold By', 'Discount Name', 'Discount', 'Payment Type', 'Sale Type', 'Closed By'];
 
 // days[date][code] = {
+//   g:  [guestKey, ...]  every guest with a ticket that day (for appointments)
 //   s:  { stylist: [tickets, cashOnlyTickets] },
 //   c:  { closer: [closedTickets, loyaltyTickets] },
 //   ev: [ {t:'z'|'p'|'r'|'e', ...} ]   $0 service / price below list / refund / employee discount
@@ -92,7 +106,7 @@ export async function parseLpSalesFile(file) {
   const days = {};
   const dayStore = (date, code) => {
     const d = (days[date] = days[date] || {});
-    return (d[code] = d[code] || { s: {}, c: {}, ev: [] });
+    return (d[code] = d[code] || { s: {}, c: {}, ev: [], g: [] });
   };
   for (let r = h.hdr + 1; r < grid.length; r++) {
     const row = grid[r];
@@ -133,6 +147,8 @@ export async function parseLpSalesFile(file) {
   invoices.forEach((o, inv) => {
     if (o.refund) return;
     const ds = dayStore(o.date, o.code);
+    const gk = guestKey(o.guest);
+    if (gk && !ds.g.includes(gk)) ds.g.push(gk);
     const cashOnly = o.pay === 'Cash' ? 1 : 0;
     o.stylists.forEach(p => { const a = (ds.s[p] = ds.s[p] || [0, 0]); a[0]++; a[1] += cashOnly; });
     if (o.closer) { const a = (ds.c[o.closer] = ds.c[o.closer] || [0, 0]); a[0]++; a[1] += o.loyalty ? 1 : 0; }
@@ -327,14 +343,26 @@ export function analyzeLp(lp, start, end, todayISO) {
   const missedList = [...missed.values()].sort((a, b) => b.count - a.count);
   missedList.forEach(a => { if (a.count >= LP_RULES.missedPunchMin) P(a.name, a.code).flags.push(`${a.count} missed punches`); });
 
+  // Appointments: a service started, then the appointment deleted, with no
+  // sale for that guest at that store that day (src/appointments.js). Listed
+  // under who deleted it; a 0-minute one is usually a mis-tap, so only ones
+  // that ran startedDeletedMins+ count toward a flag.
+  const startedList = [];
+  Object.keys(lp.appt || {}).filter(inR).forEach(date => Object.entries(lp.appt[date]).forEach(([code, rows]) => rows.forEach(([sty, by, svc, inAt, startAt, endAt, mins]) => {
+    startedList.push({ date, code, n: by || sty, sty, svc, inAt, startAt, endAt, mins });
+  })));
+  const startedDeleted = byPerson(startedList).map(g => ({ ...g, real: g.items.filter(e => e.mins >= LP_RULES.startedDeletedMins).length }));
+  startedDeleted.forEach(g => { if (g.real >= LP_RULES.startedDeletedMin) P(g.name, g.code).flags.push(`${g.real} services started then deleted, no sale`); });
+
   const review = [...people.values()].filter(p => p.flags.length).sort((a, b) => b.flags.length - a.flags.length || a.name.localeCompare(b.name));
   return {
     review, zero, below, refunds, empDisc, loyalty, coLoyalRate, cash, coCashRate: coCash[1] ? coCash[0] / coCash[1] : 0,
-    register, bigAdj, regCount, idle: idleList, missed: missedList,
+    register, bigAdj, regCount, idle: idleList, missed: missedList, startedDeleted,
     coverage: {
       salesDays: salesDates.length,
       attDays: Object.keys(lp.att || {}).filter(inR).length,
       regDays: Object.keys(lp.reg || {}).filter(inR).length,
+      apptDays: Object.keys(lp.appt || {}).filter(inR).length,
     },
   };
 }

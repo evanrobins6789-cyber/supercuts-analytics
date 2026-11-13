@@ -757,7 +757,7 @@ function HeatCard({ st, appt }) {
   } else if (!appt) {
     body = <p className="section-hint">No Appointments report on file for these dates yet. The owner can upload one with "Upload appointments" on the Scheduling page.</p>;
   } else if (mode === 'guests' && !hasVisits) {
-    body = <p className="section-hint">Guest check-ins need an Appointments export with every status (completed visits too), not just cancelled, no-show and deleted. The file on hand only has those three, so try "Lost guests" or "Both" for now.</p>;
+    body = <p className="section-hint">Guest check-ins need an Appointments export with every status (completed visits too), not just cancelled, no-show and deleted. The files so far only have those three, so try "Lost guests" or "Both" for now.</p>;
   } else {
     body = (
       <div className="sched-heat-wrap">
@@ -770,7 +770,7 @@ function HeatCard({ st, appt }) {
                 {hours.map(h => {
                   const v = appt.heat.V[w.wd][h], l = appt.heat.L[w.wd][h];
                   if (mode === 'guests') return <td key={h} style={{ background: scaleColor(GUEST_SCALE, v, maxV) }} title={`${WEEKDAYS_LONG[w.wd]} ${hourShort(h)}: ${v.toFixed(1)} guests checking in, on average`} />;
-                  if (mode === 'lost') return <td key={h} style={{ background: scaleColor(LOST_SCALE, l, maxL) }} title={`${WEEKDAYS_LONG[w.wd]} ${hourShort(h)}: ${l.toFixed(2)} deleted/no-shows a day, on average`} />;
+                  if (mode === 'lost') return <td key={h} style={{ background: scaleColor(LOST_SCALE, l, maxL) }} title={`${WEEKDAYS_LONG[w.wd]} ${hourShort(h)}: ${l.toFixed(2)} lost guests a day, on average`} />;
                   const s = staffHour(w, h);
                   const g = appt.heat[guestKey][w.wd][h];
                   const size = maxG ? Math.round(4 + (g / maxG) * 14) : 0;
@@ -786,10 +786,10 @@ function HeatCard({ st, appt }) {
         </table>
         <div className="sched-legend">
           {mode === 'guests' && <span className="section-hint">Darker = more guests checking in that hour (average per day).</span>}
-          {mode === 'lost' && <span className="section-hint">Darker red = more deleted check-ins and no-shows that hour (average per day). Cancellations carry no time, so they aren't here.</span>}
+          {mode === 'lost' && <span className="section-hint">Darker red = more lost guests that hour (cancelled, no-show or walked out, average per day). Guests serviced the same day anyway aren't counted.</span>}
           {mode === 'both' && <>
             <span><i style={{ background: HEAT.zero }} />Nobody</span><span><i style={{ background: HEAT.solo }} />1 alone</span><span><i style={{ background: HEAT.two }} />2</span><span><i style={{ background: HEAT.three }} />3</span><span><i style={{ background: HEAT.four }} />4+</span>
-            <span className="section-hint">Color = staff on. Dot = {hasVisits ? 'guests checking in' : 'deleted check-ins and no-shows'}; bigger = more. {hasVisits ? 'Big dots on orange = busy with one person on.' : 'Upload a full Appointments export to see all guests here.'}</span>
+            <span className="section-hint">Color = staff on. Dot = {hasVisits ? 'guests checking in' : 'lost guests'}; bigger = more. {hasVisits ? 'Big dots on orange = busy with one person on.' : "Completed visits aren't in the Appointments export, so the dots are lost guests only."}</span>
           </>}
         </div>
       </div>

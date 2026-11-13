@@ -35,7 +35,7 @@ import { buildPayBreakdown, buildCoaching } from './payCoach';
 import { TabMenu } from './TabMenu';
 import { FocusStoresTab, focusStoresContext } from './focusStores';
 import { SchedulingTab, parseShiftFile, mergeShiftMonth, analyzeSchedules, schedulingContext, lastWorkedDate } from './scheduling';
-import { parseAppointmentsFile, mergeApptMonth, apptMonths, analyzeAppointments, appointmentsContext } from './appointments';
+import { parseAppointmentsFile, classifyAppointments, mergeApptMonth, apptMonths, analyzeAppointments, appointmentsContext } from './appointments';
 import { CouponsTab, couponsContext, couponPresets } from './coupons';
 import { CollectiveGoalBars } from './CollectiveGoalBars';
 import { collectiveGoal, goalPace, goalHeat, GIFT_CARD_GOAL_PERIODS, giftCardPeriodFor, giftCardPeriodGoal, periodThrough, periodPace } from './goalProgress';
@@ -8248,6 +8248,15 @@ function LossPreventionTab({ lpData, lpStatus, onImportRegister, onGoToHistoryIm
             )}
           </LpSection>
 
+          <LpSection title="Services started, then deleted, no sale" count={(a.startedDeleted || []).filter(x => x.real >= LP_RULES.startedDeletedMin).length}
+            hint={`From the Appointments report: a service was started (it has an actual start time), then the appointment was deleted, and that guest has no sale at that store that day. Listed under who deleted it. 0-minute ones are often a mis-tap; flags at ${LP_RULES.startedDeletedMin}+ that ran ${LP_RULES.startedDeletedMins}+ minutes.${a.coverage.apptDays ? '' : ' Upload the Appointments report on the Scheduling tab to fill this in.'}`}>
+            <LpEventTable groups={a.startedDeleted || []} columns={[
+              { label: 'Date', render: e => d(e.date) }, { label: 'Stylist', render: e => e.sty || '—' }, { label: 'Service', render: e => e.svc || '—' },
+              { label: 'Started', render: e => (e.startAt != null ? `${(Math.floor(e.startAt / 60) % 12) || 12}:${String(e.startAt % 60).padStart(2, '0')} ${e.startAt < 720 ? 'AM' : 'PM'}` : '—') },
+              { label: 'Minutes', render: e => e.mins },
+            ]} />
+          </LpSection>
+
           <LpSection title="Clocked in with no tickets" count={a.idle.filter(x => x.days.length >= LP_RULES.idleDaysMin).length}
             hint={`Stylist-days clocked ${LP_RULES.idleHours}+ hours with zero tickets and zero serviced hours (today is skipped). Training or front-desk days are legitimate reasons. Flags at ${LP_RULES.idleDaysMin}+ days.`}>
             <LpEventTable groups={a.idle.map(x => ({ ...x, items: x.days }))} columns={[
@@ -9459,7 +9468,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     lines.push('');
     lines.push(`LOSS PREVENTION (owner-only "Loss Prevention" tab), ${lpRange.start} through ${lpRange.end}. These are ITEMS TO REVIEW from comparing people to peers, never proof of theft — always say so if asked about a person. ${a.review.length} people tripped at least one check:`);
     a.review.slice(0, 25).forEach(p => lines.push(`  ${p.name} @ ${STORE_CODE_TO_NAME[p.code] || p.code}: ${p.flags.join('; ')}`));
-    lines.push(`Totals in range: ${a.zero.reduce((s, g) => s + g.items.length, 0)} $0 services, ${a.refunds.reduce((s, g) => s + g.items.length, 0)} refunds, company loyalty-redemption rate ${Math.round(a.coLoyalRate * 100)}%, company cash-only ticket share ${Math.round(a.coCashRate * 100)}%, ${a.regCount} register closures.`);
+    lines.push(`Totals in range: ${a.zero.reduce((s, g) => s + g.items.length, 0)} $0 services, ${a.refunds.reduce((s, g) => s + g.items.length, 0)} refunds, company loyalty-redemption rate ${Math.round(a.coLoyalRate * 100)}%, company cash-only ticket share ${Math.round(a.coCashRate * 100)}%, ${a.regCount} register closures, ${(a.startedDeleted || []).reduce((s, g) => s + g.items.length, 0)} services started then deleted with no sale.`);
   }
 
   // My Numbers: the logged-in person's own numbers this pay period, by store.
@@ -11033,7 +11042,7 @@ export default function App() {
   // each a days map. Stored via api/loss-prevention.js, never weekly_report.
   // lpTokenRef is the owner's token (null for anyone else) so the import
   // handlers below, which are memoized once, know whether to capture it.
-  const [lpData, setLpData] = useState({ sales: {}, att: {}, reg: {} });
+  const [lpData, setLpData] = useState({ sales: {}, att: {}, reg: {}, appt: {} });
   const [couponTilly, setCouponTilly] = useState(null); // owner-only: last 30 days of ad coupon numbers for Tilly (src/coupons.js)
   const [lpStatus, setLpStatus] = useState({ loaded: false, error: null });
   const lpRef = useRef(lpData);
@@ -11302,7 +11311,7 @@ export default function App() {
     if (!lpTokenRef.current) { setLpData({ sales: {}, att: {}, reg: {} }); setLpStatus({ loaded: false, error: null }); return; }
     lpLoad(currentUser.token).then(res => {
       if (!res.ok) { setLpStatus({ loaded: true, error: res.error }); return; }
-      const next = { sales: {}, att: {}, reg: {} };
+      const next = { sales: {}, att: {}, reg: {}, appt: {} };
       (res.rows || []).forEach(({ key, payload }) => {
         const kind = key.split('_')[1];
         if (next[kind]) Object.assign(next[kind], payload?.days || {});
@@ -12424,9 +12433,19 @@ export default function App() {
     const task = async () => {
       const lines = [];
       for (const file of fileList) {
-        let parsed;
-        try { parsed = await parseAppointmentsFile(file); } catch (err) { lines.push(`✗ ${file.name} — ${err.message}`); continue; }
-        if (!parsed || !parsed.start) { lines.push(`✗ ${file.name} — not an Appointments report (no Guest Name / Center Name / Status columns)`); continue; }
+        let raw;
+        try { raw = await parseAppointmentsFile(file); } catch (err) { lines.push(`✗ ${file.name} — ${err.message}`); continue; }
+        if (!raw || !raw.start) { lines.push(`✗ ${file.name} — not an Appointments report (no Guest Name / Center Name / Status columns)`); continue; }
+        // Check each cancelled/no-show/deleted row against that store-day's
+        // sales (guest codes from the Loss Prevention capture of
+        // Sales-Accrual). A guest serviced that day anyway isn't lost.
+        const sets = new Map();
+        const salesFor = (code, date) => {
+          const k = `${code}|${date}`;
+          if (!sets.has(k)) { const g = lpRef.current.sales?.[date]?.[code]?.g; sets.set(k, Array.isArray(g) && g.length ? new Set(g) : null); }
+          return sets.get(k);
+        };
+        const parsed = classifyAppointments(raw, lpTokenRef.current ? salesFor : null);
         if (isWriteBlocked()) { lines.push(`✗ ${file.name} — ${PRESENTER_BLOCKED_ERROR}`); continue; }
         if (!supabase) { lines.push(`✗ ${file.name} — Supabase is not configured, so nothing was saved`); continue; }
         const saved = {};
@@ -12439,8 +12458,18 @@ export default function App() {
           const { error } = await supabase.from('weekly_report').upsert({ report_id: key, payload: merged }, { onConflict: 'report_id' });
           if (error) { lines.push(`  ✗ ${m}: couldn't save (${error.message})`); failed = true; } else saved[m] = merged;
         }
-        const t = Object.values(parsed.totals).reduce((a, x) => ({ C: a.C + x.C, N: a.N + x.N, D: a.D + x.D, V: a.V + x.V }), { C: 0, N: 0, D: 0, V: 0 });
-        lines.push(`${failed ? '⚠' : '✓'} ${file.name} — ${parsed.start} to ${parsed.end}: ${t.D} deleted, ${t.N} no-shows, ${t.C} cancelled${t.V ? `, ${t.V} visits` : ''} (${parsed.timed} with a check-in time)${t.V ? '' : '. No completed visits in this file, so the Guests heat map stays empty; export every status to fill it.'}`);
+        const t = Object.values(parsed.totals).reduce((a, x) => { Object.keys(a).forEach(k => { a[k] += x[k] || 0; }); return a; }, { C: 0, N: 0, W: 0, F: 0, S: 0, X: 0, U: 0, V: 0 });
+        lines.push(`${failed ? '⚠' : '✓'} ${file.name} — ${parsed.start} to ${parsed.end}: ${t.C} cancelled, ${t.N} no-shows, ${t.W} walked out counted as lost; ${t.S} serviced the same day anyway and ${t.X} marked incorrect/duplicate/test (not counted); ${t.F} started then deleted with no sale (Loss Prevention)${t.V ? `; ${t.V} visits` : ''}.`);
+        if (t.U) lines.push(`  ⚠ ${t.U} rows couldn't be checked: no Sales-Accrual guest names saved for those store-days, so they're left out. Sales-Accrual files uploaded before 2026-11-13 need uploading again in Historical Import (guest names start Oct 21), then upload this file again.`);
+        if (!t.V) lines.push('  · No completed visits in this file, so the Guests heat map stays empty.');
+        // Started-then-deleted rows (with names) go to Loss Prevention only.
+        if (lpTokenRef.current) {
+          const lpMonthsTouched = new Set();
+          const merged = mergeLpDays(lpRef.current.appt || {}, { rangeStart: parsed.start, rangeEnd: parsed.end, days: parsed.lp });
+          lpRef.current = { ...lpRef.current, appt: merged.days };
+          merged.months.forEach(m => lpMonthsTouched.add(m));
+          await saveLpMonths('appt', lpMonthsTouched, lines);
+        }
         if (Object.keys(saved).length) setApptHistory(prev => {
           const next = { ...prev };
           // Drop what the merge dropped (overlapping ranges, replaced dates), then add.
