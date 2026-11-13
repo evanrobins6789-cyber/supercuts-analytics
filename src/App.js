@@ -8280,8 +8280,9 @@ function LossPreventionTab({ lpData, lpStatus, onImportRegister, onGoToHistoryIm
 }
 const fmtDateShortLp = iso => { const [, m, dd] = iso.split('-').map(Number); return `${MONTH_NAMES[m - 1].slice(0, 3)} ${dd}`; };
 
-function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBatch, onClearHistory, reviews, onImportReviewsBatch, giftCardHistory, onImportGiftCardBatch, tipsHistory, onImportTipsBatch, onImportPayRates, payRatesInfo }) {
+function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBatch, onClearHistory, reviews, onImportReviewsBatch, giftCardHistory, onImportGiftCardBatch, tipsHistory, onImportTipsBatch, onImportPayRates, payRatesInfo, onImportAppointmentsBatch = null }) {
   const [processingSales, setProcessingSales] = useState(false);
+  const [processingAppts, setProcessingAppts] = useState(false);
   const [processingRates, setProcessingRates] = useState(false);
   const [processingTips, setProcessingTips] = useState(false);
   const [processingGiftCards, setProcessingGiftCards] = useState(false);
@@ -8353,6 +8354,18 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
     }
   };
   const tipsDates = Object.values(tipsHistory || {}).map(r => r.date).sort();
+  // Same upload as the Scheduling tab's "Upload appointments" button.
+  const handleApptFiles = async fileList => {
+    setProcessingAppts(true);
+    try {
+      const lines = await onImportAppointmentsBatch(fileList);
+      setLog(prev => [...lines, ...prev]);
+    } catch (err) {
+      setLog(prev => [`✗ Unexpected error: ${err.message}`, ...prev]);
+    } finally {
+      setProcessingAppts(false);
+    }
+  };
   const handlePayRateFile = async file => {
     setProcessingRates(true);
     try {
@@ -8444,6 +8457,20 @@ function HistoricalImportTab({ history, onImportSalesBatch, onImportAttendanceBa
             <div className="upload-slot-body">
               <p className="upload-slot-title">Tips Files</p>
               <p className="upload-slot-hint">The "Tips" report. Feeds the Homepage pay tracker. Re-uploading a range replaces those days.</p>
+            </div>
+          </label>
+        )}
+
+        {onImportAppointmentsBatch && (
+          <label className={`upload-slot history-upload-slot ${processingAppts ? 'upload-slot--filled' : ''}`}>
+            <input
+              type="file" accept=".xlsx,.xls,.csv" multiple style={{ display: 'none' }}
+              onChange={e => { const files = Array.from(e.target.files); if (files.length) handleApptFiles(files); e.target.value = ''; }}
+            />
+            <div className="upload-slot-icon">{processingAppts ? <span className="spinner small" /> : '📅'}</div>
+            <div className="upload-slot-body">
+              <p className="upload-slot-title">Appointments Files</p>
+              <p className="upload-slot-hint">The "Appointments" report. Cancelled, no-show and deleted ones are checked against Sales-Accrual, so upload the Sales-Accrual for the same days first. Feeds lost guests on the Scheduling tab. Re-uploading a range replaces it.</p>
             </div>
           </label>
         )}
@@ -13115,7 +13142,7 @@ export default function App() {
               onReorderNewsGroup: handleReorderNewsGroup, onSetNewsGroupColor: handleSetNewsGroupColor,
               onImageError: msg => showToast(msg, 'error'),
             }}
-            historyProps={{ history: d.history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory, reviews: d.reviews, onImportReviewsBatch: handleImportReviewsBatch, giftCardHistory: d.giftCardHistory, onImportGiftCardBatch: handleImportGiftCardBatch, tipsHistory: d.tipsHistory, onImportTipsBatch: handleImportTipsBatch, onImportPayRates: handleImportPayRates, payRatesInfo: { count: d.payRates.length, error: payRatesError, noRate: payTracker?.noRate || [] } }}
+            historyProps={{ history: d.history, onImportSalesBatch: handleImportSalesBatch, onImportAttendanceBatch: handleImportAttendanceBatch, onClearHistory: handleClearHistory, reviews: d.reviews, onImportReviewsBatch: handleImportReviewsBatch, giftCardHistory: d.giftCardHistory, onImportGiftCardBatch: handleImportGiftCardBatch, tipsHistory: d.tipsHistory, onImportTipsBatch: handleImportTipsBatch, onImportPayRates: handleImportPayRates, onImportAppointmentsBatch: u.role === 'owner' && !presenting ? handleUploadAppointments : null, payRatesInfo: { count: d.payRates.length, error: payRatesError, noRate: payTracker?.noRate || [] } }}
             uploadProps={{
               report: d.report, uploading, onFile: handleFile, onClear: handleClearAll,
               employeeRoster: d.employeeRoster, uploadingRoster, onRosterFile: handleRosterFile, onClearRoster: handleClearRoster,

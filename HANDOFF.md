@@ -24,6 +24,7 @@
 - **Rates** are per 100 cuts over only the store-days checked (`d` dates in `_r:` totals). Times: appointment Start Time (check-in for walkouts, actual start for F).
 - **Real-data results**: S 3,277, X 1,629, U 5,867 (all Oct 1–20: older Sales-Accrual exports have no Guest Name), lost 18.3/100 cuts (12.2 cancelled, 5.0 no-show, 1.1 walked out; 59 "long wait"), F 73 (Ashley Vargas-Barona @ 80306: 8 that ran 5+ min). Walkouts with one person on 33% vs 31% of open hours: no staffing signal.
 - **User must**: re-upload Sales-Accrual(468)–(485) in Historical Import (guest codes only get saved going forward), THEN upload Appointments(85) on the Scheduling tab. Neither done.
+- **Also in Historical Import** (same day, user asked): an "Appointments Files" slot (owner only, not in presenter) calls the same `handleUploadAppointments` as the Scheduling tab button.
 - **Possible refinement, not built**: a cancellation that rebooked on another day isn't really lost (only same-day is checked now).
 
 **Scheduling round 2: simpler, guest heat maps, lost guests (2026-11-13, later).** User: too much data, simplify; loves the staff heat map, wants one for guest visits and one overlaying both; gave `Downloads/Appointments(83).xlsx` (Nov 1–12, only Cancelled 1,100 / No Show 1,121 / Deleted 1,559) to compare when they happen and find correlations.
