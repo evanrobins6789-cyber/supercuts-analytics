@@ -24,6 +24,8 @@
 - **View as Manager**: Setup → "Presenter Mode, DL & Manager View" now has a second picker (`ViewAsDlPicker role="manager"`). `viewAs` in presenter.js carries `role` ('district_leader' default, or 'manager'), used by `viewScope`'s filter and `u`. Pill reads "(Manager)". Same read-only block.
 - **Verified**: clean build; temp jest test (deleted): real list parses to 55 people / 0 errors, DLs kept (incl. a name shared by a DL and an employee), duplicate names settled by phone, inactive skipped; viewAs role persists, non-owner can't set it, manager scope drops gift cards and other stores. **Not verified**: the live site, a real roster, clicking through Manager View.
 
+**Tilly bubble removed (2026-11-16, last).** User: "remove tilly AI bubble". `SHOW_TILLY = false` (just above SITE_TIPS in App.js) stops rendering `AIChatWidget` for every role and drops the "Ask Tilly" site tip. All Tilly code/context building (buildAIContext, api/chat.js) is left in place; flip the flag to bring it back. Still keep Tilly context up to date per CLAUDE.md, in case it returns. "Tillie's Nest" tab is separate and untouched.
+
 **Manager tabs, 90-day best sellers, color by name, "what sold" on Overview (2026-11-16, late).**
 - **Focus Stylist for managers**: tab visible, read-only (`FocusStylistTab readOnly`, no Edit). `scopeFilter` gives managers their store's full focus_stylists entries (goals incl.); employees still tags only. Writes still blocked server-side (FOCUS_ROLES).
 - **Shear Check for managers**: `ShearCheckManagerView`, their store's visits as date / score / visited by + average. `scopeFilter` `salonScoresOnly` strips answers, notes, followUp, team, photos for managers. Employees get nothing.

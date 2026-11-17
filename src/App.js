@@ -1549,6 +1549,8 @@ function CoreValuesWidget({ bitmojiImg, bitmojiActive }) {
 // site's features, filtered to what the logged-in role can actually use.
 // roles: which roles see the tip (omit = everyone).
 const LEADERS = ['owner', 'district_leader', 'manager'];
+// Tilly chat bubble: turned off for everyone (user, 2026-11-16). Flip to true to bring it back.
+const SHOW_TILLY = false;
 const SITE_TIPS = [
   { icon: '🔥', title: 'Collective goal bars', body: 'The bars at the top of Retail, Color Sales, Signature Service and Gift Cards count sales at every store against the goals that are set, so a store with no goal still adds to the total. The line on each bar marks where the company should be by now, based on the days finished so far. The Gift Card goal runs Nov 1 – Dec 31.', roles: ['owner'] },
   { icon: '⭐', title: 'Favorite tabs', body: 'Open the ☰ menu and tap the ☆ next to any tab to keep it at the top of your screen. Your favorites are saved to your login, so they follow you to any phone or computer.' },
@@ -1557,7 +1559,7 @@ const SITE_TIPS = [
   { icon: '📈', title: 'Raise your TSTH', body: 'My Numbers compares you with the other stylists at your store and tells you exactly what would help, like "sell 1 more product (~$25)", and how much more bonus that would earn you.' },
   { icon: '🛍️', title: 'Best sellers', body: 'At the bottom of My Numbers you’ll find your store’s best-selling products and most popular extra services (beard trims, waxing, blowdries). Great ones to suggest to your guests.' },
   { icon: '📅', title: 'Pay period shortcuts', body: 'Pay periods run the 1st–15th and the 16th–end of the month. On My Numbers, tap "This pay period" or "Last pay period" instead of picking dates.' },
-  { icon: '💬', title: 'Ask Tilly', body: 'Tap the chat bubble in the corner and ask Tilly things like "How am I doing this pay period?" or "What should I sell more of?" She knows your numbers.' },
+  SHOW_TILLY && { icon: '💬', title: 'Ask Tilly', body: 'Tap the chat bubble in the corner and ask Tilly things like "How am I doing this pay period?" or "What should I sell more of?" She knows your numbers.' },
   { icon: '📣', title: 'News & Events', body: 'The News tab has every update and event. Posts marked "New" are from the last 10 days. Tap any post to read the whole thing and open its attachments.' },
   { icon: '🎓', title: 'HSA classes', body: 'Sign up for upcoming HSA and SuperColor classes on the HSA tab. You can edit or remove your own sign-up there too.' },
   { icon: '🏆', title: "Tillie's Nest", body: "Earn points and spend them on rewards in Tillie's Nest." },
@@ -1577,7 +1579,7 @@ const SITE_TIPS = [
   { icon: '🎟️', title: 'Ad coupons', body: 'The Coupons tab shows what people do on the ad coupon pages: page views, email signups and Book Now taps (with % of visitors), a daily chart, and where visits came from (Facebook, Google, etc.), by offer, by ad source and by day.', roles: ['owner'] },
   { icon: '✉️', title: 'Finalize goals', body: 'On the Goals tab, "Finalize & email DLs" sends each DL their Sales goals and leadership a roll-up of everyone. Send yourself a test first.', roles: ['owner'] },
   { icon: '🎭', title: 'Presenter mode', body: 'Showing the site in a meeting? Turn on Presenter Mode in Setup and every name and number is made up. Nothing saves while it’s on.', roles: ['owner'] },
-];
+].filter(Boolean);
 function SiteTipsWidget({ role }) {
   const tips = useMemo(() => SITE_TIPS.filter(t => !t.roles || t.roles.includes(role)), [role]);
   const [index, setIndex] = useCarousel(tips.length, 15000);
@@ -13345,7 +13347,7 @@ export default function App() {
           />
         )}
       </main>
-      <AIChatWidget key={`${presenting ? 'chat-presenting' : 'chat-live'}-${viewing ? viewAs.name : ''}`} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={d.news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={u.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={u.role === 'owner' ? d.giftCardHistory : null} lpData={u.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} salonQuestions={salonQuestions} payTracker={viewing ? viewTeamPayTracker : (payTracker || teamPayTracker)} myNumbersSummary={viewing ? null : myNumbersSummary} extraContext={u.role !== 'owner' ? (canSchedule ? schedTilly : null) : () => [schedTilly(), focusStoresContext(d.focusStores, d.goals, (code, mk) => focusMonthSales(mk)?.[code]?.sales || null, getCurrentMonthRange().end, code => STORE_CODE_TO_NAME[code] || `Store ${code}`), viewing ? '' : couponsContext(couponTilly)].filter(Boolean).join('\n\n')} rankToken={!viewing && (u.role === 'manager' || u.role === 'district_leader') ? currentUser.token : null} />
+      {SHOW_TILLY && <AIChatWidget key={`${presenting ? 'chat-presenting' : 'chat-live'}-${viewing ? viewAs.name : ''}`} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={d.news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={u.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={u.role === 'owner' ? d.giftCardHistory : null} lpData={u.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} salonQuestions={salonQuestions} payTracker={viewing ? viewTeamPayTracker : (payTracker || teamPayTracker)} myNumbersSummary={viewing ? null : myNumbersSummary} extraContext={u.role !== 'owner' ? (canSchedule ? schedTilly : null) : () => [schedTilly(), focusStoresContext(d.focusStores, d.goals, (code, mk) => focusMonthSales(mk)?.[code]?.sales || null, getCurrentMonthRange().end, code => STORE_CODE_TO_NAME[code] || `Store ${code}`), viewing ? '' : couponsContext(couponTilly)].filter(Boolean).join('\n\n')} rankToken={!viewing && (u.role === 'manager' || u.role === 'district_leader') ? currentUser.token : null} />}
     </div>
     </FocusNamesContext.Provider>
   );
