@@ -24,28 +24,30 @@ const firstLast = raw => {
   const parts = cleanName(raw).split(' ').filter(Boolean);
   return parts.length >= 2 ? `${parts[0]} ${parts[parts.length - 1]}` : parts.join(' ');
 };
+// readWorkbookGrid cells are { v, w } objects; plain values work too.
+const cellText = c => (c && typeof c === 'object' ? String(c.w ?? c.v ?? '') : String(c ?? '')).trim();
 const digits = raw => String(raw || '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
 
 // Grid (array of rows) → [{ name, phone, stores: [{ name, code }] }].
 // Header row is found by a "Manager"/"Name" column and a "Store" column.
 export function parseManagerListGrid(grid) {
   const errors = [];
-  const headerIdx = grid.findIndex(r => (r || []).some(c => /^(manager|name|manager name|employee name)$/i.test(String(c || '').trim())) && (r || []).some(c => /^store/i.test(String(c || '').trim())));
+  const headerIdx = grid.findIndex(r => (r || []).some(c => /^(manager|name|manager name|employee name)$/i.test(cellText(c))) && (r || []).some(c => /^store/i.test(cellText(c))));
   if (headerIdx < 0) throw new Error('Couldn\'t find the header row. The sheet needs a "Manager" (or "Name") column and a "Store" column.');
-  const header = grid[headerIdx].map(c => String(c || '').trim().toLowerCase());
+  const header = grid[headerIdx].map(c => cellText(c).toLowerCase());
   const nameCol = header.findIndex(h => /^(manager|name|manager name|employee name)$/.test(h));
   const storeCol = header.findIndex(h => /^store/.test(h));
   const phoneCol = header.findIndex(h => /phone/.test(h));
   const byPerson = new Map();
   grid.slice(headerIdx + 1).forEach((r, i) => {
-    const name = String((r || [])[nameCol] || '').replace(/\s+/g, ' ').trim();
-    const storeName = String((r || [])[storeCol] || '').trim();
+    const name = cellText((r || [])[nameCol]).replace(/\s+/g, ' ');
+    const storeName = cellText((r || [])[storeCol]);
     if (!name && !storeName) return;
     const line = headerIdx + i + 2;
     if (!name) { errors.push(`Row ${line}: no name (store ${storeName}).`); return; }
     const code = getCodeForStoreName(storeName);
     if (!code) { errors.push(`Row ${line}: ${name} — store "${storeName}" isn't a known store.`); return; }
-    const phone = phoneCol >= 0 ? digits((r || [])[phoneCol]) : '';
+    const phone = phoneCol >= 0 ? digits(cellText((r || [])[phoneCol])) : '';
     const key = `${cleanName(name)}|${phone}`;
     const entry = byPerson.get(key) || { name, phone, stores: [] };
     if (!entry.stores.some(s => s.code === code)) entry.stores.push({ name: storeName, code });
