@@ -5487,8 +5487,10 @@ function computeStoreBudget(row) {
   return { retailBudget, supplyBudget, ssBudget, totalBudget: retailBudget + supplyBudget + ssBudget };
 }
 
-function BudgetsTab({ query, onQuery, history, weeklyHistory, isOwner }) {
-  const [viewMode, setViewMode] = useState('dl'); // 'dl' | 'flat'
+function BudgetsTab({ query, onQuery, history, weeklyHistory, isOwner, storeOnly = false }) {
+  // Managers (storeOnly) see their store by name only, no DL grouping (user, 2026-11-16).
+  const [viewModeRaw, setViewMode] = useState('dl'); // 'dl' | 'flat'
+  const viewMode = storeOnly ? 'flat' : viewModeRaw;
   const [sortBy, setSortBy] = useState('totalBudget');
   const [expandedLeader, setExpandedLeader] = useState({});
   // No manual date-range override here, unlike every other main tab — the
@@ -5540,15 +5542,17 @@ function BudgetsTab({ query, onQuery, history, weeklyHistory, isOwner }) {
   return (
     <div className="tab-content">
       <p className="section-hint">Current budget period: {fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)}. Budgets reset automatically on the 1st (using the 16th–end of last month) and the 16th (using the 1st–15th of this month) — they don't change in between.</p>
-      <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />
+      {!storeOnly && <SearchBox value={query} onChange={onQuery} placeholder={viewMode === 'dl' ? 'Search stores or DL…' : 'Search stores…'} />}
 
-      <div className="view-toggle">
-        <button className={`view-toggle-btn ${viewMode === 'dl' ? 'active' : ''}`} onClick={() => setViewMode('dl')}>Grouped by DL</button>
-        <button className={`view-toggle-btn ${viewMode === 'flat' ? 'active' : ''}`} onClick={() => setViewMode('flat')}>All Stores</button>
-      </div>
+      {!storeOnly && (
+        <div className="view-toggle">
+          <button className={`view-toggle-btn ${viewMode === 'dl' ? 'active' : ''}`} onClick={() => setViewMode('dl')}>Grouped by DL</button>
+          <button className={`view-toggle-btn ${viewMode === 'flat' ? 'active' : ''}`} onClick={() => setViewMode('flat')}>All Stores</button>
+        </div>
+      )}
 
       <div className="ledger-head-row">
-        <p className="section-label">Budgets — {totalStoresShown} stores{viewMode === 'dl' ? ', grouped by DL' : ''} ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)})</p>
+        <p className="section-label">Budgets — {totalStoresShown} store{totalStoresShown === 1 ? '' : 's'}{viewMode === 'dl' ? ', grouped by DL' : ''} ({fmtDateLong(effectiveRange.start)}–{fmtDateLong(effectiveRange.end)})</p>
         <select className="sort-select" value={sortBy} onChange={e => setSortBy(e.target.value)}>
           <option value="retailBudget">Sort: Retail Budget</option>
           <option value="supplyBudget">Sort: Supply</option>
@@ -6347,7 +6351,7 @@ const moneyDisplay = v => {
   return `$${whole ? Number(whole).toLocaleString('en-US') : '0'}${cents !== undefined ? `.${cents}` : ''}`;
 };
 
-function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySalesGoals, milestoneGoals, onSaveMilestoneGoal, onFinalize, history, weeklyHistory, isOwner, canSeeGiftCards = isOwner }) {
+function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySalesGoals, milestoneGoals, onSaveMilestoneGoal, onFinalize, history, weeklyHistory, isOwner, canSeeGiftCards = isOwner, readOnly = false }) {
   const thisMonth = getCurrentMonthRange().start.slice(0, 7);
   const [month, setMonth] = useState(thisMonth);
   const [finalizing, setFinalizing] = useState(false);
@@ -6473,7 +6477,8 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
   const goalCell = (code, f, i) => {
     const cls = `mg-goal-col ${i === 0 ? 'mg-first' : ''}`;
     const value = getVal(code, f.key);
-    const editable = !f.ownerOnly || isOwner;
+    // Managers see goals but can't change them; DLs set them (user, 2026-11-16).
+    const editable = !readOnly && (!f.ownerOnly || isOwner);
     const breakdown = f.key === 'salesGoal' ? salesGoalBreakdown(value, month) : null;
     return (
       <td key={f.key} className={cls}>
@@ -6581,7 +6586,7 @@ function MonthlyGoalsSection({ stores, allStores, goals, onSaveGoal, onApplySale
   );
 }
 
-function GoalsTab({ report, goals, onSaveGoal, onApplySalesGoals, milestoneGoals, onSaveMilestoneGoal, onFinalize, fallbackEmployeesByStore, isOwner, canSeeGiftCards = isOwner, history, weeklyHistory }) {
+function GoalsTab({ report, goals, onSaveGoal, onApplySalesGoals, milestoneGoals, onSaveMilestoneGoal, onFinalize, fallbackEmployeesByStore, isOwner, canSeeGiftCards = isOwner, history, weeklyHistory, readOnly = false }) {
   const [query, setQuery] = useState('');
 
   // A live weekly Stylist Report isn't always on file (see the rest of the
@@ -6605,7 +6610,8 @@ function GoalsTab({ report, goals, onSaveGoal, onApplySalesGoals, milestoneGoals
   return (
     <div className="tab-content">
       <SearchBox value={query} onChange={setQuery} placeholder="Search stores…" />
-      <MonthlyGoalsSection stores={stores} allStores={allStores} goals={goals} onSaveGoal={onSaveGoal} onApplySalesGoals={onApplySalesGoals} milestoneGoals={milestoneGoals} onSaveMilestoneGoal={onSaveMilestoneGoal} onFinalize={onFinalize} history={history} weeklyHistory={weeklyHistory} isOwner={isOwner} canSeeGiftCards={canSeeGiftCards} />
+      {readOnly && <p className="section-hint">Your District Leader sets these goals. You can see them here but not change them.</p>}
+      <MonthlyGoalsSection stores={stores} allStores={allStores} goals={goals} onSaveGoal={onSaveGoal} onApplySalesGoals={onApplySalesGoals} milestoneGoals={milestoneGoals} onSaveMilestoneGoal={onSaveMilestoneGoal} onFinalize={onFinalize} history={history} weeklyHistory={weeklyHistory} isOwner={isOwner} canSeeGiftCards={canSeeGiftCards} readOnly={readOnly} />
       {!stores.length && <p className="empty-note" style={{ textAlign: 'center' }}>No stores match "{query}".</p>}
     </div>
   );
@@ -13181,11 +13187,11 @@ export default function App() {
           <BudgetsTab
             query={queries.Budgets} onQuery={v => setQuery('Budgets', v)}
             history={d.history} weeklyHistory={d.weeklyHistory}
-            isOwner={u.role === 'owner'}
+            isOwner={u.role === 'owner'} storeOnly={u.role === 'manager'}
           />
         )}
         {tab === 'Goals' && (
-          <GoalsTab report={d.report} goals={d.goals} isOwner={u.role === 'owner'} canSeeGiftCards={u.role === 'owner' || u.role === 'district_leader'} onSaveGoal={handleSaveGoal} onApplySalesGoals={handleApplySalesGoals} milestoneGoals={d.milestoneGoals} onSaveMilestoneGoal={handleSaveMilestoneGoal} onFinalize={handleFinalizeGoals} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} />
+          <GoalsTab report={d.report} goals={d.goals} isOwner={u.role === 'owner'} canSeeGiftCards={u.role === 'owner' || u.role === 'district_leader'} readOnly={u.role !== 'owner' && u.role !== 'district_leader'} onSaveGoal={handleSaveGoal} onApplySalesGoals={handleApplySalesGoals} milestoneGoals={d.milestoneGoals} onSaveMilestoneGoal={handleSaveMilestoneGoal} onFinalize={handleFinalizeGoals} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} />
         )}
         {tab === 'Focus Stores' && u.role === 'owner' && (
           <FocusStoresTab

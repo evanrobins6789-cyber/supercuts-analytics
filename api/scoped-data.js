@@ -160,6 +160,12 @@ export default async function handler(req, res) {
           res.status(403).json({ error: 'Only leadership can change focus stores.' });
           return;
         }
+        // Goals are set by DLs and leadership; managers and employees only
+        // read them (user, 2026-11-16).
+        if (key === 'store_goals' && employee.role !== 'district_leader') {
+          res.status(403).json({ error: 'Goals are set by your District Leader.' });
+          return;
+        }
         if (key === 'store_goals' && Object.values(patch).some(v => v && typeof v === 'object' && Object.keys(v).some(isOwnerOnlyGoalField))) {
           res.status(403).json({ error: 'Only the owner can set gift card goals.' });
           return;
