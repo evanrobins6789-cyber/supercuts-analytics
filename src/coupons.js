@@ -16,12 +16,14 @@ import { couponStats } from './auth';
 //   email_sent    the coupon email actually went out (needs the landing site's Resend setup)
 //   email_again   tapped "Email me this coupon" after screenshotting
 //   book_click    tapped Book Now (opens supercuts.com's booking page)
-// Browser events count people (a random id per browser), server events count signups.
+// Page views count every visit (user, 2026-11-16); `viewers` keeps the unique
+// count (a random id per browser) for the claim rate. The other browser events
+// count people, server events count signups.
 
-const PEOPLE_EVENTS = new Set(['view', 'screenshot', 'email_again', 'book_click']);
+const PEOPLE_EVENTS = new Set(['screenshot', 'email_again', 'book_click']);
 
 export const COUPON_COLUMNS = [
-  { key: 'view', label: 'Page views', hint: 'People who opened the offer page' },
+  { key: 'view', label: 'Page views', hint: 'Every visit to the offer page, repeat visits included' },
   { key: 'screenshot', label: 'Screenshot', hint: 'Tapped "show the coupon to screenshot"' },
   { key: 'email_signup', label: 'Email signups', hint: 'New emails (one code per email)' },
   { key: 'email_sent', label: 'Emails sent', hint: 'Coupon emails that went out' },
@@ -43,7 +45,7 @@ export function couponPresets() {
   ];
 }
 
-const emptyCounts = () => ({ view: 0, screenshot: 0, email_signup: 0, email_repeat: 0, email_sent: 0, email_again: 0, book_click: 0 });
+const emptyCounts = () => ({ view: 0, viewers: 0, screenshot: 0, email_signup: 0, email_repeat: 0, email_sent: 0, email_again: 0, book_click: 0 });
 
 // Rolls the landing site's rows up into { total, byOffer, bySource, byDay }.
 // People events add visitors, server events add totals.
@@ -57,22 +59,27 @@ export function summarizeCoupons(data, offerFilter = '') {
   for (const r of (data?.summary || [])) {
     if (!want(r) || !(r.event in total)) continue;
     const n = amount(r);
-    total[r.event] += n;
-    (byOffer[r.offer_slug] ||= emptyCounts())[r.event] += n;
-    (bySource[r.source || ''] ||= emptyCounts())[r.event] += n;
+    const v = r.event === 'view' ? Number(r.visitors) || 0 : 0;
+    for (const c of [total, byOffer[r.offer_slug] ||= emptyCounts(), bySource[r.source || ''] ||= emptyCounts()]) {
+      c[r.event] += n;
+      c.viewers += v;
+    }
   }
   for (const r of (data?.daily || [])) {
     if (!want(r) || !(r.event in total)) continue;
-    (byDay[r.day] ||= emptyCounts())[r.event] += amount(r);
+    const c = byDay[r.day] ||= emptyCounts();
+    c[r.event] += amount(r);
+    if (r.event === 'view') c.viewers += Number(r.visitors) || 0;
   }
   return { total, byOffer, bySource, byDay };
 }
 
-// Share of page viewers who took the coupon (screenshot or email). Can pass 100%
+// Share of unique visitors who took the coupon (screenshot or email). Can pass 100%
 // a little if someone does both; email_again is the overlap we can see.
 export function claimRate(c) {
-  if (!c.view) return null;
-  return Math.max(0, c.screenshot + c.email_signup - c.email_again) / c.view;
+  const people = c.viewers || c.view;
+  if (!people) return null;
+  return Math.max(0, c.screenshot + c.email_signup - c.email_again) / people;
 }
 
 const pct = v => (v == null ? '—' : `${Math.round(v * 100)}%`);
@@ -83,8 +90,8 @@ export function couponsContext(data) {
   if (!data || !data.summary) return '';
   const { total, byOffer, bySource } = summarizeCoupons(data);
   const name = slug => data.offers?.find(o => o.slug === slug)?.headline || slug;
-  const line = c => `${c.view} page views, ${c.screenshot} screenshot taps, ${c.email_signup} email signups (${c.email_sent} emailed), ${c.book_click} Book Now taps, claim rate ${pct(claimRate(c))}`;
-  const out = [`AD COUPON LANDING PAGES (owner only; ${data.from} to ${data.to}; separate site, counts people not taps for views/screenshots/Book Now): ${line(total)}.`];
+  const line = c => `${c.view} page views (${c.viewers} unique visitors), ${c.screenshot} screenshot taps, ${c.email_signup} email signups (${c.email_sent} emailed), ${c.book_click} Book Now taps, claim rate ${pct(claimRate(c))}`;
+  const out = [`AD COUPON LANDING PAGES (owner only; ${data.from} to ${data.to}; separate site; page views count every visit, screenshots/Book Now count people not taps, claim rate is per unique visitor): ${line(total)}.`];
   for (const [slug, c] of Object.entries(byOffer)) out.push(`- Offer "${name(slug)}" (${slug}): ${line(c)}.`);
   const sources = Object.entries(bySource).filter(([, c]) => c.view);
   if (sources.length) out.push(`By ad source: ${sources.map(([s, c]) => `${sourceLabel(s)} ${c.view} views / ${c.screenshot + c.email_signup} claims`).join('; ')}.`);
@@ -115,7 +122,7 @@ function CountsTable({ title, rows, firstHeader }) {
               <tr>
                 <th style={{ textAlign: 'left' }}>{firstHeader}</th>
                 {COUPON_COLUMNS.map(col => <th key={col.key} title={col.hint}>{col.label}</th>)}
-                <th title="Screenshot taps + new email signups, as a share of page views">Claim rate</th>
+                <th title="Screenshot taps + new email signups, as a share of unique visitors">Claim rate</th>
               </tr>
             </thead>
             <tbody>{rows.map(([key, label, c]) => <CountsRow key={key} label={label} c={c} />)}</tbody>
@@ -162,8 +169,8 @@ export function CouponsTab({ token }) {
   return (
     <div className="tab-content">
       <p className="section-hint">
-        Only you can see this tab. These numbers come from the ad coupon pages (supercuts-landing-pages). Views, screenshots
-        and Book Now count <strong>people</strong> (once per phone or browser), not taps. "Screenshot" means they tapped the
+        Only you can see this tab. These numbers come from the ad coupon pages (supercuts-landing-pages). Page views count
+        <strong>every visit</strong>. Screenshots and Book Now count <strong>people</strong> (once per phone or browser), not taps. "Screenshot" means they tapped the
         screenshot button. Phones don't tell websites when a screenshot is actually taken.
       </p>
 
@@ -193,9 +200,10 @@ export function CouponsTab({ token }) {
               <div key={col.key} className="summary-tile" title={col.hint} style={{ cursor: 'default' }}>
                 <p className="summary-tile-label">{col.label}</p>
                 <p className="summary-tile-value">{t[col.key].toLocaleString()}</p>
+                {col.key === 'view' && <p className="summary-tile-sub">{t.viewers.toLocaleString()} unique visitors</p>}
               </div>
             ))}
-            <div className="summary-tile" style={{ cursor: 'default' }} title="Screenshot taps + new email signups, as a share of page views">
+            <div className="summary-tile" style={{ cursor: 'default' }} title="Screenshot taps + new email signups, as a share of unique visitors">
               <p className="summary-tile-label">Claim rate</p>
               <p className="summary-tile-value">{pct(claimRate(t))}</p>
               <p className="summary-tile-sub">{(t.screenshot + t.email_signup - t.email_again).toLocaleString()} coupons claimed</p>
