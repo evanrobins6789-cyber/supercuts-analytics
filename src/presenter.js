@@ -31,7 +31,9 @@ export function isPresenting() { return presenting; }
 // one District Leader's login sees, using the same filter the server applies
 // (src/scopeFilter.js). Read-only, same as presenter mode, so nothing done
 // while looking around as a DL can be saved under the owner's login.
-let viewAsDl = null; // { name, employeeCode, storeCodes }
+// Also "View as Manager" (2026-11-16): same thing with role 'manager'.
+const VIEW_ROLES = ['district_leader', 'manager'];
+let viewAsDl = null; // { name, employeeCode, storeCodes, role }
 const viewAsKey = userId => `supercuts_view_as_dl_${userId}`;
 export function getViewAsDl() { return viewAsDl; }
 export function initViewAsDl(user) {
@@ -39,14 +41,14 @@ export function initViewAsDl(user) {
   if (user && user.role === 'owner') {
     try {
       const raw = JSON.parse(localStorage.getItem(viewAsKey(user.id || user.name)) || 'null');
-      if (raw && raw.name && Array.isArray(raw.storeCodes)) v = { name: raw.name, employeeCode: raw.employeeCode || null, storeCodes: raw.storeCodes.map(String) };
+      if (raw && raw.name && Array.isArray(raw.storeCodes)) v = { name: raw.name, employeeCode: raw.employeeCode || null, storeCodes: raw.storeCodes.map(String), role: VIEW_ROLES.includes(raw.role) ? raw.role : 'district_leader' };
     } catch { v = null; }
   }
   viewAsDl = v;
   return v;
 }
 export function setViewAsDl(user, dl) {
-  const v = user && user.role === 'owner' && dl ? { name: dl.name, employeeCode: dl.employeeCode || null, storeCodes: (dl.storeCodes || []).map(String) } : null;
+  const v = user && user.role === 'owner' && dl ? { name: dl.name, employeeCode: dl.employeeCode || null, storeCodes: (dl.storeCodes || []).map(String), role: VIEW_ROLES.includes(dl.role) ? dl.role : 'district_leader' } : null;
   viewAsDl = v;
   if (user) {
     try {
@@ -57,7 +59,7 @@ export function setViewAsDl(user, dl) {
   return v;
 }
 export function isWriteBlocked() { return presenting || !!viewAsDl; }
-export const PRESENTER_BLOCKED_ERROR = 'Presenter mode or DL view is on — nothing is saved.';
+export const PRESENTER_BLOCKED_ERROR = 'Presenter mode or DL/Manager view is on — nothing is saved.';
 
 // Reads the stored flag for this user and arms the module-level switch.
 // Only ever honored for an owner session.

@@ -5,7 +5,7 @@ import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDat
 import {
   parseStylistReport, parseEmployeeStartDates, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
   parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory, parseGiftCardFile, mergeGiftCardsIntoHistory, parseTipsFile, mergeTipsIntoHistory, parsePayRateFile,
-  buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile, parseMasterSalonListFile, parseHsaScheduleFile, downloadWorkbook,
+  buildWeeklyRecord, mergeWeeklyIntoHistory, parseEmployeeAccessFile, parseMasterSalonListFile, parseHsaScheduleFile, downloadWorkbook, readWorkbookGrid,
 } from './parser';
 import {
   getSession, setSession, clearSession, checkEligible, signUp, logIn, logOut,
@@ -38,6 +38,7 @@ import { SchedulingTab, parseShiftFile, mergeShiftMonth, analyzeSchedules, sched
 import { parseAppointmentsFile, classifyAppointments, mergeApptMonth, apptMonths, analyzeAppointments, appointmentsContext, lostForSchedules } from './appointments';
 import { CouponsTab, couponsContext, couponPresets } from './coupons';
 import { CollectiveGoalBars } from './CollectiveGoalBars';
+import { parseManagerListGrid, planManagerPromotions, PLAN_STATUS_LABELS } from './managerList';
 import { collectiveGoal, goalPace, goalHeat, GIFT_CARD_GOAL_PERIODS, giftCardPeriodFor, giftCardPeriodGoal, periodThrough, periodPace } from './goalProgress';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
 import supercutsWordmarkBlue from './assets/branding/supercuts-wordmark-blue.png';
@@ -9628,47 +9629,50 @@ const SETUP_SECTIONS = [
   { key: 'rewards', label: 'Rewards' },
   { key: 'hsa', label: 'HSA' },
   { key: 'leases', label: 'Leases' },
-  { key: 'presenter', label: 'Presenter Mode & DL View' },
+  { key: 'presenter', label: 'Presenter Mode, DL & Manager View' },
 ];
 
 // Owner-only (Setup is already owner-only + password gated). Flips this
 // browser into presenter mode — see presenter.js for what it does/doesn't do.
 // "View as DL": pick one of the District Leaders from Employee Access and see
 // the site the way their login does (their stores only, their tabs only).
-function ViewAsDlPicker({ token, onViewAs }) {
-  const [dls, setDls] = useState(null);
+function ViewAsDlPicker({ token, onViewAs, role = 'district_leader' }) {
+  const isMgr = role === 'manager';
+  const title = isMgr ? 'Manager' : 'District Leader';
+  const [people, setPeople] = useState(null);
   const [error, setError] = useState(null);
   const [pick, setPick] = useState('');
   useEffect(() => {
     let cancelled = false;
     rosterList(token).then(r => {
       if (cancelled) return;
-      if (!r.ok) { setError(r.error); setDls([]); return; }
-      setDls((r.employees || []).filter(e => e.role === 'district_leader' && e.active !== false && (e.storeCodes || []).length).sort((a, b) => a.name.localeCompare(b.name)));
+      if (!r.ok) { setError(r.error); setPeople([]); return; }
+      setPeople((r.employees || []).filter(e => e.role === role && e.active !== false && (e.storeCodes || []).length).sort((a, b) => a.name.localeCompare(b.name)));
     });
     return () => { cancelled = true; };
-  }, [token]);
-  const chosen = (dls || []).find(e => String(e.id) === pick);
+  }, [token, role]);
+  const chosen = (people || []).find(e => String(e.id) === pick);
+  const storeLabel = e => isMgr ? e.storeCodes.map(c => STORE_CODE_TO_NAME[c] || c).join(', ') : `${e.storeCodes.length} store${e.storeCodes.length === 1 ? '' : 's'}`;
   return (
     <div className="setup-section">
-      <p className="chart-title">👁 View as a District Leader</p>
-      <p className="step-body">See the site exactly as one DL sees it when they log in: only their stores, only the tabs a DL gets, and their own My Numbers. The data goes through the same filter the server uses for a real DL login.</p>
+      <p className="chart-title">👁 View as a {title}</p>
+      <p className="step-body">See the site exactly as one {isMgr ? 'store manager' : 'DL'} sees it when they log in: only {isMgr ? 'their store' : 'their stores'}, only the tabs a {isMgr ? 'manager' : 'DL'} gets, and their own My Numbers. The data goes through the same filter the server uses for a real {isMgr ? 'manager' : 'DL'} login.</p>
       <ul className="step-body">
-        <li><strong>Read-only.</strong> Nothing is saved while you're viewing as a DL (goals, Focus Stylist picks, Shear Checks, sign-offs). Anything you type is thrown away when you exit.</li>
-        <li><strong>Only you, only this browser.</strong> The DL isn't affected and doesn't know. It stays on across reloads until you exit with the 👁 button at the top.</li>
-        <li><strong>Small differences:</strong> the store-rank card isn't shown, and Team TSTH coaching compares against the DL's stores instead of the whole company.</li>
+        <li><strong>Read-only.</strong> Nothing is saved while you're viewing as a {isMgr ? 'manager' : 'DL'}. Anything you type is thrown away when you exit.</li>
+        <li><strong>Only you, only this browser.</strong> {isMgr ? 'The manager' : 'The DL'} isn't affected and doesn't know. It stays on across reloads until you exit with the 👁 button at the top.</li>
+        <li><strong>Small differences:</strong> the store-rank card isn't shown, and Team TSTH coaching compares against {isMgr ? 'their store' : "the DL's stores"} instead of the whole company.</li>
       </ul>
-      {dls === null ? <span className="spinner small" /> : error ? (
-        <p className="password-error">Couldn't load the DL list: {error}</p>
-      ) : dls.length === 0 ? (
-        <p className="empty-note">No active District Leaders with stores in Employee Access yet.</p>
+      {people === null ? <span className="spinner small" /> : error ? (
+        <p className="password-error">Couldn't load the {title} list: {error}</p>
+      ) : people.length === 0 ? (
+        <p className="empty-note">No active {title}s with {isMgr ? 'a store' : 'stores'} in Employee Access yet.</p>
       ) : (
         <div className="view-as-row">
-          <select value={pick} onChange={e => setPick(e.target.value)} aria-label="District Leader to view as">
-            <option value="">Pick a District Leader…</option>
-            {dls.map(e => <option key={e.id} value={String(e.id)}>{e.name} ({e.storeCodes.length} store{e.storeCodes.length === 1 ? '' : 's'})</option>)}
+          <select value={pick} onChange={e => setPick(e.target.value)} aria-label={`${title} to view as`}>
+            <option value="">Pick a {title}…</option>
+            {people.map(e => <option key={e.id} value={String(e.id)}>{e.name} ({storeLabel(e)})</option>)}
           </select>
-          <button className="btn-primary" disabled={!chosen} onClick={() => chosen && onViewAs({ name: chosen.name, employeeCode: chosen.employeeCode, storeCodes: chosen.storeCodes })}>View as this DL</button>
+          <button className="btn-primary" disabled={!chosen} onClick={() => chosen && onViewAs({ name: chosen.name, employeeCode: chosen.employeeCode, storeCodes: chosen.storeCodes, role })}>View as this {isMgr ? 'Manager' : 'DL'}</button>
         </div>
       )}
     </div>
@@ -9692,7 +9696,104 @@ function PresenterSetupTab({ presenting, onToggle, token, onViewAs }) {
       </button>
     </div>
     {onViewAs && <ViewAsDlPicker token={token} onViewAs={onViewAs} />}
+    {onViewAs && <ViewAsDlPicker token={token} onViewAs={onViewAs} role="manager" />}
     </>
+  );
+}
+
+// "Make managers from a list" — see src/managerList.js. Preview first, then
+// one rosterUpdate per person. DLs and the owner are never changed.
+function ManagerListImport({ token, employees, onDone }) {
+  const [plan, setPlan] = useState(null); // { rows, errors, fileName }
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null); // { ok, failed: [] }
+  const [error, setError] = useState(null);
+  const handleFile = async file => {
+    setError(null); setResult(null);
+    try {
+      const grid = await readWorkbookGrid(file);
+      const { people, errors } = parseManagerListGrid(grid);
+      setPlan({ rows: planManagerPromotions(people, employees), errors, fileName: file.name });
+    } catch (err) { setError(err.message); setPlan(null); }
+  };
+  const toApply = (plan?.rows || []).filter(r => r.status === 'promote' || r.status === 'update');
+  const apply = async () => {
+    if (!toApply.length) return;
+    if (!window.confirm(`Make ${toApply.length} ${toApply.length === 1 ? 'person a Manager' : 'people Managers'}? District Leaders on the list are not changed.`)) return;
+    setBusy(true);
+    const failed = [];
+    for (const r of toApply) {
+      // Last guard: never touch a DL or the owner, whatever the plan says.
+      if (r.employee.role === 'district_leader' || r.employee.role === 'owner') continue;
+      const res = await rosterUpdate(token, r.employee.id, { role: 'manager', storeCodes: r.codes });
+      if (!res.ok) failed.push(`${r.employee.name}: ${res.error}`);
+    }
+    setBusy(false);
+    setResult({ done: toApply.length - failed.length, failed });
+    setPlan(null);
+    onDone?.();
+  };
+  const order = ['promote', 'update', 'keep', 'unclear', 'missing', 'inactive', 'same'];
+  const counts = {};
+  (plan?.rows || []).forEach(r => { counts[r.status] = (counts[r.status] || 0) + 1; });
+  const rows = (plan?.rows || []).slice().sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || a.person.name.localeCompare(b.person.name));
+  return (
+    <div className="setup-section">
+      <p className="chart-title">👔 Make managers from a list</p>
+      <p className="step-body">
+        Upload a sheet with <b>Manager | Store | Phone</b> columns. Each person is matched to their login below (by name, then phone), and you see every change before anything is saved.
+        Anyone who is already a <b>District Leader stays a District Leader</b>, even if they're on the list. Someone listed at two stores gets both.
+      </p>
+      <label className="goal-import-btn">
+        <input type="file" accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={e => { if (e.target.files[0]) handleFile(e.target.files[0]); e.target.value = ''; }} />
+        📥 Upload manager list
+      </label>
+      {error && <p className="password-error">{error}</p>}
+      {result && (
+        <div className="section-hint">
+          ✅ {result.done} set to Manager.
+          {result.failed.length > 0 && <><br /><span className="password-error">Not saved:</span><ul>{result.failed.map((f, i) => <li key={i}>{f}</li>)}</ul></>}
+        </div>
+      )}
+      {plan && (
+        <>
+          <p className="section-hint">
+            {plan.fileName}: {order.filter(s => counts[s]).map(s => `${counts[s]} ${PLAN_STATUS_LABELS[s].toLowerCase()}`).join(' · ')}
+          </p>
+          {plan.errors.length > 0 && <ul className="password-error">{plan.errors.map((e, i) => <li key={i}>{e}</li>)}</ul>}
+          <div className="ledger-scroll">
+            <table className="ledger-table">
+              <thead>
+                <tr>
+                  <th className="ledger-name-col">On the list</th>
+                  <th className="ledger-text-col">Store</th>
+                  <th className="ledger-text-col">Login</th>
+                  <th className="ledger-text-col">What happens</th>
+                  <th className="ledger-text-col">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i} className={r.status === 'keep' ? 'mgr-plan-keep' : r.status === 'missing' || r.status === 'unclear' ? 'mgr-plan-warn' : ''}>
+                    <td className="ledger-name-col">{r.person.name}</td>
+                    <td className="ledger-text-col">{r.person.stores.map(s => `${s.name} (${s.code})`).join(', ')}</td>
+                    <td className="ledger-text-col">{r.employee ? `${r.employee.name} · ${ROLE_LABELS[r.employee.role] || r.employee.role}` : '—'}</td>
+                    <td className="ledger-text-col"><b>{PLAN_STATUS_LABELS[r.status]}</b></td>
+                    <td className="ledger-text-col">{r.note}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="view-as-row">
+            <button className="btn-primary" disabled={busy || !toApply.length} onClick={apply}>
+              {busy ? <span className="spinner small" /> : null} Make {toApply.length} {toApply.length === 1 ? 'person a Manager' : 'people Managers'}
+            </button>
+            <button className="btn-ghost" disabled={busy} onClick={() => setPlan(null)}>Cancel</button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -9866,6 +9967,7 @@ function EmployeeAccessSetupTab({ token, onRosterChanged }) {
           )}
         </div>
       )}
+      {!loadingList && !!employees.length && <ManagerListImport token={token} employees={employees} onDone={refresh} />}
       {!loadingList && !!employees.length && (
         <SearchBox value={query} onChange={setQuery} placeholder="Search name, phone, employee code, or store code…" />
       )}
@@ -12827,7 +12929,7 @@ export default function App() {
   const viewScope = useMemo(() => {
     if (!viewAs || currentUser?.role !== 'owner') return null;
     const src = presenterData || { report, history, weeklyHistory, giftCardHistory, tipsHistory, payRates, nameAliases, goals, milestoneGoals, managers, reviews, focusStylists, salonChecks, shiftHistory, apptHistory };
-    const emp = { role: 'district_leader', store_codes: viewAs.storeCodes };
+    const emp = { role: viewAs.role || 'district_leader', store_codes: viewAs.storeCodes };
     const f = (key, v) => filterPayload(key, v, emp);
     const hist = f('daily_history', src.history || {});
     const weekly = f('weekly_history', src.weeklyHistory || {});
@@ -12875,7 +12977,7 @@ export default function App() {
       setViewAs(setViewAsDl(currentUser, dl));
       setTab('Homepage');
       window.scrollTo(0, 0);
-      showToast(`Viewing as ${dl.name} (District Leader). Nothing is saved while this is on.`);
+      showToast(`Viewing as ${dl.name} (${dl.role === 'manager' ? 'Manager' : 'District Leader'}). Nothing is saved while this is on.`);
     } else {
       setViewAsDl(currentUser, null);
       // Reload so anything typed while viewing (memory only, never saved) is discarded.
@@ -12906,7 +13008,8 @@ export default function App() {
   // View as DL: `u` is who the screen is for. Role checks below use it;
   // the real session (token, favorites) stays the owner's.
   const viewing = !!viewScope;
-  const u = viewing ? { ...currentUser, role: 'district_leader', name: viewAs.name, store_codes: viewAs.storeCodes } : currentUser;
+  const u = viewing ? { ...currentUser, role: viewAs.role || 'district_leader', name: viewAs.name, store_codes: viewAs.storeCodes } : currentUser;
+  const viewRoleShort = viewing && viewAs.role === 'manager' ? 'Manager' : 'DL';
   // Focus Stylist: DLs pick and see their own; leadership (owner) sees everyone.
   const canFocus = u.role === 'owner' || u.role === 'district_leader';
   // Shear Check: same roles as Focus Stylist.
@@ -12970,7 +13073,7 @@ export default function App() {
           <img src={supercutsWordmarkWhite} alt="Supercuts" className="header-logo-img" />
         </div>
         <div className="header-right">
-          {viewing && <button className="presenter-pill view-as-pill" onClick={() => handleViewAs(null)} title="You're seeing the site as this District Leader would. Click to go back to your own view.">👁 Viewing as {shownUserName} (DL) · Exit</button>}
+          {viewing && <button className="presenter-pill view-as-pill" onClick={() => handleViewAs(null)} title={`You're seeing the site as this ${viewRoleShort === 'Manager' ? 'Manager' : 'District Leader'} would. Click to go back to your own view.`}>👁 Viewing as {shownUserName} ({viewRoleShort}) · Exit</button>}
           {presenting && <button className="presenter-pill" onClick={() => handleTogglePresenter(false)} title="Presenter mode is on — made-up data. Click to turn off.">🎭 Presenter</button>}
           <span className="header-user">{shownUserName} · {ROLE_LABELS[u.role] || u.role}</span>
           <button className="btn-ghost" onClick={handleLogout}>Log Out</button>

@@ -1911,3 +1911,5 @@
 .source-bar-value strong { color: var(--navy); }
 .source-bar-note { font-size: 11px; color: var(--ink-soft); margin: 4px 0 0; }
 .source-bar-note code { background: #EEF1F4; padding: 1px 4px; border-radius: 3px; }
+.mgr-plan-keep td { background: rgba(242, 183, 5, 0.12); }
+.mgr-plan-warn td { background: rgba(200, 60, 60, 0.08); }
