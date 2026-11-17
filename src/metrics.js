@@ -50,6 +50,15 @@ export function addRangeInto(target, src) {
       target.extras[name].amount += v.amount || 0;
     });
   }
+  // Color services by name (Sales-Accrual uploads from 2026-11-16 on).
+  if (src.colorItems) {
+    if (!target.colorItems) target.colorItems = {};
+    Object.entries(src.colorItems).forEach(([name, v]) => {
+      if (!target.colorItems[name]) target.colorItems[name] = { qty: 0, amount: 0 };
+      target.colorItems[name].qty += v.qty || 0;
+      target.colorItems[name].amount += v.amount || 0;
+    });
+  }
 }
 
 export function expandDateRangeDays(start, end) {
@@ -105,7 +114,7 @@ export function getRangeTotals(history, weeklyHistory, startISO, endISO) {
   const byStore = {};
   const employeesByStore = {};
   const addTo = (code, src) => {
-    if (!byStore[code]) byStore[code] = { ...EMPTY_RANGE_TOTALS, products: {}, extras: {} };
+    if (!byStore[code]) byStore[code] = { ...EMPTY_RANGE_TOTALS, products: {}, extras: {}, colorItems: {} };
     addRangeInto(byStore[code], src);
   };
   weeklyEntries.forEach(w => {
@@ -137,6 +146,9 @@ export function getRangeTotals(history, weeklyHistory, startISO, endISO) {
       }
       if (r.extras && Object.keys(r.extras).length) {
         addTo(r.code, { extras: r.extras });
+      }
+      if (r.colorItems && Object.keys(r.colorItems).length) {
+        addTo(r.code, { colorItems: r.colorItems });
       }
       if (r.employees && Object.keys(r.employees).length) {
         const sigOnly = Object.entries(r.employees)

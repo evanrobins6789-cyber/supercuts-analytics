@@ -14,7 +14,7 @@
 // Logins and PINs are untouched by any of this.
 
 import { createServiceClient, requireSession } from '../src/serverAuth.js';
-import { normalizePersonName, pickOwnRecords, buildPeerStats } from '../src/myNumbers.js';
+import { normalizePersonName, pickOwnRecords, buildPeerStats, bestSellerStart } from '../src/myNumbers.js';
 
 const MAX_DAYS = 400;
 
@@ -57,7 +57,9 @@ export async function handleMyNumbers(req, res) {
     const aliases = (aliasRow?.payload || {})[employee.employee_code] || [];
     const names = new Set([employee.name, ...aliases].map(normalizePersonName).filter(Boolean));
 
-    const months = monthKeysBetween(start, end);
+    // Best sellers look back 90 days, so load those months too.
+    const bestStart = bestSellerStart(end);
+    const months = monthKeysBetween(bestStart < start ? bestStart : start, end);
     const [dailyRows, weeklyRows, tipRows] = await Promise.all([
       Promise.all(months.map(mk => loadPrefix(supabase, `daily_history_${mk}`))).then(r => r.flat()),
       loadPrefix(supabase, 'weekly_history'),
@@ -74,7 +76,7 @@ export async function handleMyNumbers(req, res) {
     weeklyRows.forEach(row => Object.assign(fullWeekly, row.payload || {}));
     const codes = [...new Set(Object.values(picked.history).map(r => r.code))];
     Object.values(picked.weeklyHistory).forEach(w => Object.entries(w.stores || {}).forEach(([c, s]) => { if (s.employees?.length) codes.push(c); }));
-    const peers = buildPeerStats({ history: fullHistory, weeklyHistory: fullWeekly, names, codes: [...new Set(codes)], start, end });
+    const peers = buildPeerStats({ history: fullHistory, weeklyHistory: fullWeekly, names, codes: [...new Set(codes)], start, end, bestStart });
     // Their own hourly rate from the locked pay_rates table (Emp ID =
     // employee_code). Missing table or no row → null, never an error.
     let payRate = null;

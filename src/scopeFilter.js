@@ -100,6 +100,17 @@ function focusTagsOnly(payload, allowed) {
   return out;
 }
 
+function salonScoresOnly(payload, allowed) {
+  const out = {};
+  Object.entries(filterCodeKeyedObject(payload, allowed) || {}).forEach(([code, visits]) => {
+    out[code] = {};
+    Object.entries(visits || {}).forEach(([id, v]) => {
+      if (v) out[code][id] = { id: v.id || id, code, date: v.date, score: v.score ?? null, by: v.by || null, savedAt: v.savedAt || null };
+    });
+  });
+  return out;
+}
+
 export function filterPayload(key, payload, employee) {
   if (employee.role === 'owner') return payload;
   const allowed = new Set(employee.store_codes || []);
@@ -118,8 +129,16 @@ export function filterPayload(key, payload, employee) {
     return out;
   }
   if (key === 'store_managers' || key === 'milestone_goals') return filterCodeKeyedObject(payload, allowed);
-  if (key === 'focus_stylists') return employee.role === 'district_leader' ? filterCodeKeyedObject(payload, allowed) : focusTagsOnly(payload, allowed);
-  if (key === 'salon_checks') return employee.role === 'district_leader' ? filterCodeKeyedObject(payload, allowed) : {};
+  // Managers see their own store's focus stylists with goals (read-only,
+  // user 2026-11-16); employees only get the tag.
+  if (key === 'focus_stylists') return employee.role === 'district_leader' || employee.role === 'manager' ? filterCodeKeyedObject(payload, allowed) : focusTagsOnly(payload, allowed);
+  if (key === 'salon_checks') {
+    if (employee.role === 'district_leader') return filterCodeKeyedObject(payload, allowed);
+    // Managers: only the score of each visit to their own store (date, score,
+    // who visited). Answers, notes and follow-ups stay with DLs/leadership.
+    if (employee.role === 'manager') return salonScoresOnly(payload, allowed);
+    return {};
+  }
   if (key === 'salon_check_questions') return employee.role === 'district_leader' ? payload : {};
   // Gift card sales: a DL gets their own stores' days (Gift Cards tab, the
   // user's call 2026-11-03); managers/employees get nothing. Same

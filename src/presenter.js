@@ -212,6 +212,7 @@ function scaleFields(obj, code, year, seed) {
   Object.keys(FIELD_GROUP).forEach(f => { if (f in out) out[f] = scaleVal(out[f], f, code, year, seed); });
   if (out.products && typeof out.products === 'object') out.products = scaleLines(out.products, code, year, seed, 'bottles', 'retail');
   if (out.extras && typeof out.extras === 'object') out.extras = scaleLines(out.extras, code, year, seed, 'extraQty', 'other');
+  if (out.colorItems && typeof out.colorItems === 'object') out.colorItems = scaleLines(out.colorItems, code, year, seed, 'colorTix', 'color');
   ATTACH_PAIRS.forEach(([part, whole]) => { if (typeof out[part] === 'number' && typeof out[whole] === 'number') out[part] = Math.min(out[part], out[whole]); });
   return out;
 }

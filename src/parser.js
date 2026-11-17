@@ -1020,7 +1020,7 @@ export async function parseSalesAccrualFile(file) {
     const invoiceNo = col.invoice !== -1 ? cellText(row[col.invoice]) : '';
 
     const key = `${code}|${isoDate}`;
-    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0, otherServices: 0, colorTicketCount: 0, colorTicketsWithRetail: 0, signatureTicketCount: 0, signatureTicketsWithRetail: 0, employees: {}, products: {}, extras: {} });
+    if (!daily.has(key)) daily.set(key, { code, date: isoDate, service: 0, retail: 0, color: 0, giftCards: 0, haircuts: 0, signatureS: 0, signatureSCount: 0, bottles: 0, otherServices: 0, colorTicketCount: 0, colorTicketsWithRetail: 0, signatureTicketCount: 0, signatureTicketsWithRetail: 0, employees: {}, products: {}, extras: {}, colorItems: {} });
     const rec = daily.get(key);
     const employeeFor = name => {
       if (!name) return null;
@@ -1067,6 +1067,14 @@ export async function parseSalesAccrualFile(file) {
       rec.extras[itemName].qty += qty;
       rec.extras[itemName].amount += amount;
     };
+    // Color services by name (2026-11-16), for the Overview store page's
+    // "most popular color services". Same shape as products/extras.
+    const addColorItem = () => {
+      if (!itemName) return;
+      if (!rec.colorItems[itemName]) rec.colorItems[itemName] = { qty: 0, amount: 0 };
+      rec.colorItems[itemName].qty += qty;
+      rec.colorItems[itemName].amount += amount;
+    };
     const addProduct = () => {
       if (!itemName) return;
       if (!rec.products[itemName]) rec.products[itemName] = { qty: 0, amount: 0 };
@@ -1100,7 +1108,7 @@ export async function parseSalesAccrualFile(file) {
         // exactly like isColor/isHaircut above; the name regex is now only a
         // fallback for exports with no Item Category column at all (below).
         const isSignature = category === 'Conditioning Treatment Services';
-        if (isColor) rec.color += amount;
+        if (isColor) { rec.color += amount; addColorItem(); }
         if (isHaircut) rec.haircuts += qty;
         if (isSignature) { rec.signatureS += amount; rec.signatureSCount += qty; }
         if (!isColor && !isHaircut && !isSignature) { rec.otherServices += amount; addExtra(); }
@@ -1119,7 +1127,7 @@ export async function parseSalesAccrualFile(file) {
         const isColor = isColorItem(itemName);
         const isHaircut = isHaircutItem(itemName);
         const isSignature = isSignatureServiceItem(itemName);
-        if (isColor) rec.color += amount;
+        if (isColor) { rec.color += amount; addColorItem(); }
         if (isHaircut) rec.haircuts += qty;
         if (isSignature) { rec.signatureS += amount; rec.signatureSCount += qty; }
         if (!isColor && !isHaircut && !isSignature) { rec.otherServices += amount; addExtra(); }
@@ -1177,6 +1185,9 @@ export async function parseSalesAccrualFile(file) {
     ),
     extras: Object.fromEntries(
       Object.entries(r.extras || {}).map(([name, v]) => [name, { qty: Math.round(v.qty * 100) / 100, amount: Math.round(v.amount * 100) / 100 }])
+    ),
+    colorItems: Object.fromEntries(
+      Object.entries(r.colorItems || {}).map(([name, v]) => [name, { qty: Math.round(v.qty * 100) / 100, amount: Math.round(v.amount * 100) / 100 }])
     ),
   }));
   return { records, fileName: file.name };
@@ -1252,6 +1263,7 @@ export function mergeSalesIntoHistory(history, salesRecords) {
       signatureTicketCount: r.signatureTicketCount, signatureTicketsWithRetail: r.signatureTicketsWithRetail,
       products: r.products || {},
       extras: r.extras || {},
+      colorItems: r.colorItems || {},
       employees: mergeEmployeeFields(existing.employees, r.employees || [], ['sales', 'colorSales', 'haircuts', 'retail', 'signatureS', 'signatureSCount', 'otherServices']),
     };
   });

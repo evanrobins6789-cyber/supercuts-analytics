@@ -1913,3 +1913,5 @@
 .source-bar-note code { background: #EEF1F4; padding: 1px 4px; border-radius: 3px; }
 .mgr-plan-keep td { background: rgba(242, 183, 5, 0.12); }
 .mgr-plan-warn td { background: rgba(200, 60, 60, 0.08); }
+.snap-sold-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.snap-sold-grid .snap-table td:nth-child(n+2) { text-align: right; white-space: nowrap; }

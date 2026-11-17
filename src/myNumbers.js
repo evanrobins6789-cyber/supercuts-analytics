@@ -52,8 +52,19 @@ export function buildMyNumbers({ history, weeklyHistory, tips, start, end }) {
 // into "N products"): productQty/productAmount from the item-level product
 // lines, colorTickets/colorAmount from color-ticket counts.
 const EMPTY_PEERS = () => ({ people: 0, withRetail: 0, withColor: 0, hours: 0, sales: 0, retail: 0, colorSales: 0, haircuts: 0, otherServices: 0, productQty: 0, productAmount: 0, colorTickets: 0, colorAmount: 0 });
-export function buildPeerStats({ history, weeklyHistory, names, codes, start, end }) {
+// bestStart (optional): the best-seller lists (topProducts/topExtras) count
+// from this date instead of `start`, e.g. the last 90 days, so a store shows
+// "30 sold" instead of "2 sold" early in a pay period (user, 2026-11-16).
+// Every other number still uses start..end.
+export const BEST_SELLER_DAYS = 90;
+export function bestSellerStart(end, days = BEST_SELLER_DAYS) {
+  const d = new Date(`${end}T00:00:00`);
+  d.setDate(d.getDate() - (days - 1));
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+export function buildPeerStats({ history, weeklyHistory, names, codes, start, end, bestStart = null }) {
   const totals = getRangeTotals(history, weeklyHistory, start, end);
+  const bestTotals = bestStart && bestStart < start ? getRangeTotals(history, weeklyHistory, bestStart, end) : null;
   const stores = {};
   const company = EMPTY_PEERS();
   const add = (agg, e) => {
@@ -85,12 +96,27 @@ export function buildPeerStats({ history, weeklyHistory, names, codes, start, en
     });
   });
   // Keep only the top sellers (by count) so the payload stays small.
+  // Best-seller lists from the longer window, when given.
+  if (bestTotals) {
+    const relist = (agg, t) => {
+      agg.productMap = {}; agg.extraMap = {};
+      Object.entries(t?.products || {}).forEach(([n, pr]) => { const m = (agg.productMap[n] ||= { qty: 0, amount: 0 }); m.qty += pr.qty || 0; m.amount += pr.amount || 0; });
+      Object.entries(t?.extras || {}).forEach(([n, ex]) => { const m = (agg.extraMap[n] ||= { qty: 0, amount: 0 }); m.qty += ex.qty || 0; m.amount += ex.amount || 0; });
+    };
+    Object.entries(stores).forEach(([code, agg]) => relist(agg, bestTotals[code]));
+    codes.forEach(code => { if (!stores[code] && bestTotals[code]) relist(stores[code] = EMPTY_PEERS(), bestTotals[code]); });
+    company.productMap = {}; company.extraMap = {};
+    Object.values(bestTotals).forEach(t => {
+      Object.entries(t.products || {}).forEach(([n, pr]) => { const m = (company.productMap[n] ||= { qty: 0, amount: 0 }); m.qty += pr.qty || 0; m.amount += pr.amount || 0; });
+      Object.entries(t.extras || {}).forEach(([n, ex]) => { const m = (company.extraMap[n] ||= { qty: 0, amount: 0 }); m.qty += ex.qty || 0; m.amount += ex.amount || 0; });
+    });
+  }
   const top = (map, n = 5) => Object.entries(map || {}).filter(([, v]) => v.qty > 0).sort((a, b) => b[1].qty - a[1].qty || b[1].amount - a[1].amount).slice(0, n)
     .map(([name, v]) => ({ name, qty: Math.round(v.qty), amount: Math.round(v.amount * 100) / 100, avg: v.qty > 0 ? Math.round((v.amount / v.qty) * 100) / 100 : null }));
   const finish = agg => { agg.topProducts = top(agg.productMap); agg.topExtras = top(agg.extraMap); delete agg.productMap; delete agg.extraMap; };
   Object.values(stores).forEach(finish);
   finish(company);
-  return { stores, company };
+  return { stores, company, bestStart: bestTotals ? bestStart : start };
 }
 
 // Shared with api/_my-numbers.js (server) and the leadership view of the tab.

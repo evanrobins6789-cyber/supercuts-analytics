@@ -30,7 +30,7 @@ import {
 } from './metrics';
 import { BITMOJI_POOLS } from './bitmoji';
 import { buildPayRows, topTsthRow, payPeriodFor, MIN_HOURS_FOR_TOP, buildRateLookup, haircutPriceFor } from './payTracker';
-import { buildMyNumbers, pickOwnRecords, normalizePersonName, buildPeerStats } from './myNumbers';
+import { buildMyNumbers, pickOwnRecords, normalizePersonName, buildPeerStats, bestSellerStart } from './myNumbers';
 import { buildPayBreakdown, buildCoaching } from './payCoach';
 import { TabMenu } from './TabMenu';
 import { FocusStoresTab, focusStoresContext } from './focusStores';
@@ -1941,7 +1941,7 @@ function PayExplainer({ pay, coaching, leaderName = null, stores = [], peers = n
       {stores.some(st => peers?.stores?.[st.code]?.topProducts?.length || peers?.stores?.[st.code]?.topExtras?.length) && (
         <>
           <p className="section-label">🛍️ Best sellers {stores.length > 1 ? 'at your stores' : `at ${stores[0].name}`}</p>
-          <p className="section-hint">What sold the most at the store over these same dates (everyone there combined), with the average price. Good ones to suggest.</p>
+          <p className="section-hint">What sold the most at the store in the last 90 days (everyone there combined), with the average price. Good ones to suggest.</p>
           <div className="coach-list">
             {stores.map(st => {
               const ps = peers?.stores?.[st.code];
@@ -1958,8 +1958,8 @@ function PayExplainer({ pay, coaching, leaderName = null, stores = [], peers = n
                 <div key={st.code} className="coach-card best-sellers-card">
                   {stores.length > 1 && <p className="coach-title">{st.name}</p>}
                   <div className="best-sellers-grid">
-                    {list('Top products', ps.topProducts, 'No product sales on file for these dates.')}
-                    {list('Top extra services', ps.topExtras, 'Shows up once Sales-Accrual files from these dates are uploaded again (extras by name started Nov 3, 2026).')}
+                    {list('Top products', ps.topProducts, 'No product sales on file for the last 90 days.')}
+                    {list('Top extra services', ps.topExtras, 'No extra services on file for the last 90 days.')}
                   </div>
                 </div>
               );
@@ -2000,7 +2000,7 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
     const picked = pickOwnRecords({ dailyRows: [{ payload: localSelf.history || {} }], weeklyRows: [{ payload: localSelf.weeklyHistory || {} }], tipRows: [{ payload: localSelf.tipsHistory || {} }], names, start: range.start, end: range.end });
     const codes = [...new Set(Object.values(picked.history).map(r => r.code))];
     Object.values(picked.weeklyHistory).forEach(w => Object.entries(w.stores || {}).forEach(([c, st]) => { if (st.employees?.length) codes.push(c); }));
-    const peers = buildPeerStats({ history: localSelf.history || {}, weeklyHistory: localSelf.weeklyHistory || {}, names, codes: [...new Set(codes)], start: range.start, end: range.end });
+    const peers = buildPeerStats({ history: localSelf.history || {}, weeklyHistory: localSelf.weeklyHistory || {}, names, codes: [...new Set(codes)], start: range.start, end: range.end, bestStart: bestSellerStart(range.end) });
     return { ...picked, peers, payRate: localSelf.payRate ?? null, matchedNames: [...names] };
   }, [localSelf, range.start, range.end]);
   const serverData = localSelf ? localSelfData : state.data;
@@ -2014,7 +2014,7 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
     const names = new Set([normalizePersonName(top.name)]);
     const picked = pickOwnRecords({ dailyRows: [{ payload: history }], weeklyRows: [{ payload: weeklyHistory }], tipRows: [{ payload: tipsHistory }], names, start: range.start, end: range.end });
     const result = buildMyNumbers({ ...picked, start: range.start, end: range.end });
-    const peers = buildPeerStats({ history, weeklyHistory, names, codes: result.stores.map(st => st.code), start: range.start, end: range.end });
+    const peers = buildPeerStats({ history, weeklyHistory, names, codes: result.stores.map(st => st.code), start: range.start, end: range.end, bestStart: bestSellerStart(range.end) });
     const lastDate = Object.values(picked.history).map(h => h.date).sort().pop() || null;
     return { top, result, peers, lastDate, rows, picked: !!chosen };
   }, [isOwner, history, weeklyHistory, tipsHistory, payRates, nameAliases, payFocusName, range.start, range.end]);
@@ -2257,7 +2257,7 @@ function TeamTsthTab({ token, role, history = null, weeklyHistory = null, tipsHi
     const picked = pickOwnRecords({ dailyRows: [{ payload: history }], weeklyRows: [{ payload: weeklyHistory }], tipRows: [{ payload: tipsSrc }], names, start: range.start, end: range.end });
     const result = buildMyNumbers({ ...picked, start: range.start, end: range.end });
     if (!result.stores.length) return { result, pay: null, coaching: [], peers: null };
-    const peers = buildPeerStats({ history, weeklyHistory, names, codes: result.stores.map(st => st.code), start: range.start, end: range.end });
+    const peers = buildPeerStats({ history, weeklyHistory, names, codes: result.stores.map(st => st.code), start: range.start, end: range.end, bestStart: bestSellerStart(range.end) });
     if (!isOwner && server.data?.company) peers.company = server.data.company;
     const row = rowsByName[normalizePersonName(person)];
     const pay = buildPayBreakdown({ stores: result.stores, total: result.total, payRate: row?.hourly ?? null, manager: !!row?.manager });
@@ -2482,18 +2482,18 @@ function PayTrackerCard({ data, onPick = null, pickedName = null }) {
   if (!data) return null;
   const { period, through, top } = data;
   const picker = onPick ? <EmployeePicker rows={data.rows} value={pickedName} onChange={onPick} dark /> : null;
-  const periodLabel = `${fmtPayDate(period.start)} – ${fmtPayDate(period.end)}`;
+  const periodLabel = `${data.previous ? 'Last pay period, ' : 'Pay period '}${fmtPayDate(period.start)} – ${fmtPayDate(period.end)}`;
   if (!top) {
     return (
       <div className="pay-tracker">
-        <div className="pay-tracker-head"><p className="pay-tracker-eyebrow">Pay period {periodLabel} · Top TSTH</p>{picker}</div>
+        <div className="pay-tracker-head"><p className="pay-tracker-eyebrow">{periodLabel} · Top TSTH</p>{picker}</div>
         <p className="pay-tracker-empty">No one has {MIN_HOURS_FOR_TOP}+ hours with sales on file yet this pay period. Upload Sales-Accrual and Attendance to fill this in.</p>
       </div>
     );
   }
   return (
     <div className="pay-tracker">
-      <div className="pay-tracker-head"><p className="pay-tracker-eyebrow">Pay period {periodLabel} · {data.picked ? 'Selected employee' : 'Top TSTH'}{through ? ` · through ${fmtPayDate(through)}` : ''}</p>{picker}</div>
+      <div className="pay-tracker-head"><p className="pay-tracker-eyebrow">{periodLabel} · {data.picked ? 'Selected employee' : 'Top TSTH'}{through ? ` · through ${fmtPayDate(through)}` : ''}</p>{picker}</div>
       <p className="pay-tracker-name">{top.name}<FocusTag name={top.name} /> <span>{top.store} ({top.state}) · {top.manager ? 'Manager, 30%' : 'Stylist, 25%'}</span></p>
       <TsthBar tsth={top.tsth} goal={top.goal} />
       <div className="pay-tracker-stats">
@@ -4025,6 +4025,18 @@ function StoreSnapshot({ s, start, end, ly, history, weeklyHistory, goals, giftC
     return { ...computeStoreBudget({ ...shape, code }), shape, start: bp.start, end: bp.end };
   }, [show.budgets, history, weeklyHistory, code]);
 
+  // What sold at this store in the 90 days up to the end of the dates shown
+  // (user, 2026-11-16): top products, top color services, every shampoo.
+  const sold90 = useMemo(() => {
+    const from = addDaysISO(end, -89);
+    const t = getRangeTotals(history, weeklyHistory, from, end)[code] || {};
+    const top = (m, n) => Object.entries(m || {}).filter(([, v]) => v.qty > 0)
+      .sort((a, b) => b[1].qty - a[1].qty || b[1].amount - a[1].amount).slice(0, n)
+      .map(([name, v]) => ({ name, qty: Math.round(v.qty), amount: v.amount }));
+    const shampoos = top(Object.fromEntries(Object.entries(t.extras || {}).filter(([n]) => /shampoo/i.test(n))), 50);
+    return { from, products: top(t.products, 10), color: top(t.colorItems, 10), shampoos, shampooTotal: shampoos.reduce((a, x) => a + x.qty, 0), hasExtras: Object.keys(t.extras || {}).length > 0 };
+  }, [history, weeklyHistory, code, end]);
+
   const manager = managers?.[code];
   return (
     <div className="snap">
@@ -4091,6 +4103,32 @@ function StoreSnapshot({ s, start, end, ly, history, weeklyHistory, goals, giftC
             </div>
           </>
         ) : <p className="empty-note">No reviews on file for this store.</p>}
+      </SnapCard>
+
+      <SnapCard title="🛍️ What sold, last 90 days" sub={`${fmtDateLong(sold90.from)} – ${fmtDateLong(end)}, counted by how many were sold.`} tab={go('Retail')} onGoTab={onGoTab}>
+        <div className="snap-sold-grid">
+          {[
+            { title: 'Top products', items: sold90.products, empty: 'No product sales on file for these 90 days.' },
+            { title: 'Top color services', items: sold90.color, empty: 'Color services by name start with Sales-Accrual files uploaded from Nov 16, 2026. Upload the last 90 days again to fill this in.' },
+          ].map(col => (
+            <div key={col.title}>
+              <p className="snap-subhead">{col.title}</p>
+              {col.items.length ? (
+                <table className="snap-table"><tbody>
+                  {col.items.map((it, i) => <tr key={it.name}><td>{i + 1}. {it.name}</td><td>{fmtInt(it.qty)}</td><td>{fmt$(it.amount)}</td></tr>)}
+                </tbody></table>
+              ) : <p className="empty-note">{col.empty}</p>}
+            </div>
+          ))}
+          <div>
+            <p className="snap-subhead">Shampoo services{sold90.shampooTotal ? ` · ${fmtInt(sold90.shampooTotal)} total` : ''}</p>
+            {sold90.shampoos.length ? (
+              <table className="snap-table"><tbody>
+                {sold90.shampoos.map(it => <tr key={it.name}><td>{it.name}</td><td>{fmtInt(it.qty)}</td><td>{fmt$(it.amount)}</td></tr>)}
+              </tbody></table>
+            ) : <p className="empty-note">{sold90.hasExtras ? 'No shampoo services in these 90 days.' : 'Shampoo services by name start with Sales-Accrual files from Oct 1, 2026.'}</p>}
+          </div>
+        </div>
       </SnapCard>
 
       <SnapCard title="📅 vs last year" sub={lyShape ? `Same dates last year: ${fmtDateLong(shiftYearISO(start, -1))} – ${fmtDateLong(shiftYearISO(end, -1))}.` : null} tab={go('Weekly')} onGoTab={onGoTab}>
@@ -4568,7 +4606,7 @@ function FocusGoalModal({ target, existing, onSubmit, onRemove, onClose }) {
   );
 }
 
-function FocusStylistTab({ focusStylists, history, weeklyHistory, onSaveFocus, isOwner }) {
+function FocusStylistTab({ focusStylists, history, weeklyHistory, onSaveFocus, isOwner, readOnly = false }) {
   const [editTarget, setEditTarget] = useState(null);
   const thisMonth = focusMonthKey();
   const [month, setMonth] = useState(thisMonth);
@@ -4643,12 +4681,12 @@ function FocusStylistTab({ focusStylists, history, weeklyHistory, onSaveFocus, i
         </select>
       </div>
       <p className="section-hint">
-        {isOwner ? 'Every focus stylist, grouped by DL.' : 'Your focus stylists.'} A focus lasts for the month. {fmtMonthLong(month)} TSTH and CPH are {month === thisMonth ? 'month-to-date' : 'for the whole month'}: green means at or above goal, red means below, and the line under it is the change from {fmtMonthLong(prevMonth)}.{month === thisMonth ? ' Add stylists with the FOCUS button next to their name on the Overview tab.' : ''}
+        {isOwner ? 'Every focus stylist, grouped by DL.' : readOnly ? "Your store's focus stylists, picked by your District Leader." : 'Your focus stylists.'} A focus lasts for the month. {fmtMonthLong(month)} TSTH and CPH are {month === thisMonth ? 'month-to-date' : 'for the whole month'}: green means at or above goal, red means below, and the line under it is the change from {fmtMonthLong(prevMonth)}.{month === thisMonth && !readOnly ? ' Add stylists with the FOCUS button next to their name on the Overview tab.' : ''}
       </p>
       {!total && (
         <div className="empty-state">
           <p className="empty-title">No focus stylists for {fmtMonthLong(month)}</p>
-          {month === thisMonth && <p>Open a store on the Overview or DL tab and click FOCUS next to a stylist's name.</p>}
+          {month === thisMonth && !readOnly && <p>Open a store on the Overview or DL tab and click FOCUS next to a stylist's name.</p>}
         </div>
       )}
       <div className="dl-list">
@@ -4674,7 +4712,7 @@ function FocusStylistTab({ focusStylists, history, weeklyHistory, onSaveFocus, i
                     <th>CPH {shortMonth(prevMonth)}</th>
                     <th>CPH {shortMonth(month)}</th>
                     <th className="ledger-text-col">Added</th>
-                    <th></th>
+                    {!readOnly && <th></th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -4689,7 +4727,7 @@ function FocusStylistTab({ focusStylists, history, weeklyHistory, onSaveFocus, i
                       <td>{prevCell(r.prev?.cph, n => fmtNum(n, 2))}</td>
                       <td>{vsGoal(r.actual?.cph, r.cphGoal, r.prev?.cph, n => fmtNum(n, 2))}</td>
                       <td className="ledger-text-col focus-added">{r.addedAt ? `${shortMonth(r.addedAt.slice(0, 7))} ${Number(r.addedAt.slice(8, 10))}` : ''}{r.addedBy ? ` · ${r.addedBy}` : ''}</td>
-                      <td><button type="button" className="focus-btn focus-btn--on" onClick={() => setEditTarget({ code: r.code, storeName: r.storeName, name: r.name, tsth: r.actual?.tsth, cph: r.actual?.cph, entryKey: r.entryKey, month: r.month })}>Edit</button></td>
+                      {!readOnly && <td><button type="button" className="focus-btn focus-btn--on" onClick={() => setEditTarget({ code: r.code, storeName: r.storeName, name: r.name, tsth: r.actual?.tsth, cph: r.actual?.cph, entryKey: r.entryKey, month: r.month })}>Edit</button></td>}
                     </tr>
                   ))}
                 </tbody>
@@ -4698,7 +4736,7 @@ function FocusStylistTab({ focusStylists, history, weeklyHistory, onSaveFocus, i
           </div>
         ))}
       </div>
-      {editTarget && (
+      {editTarget && !readOnly && (
         <FocusGoalModal
           target={editTarget}
           existing={focusStylists?.[editTarget.code]?.[editTarget.entryKey] || null}
@@ -6930,6 +6968,46 @@ function ShearCheckForm({ stores, visits, sections, managers, onSave, onEmail, o
         </div>
         {(!form.code || left > 0 || uploading > 0) && <p className="sc-footer-hint">{!form.code ? 'Pick a salon at the top.' : left > 0 ? `Answer every item to save (${left} left).` : `Uploading ${uploading} photo${uploading === 1 ? '' : 's'}…`}</p>}
       </div>
+    </div>
+  );
+}
+
+// Managers' Shear Check: just their store's visit scores (scopeFilter strips
+// everything else). Nothing to fill in or change.
+function ShearCheckManagerView({ salonChecks }) {
+  // Already only their own store(s): the server (and View as Manager) filter it.
+  const visits = salonCheckList(salonChecks);
+  const multi = new Set(visits.map(v => v.code)).size > 1;
+  const avg = scAvg(visits);
+  return (
+    <div className="tab-content">
+      <p className="section-hint">Shear Check scores from your District Leader's visits to your store. Colors: 90%+ green, 75–89% gold, under 75% red.</p>
+      {!visits.length ? (
+        <div className="empty-state"><p className="empty-title">No visits yet</p><p>Your store's score shows here after its first Shear Check.</p></div>
+      ) : (
+        <>
+          <div className="sc-company">
+            <span className="sc-footer-label">Average</span>
+            <span className={`sc-footer-pct ${scClass(avg)}`}>{scPct(avg)}</span>
+            <span className="sc-footer-counts">{visits.length} visit{visits.length === 1 ? '' : 's'}</span>
+          </div>
+          <div className="ledger-scroll">
+            <table className="ledger-table sc-table">
+              <thead><tr><th className="ledger-name-col">Date</th>{multi && <th className="ledger-text-col">Store</th>}<th>Score</th><th className="ledger-text-col">Visited by</th></tr></thead>
+              <tbody>
+                {visits.map(v => (
+                  <tr key={`${v.code}-${v.id}`}>
+                    <td className="ledger-name-col">{v.date ? fmtDateLong(v.date) : '—'}</td>
+                    {multi && <td className="ledger-text-col">{STORE_CODE_TO_NAME[v.code] || v.code}</td>}
+                    <td><span className={`sc-score-chip ${scClass(v.score)}`}>{scPct(v.score)}</span></td>
+                    <td className="ledger-text-col">{v.by || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -9518,8 +9596,8 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
     m.stores.forEach(s => {
       const ps = m.peers?.stores?.[s.code];
       const fmtList = items => (items || []).map(it => `${it.name} (${it.qty} sold${it.avg != null ? `, ~$${it.avg.toFixed(2)}` : ''})`).join('; ');
-      if (ps?.topProducts?.length) lines.push(`  Best-selling products at ${s.name} this pay period (everyone there combined): ${fmtList(ps.topProducts)}`);
-      if (ps?.topExtras?.length) lines.push(`  Most popular extra services at ${s.name}: ${fmtList(ps.topExtras)}`);
+      if (ps?.topProducts?.length) lines.push(`  Best-selling products at ${s.name} in the last 90 days (everyone there combined): ${fmtList(ps.topProducts)}`);
+      if (ps?.topExtras?.length) lines.push(`  Most popular extra services at ${s.name} in the last 90 days: ${fmtList(ps.topExtras)}`);
     });
   }
 
@@ -12918,15 +12996,20 @@ export default function App() {
     const src = presenterData || { history, weeklyHistory, tipsHistory, payRates, nameAliases };
     const now = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    const period = payPeriodFor(today);
-    const end = today < period.end ? today : period.end;
+    // On the first day of a pay period (the 16th, or the 1st) nothing is on
+    // file yet for it, so show the whole pay period that just ended (user,
+    // 2026-11-16: "on the 16th show the 1st–15th").
+    const current = payPeriodFor(today);
+    const previous = today === current.start;
+    const period = previous ? previousPayPeriod(today) : current;
+    const end = previous ? period.end : (today < period.end ? today : period.end);
     const rateFor = src.payRates.length ? buildRateLookup(src.payRates, src.nameAliases) : null;
     const rows = buildPayRows({ history: src.history, weeklyHistory: src.weeklyHistory, tipsHistory: src.tipsHistory, start: period.start, end, rateFor });
     const days = Object.values(src.history || {}).filter(r => r.date >= period.start && r.date <= end && r.employees && Object.keys(r.employees).length).map(r => r.date).sort();
     const noRate = rateFor ? rows.filter(r => !r.rateMatched).map(r => `${r.name} (${r.store})`).sort() : [];
     // Leadership can pick anyone to show instead of the top TSTH person.
     const picked = payFocusName ? rows.find(r => normalizePersonName(r.name) === normalizePersonName(payFocusName)) : null;
-    return { period, through: days[days.length - 1] || null, top: picked || topTsthRow(rows), picked: !!picked, rows, ratesLoaded: !!rateFor, noRate };
+    return { period, previous, through: days[days.length - 1] || null, top: picked || topTsthRow(rows), picked: !!picked, rows, ratesLoaded: !!rateFor, noRate };
   }, [currentUser, presenterData, history, weeklyHistory, tipsHistory, payRates, nameAliases, payFocusName]);
 
   // View as DL: the owner's data run through the same per-role filter the
@@ -13020,9 +13103,13 @@ export default function App() {
   const canFocus = u.role === 'owner' || u.role === 'district_leader';
   // Shear Check: same roles as Focus Stylist.
   const canSalonCheck = canFocus;
+  // Managers can look at both tabs (read-only; Shear Check = their store's
+  // scores only, already stripped by scopeFilter). User, 2026-11-16.
+  const canSeeFocus = canFocus || u.role === 'manager';
+  const canSeeSalonScores = canSalonCheck || u.role === 'manager';
   // The DL tab (every DL group side by side) is owner-only (user, 2026-11-10).
   // Focus Stores is leadership-only (owner role), like Leases.
-  const visibleTabs = TABS.filter(t => (t !== 'Focus Stores' || u.role === 'owner') && (t !== 'DL' || u.role === 'owner') && (t !== 'Setup' || u.role === 'owner') && (t !== 'Goals' || u.role !== 'employee') && (t !== 'Budgets' || u.role !== 'employee') && (t !== 'Leases' || u.role === 'owner') && (t !== 'Gift Cards' || u.role === 'owner' || u.role === 'district_leader') && (t !== 'Loss Prevention' || u.role === 'owner') && (t !== 'Coupons' || u.role === 'owner') && (t !== 'Focus Stylist' || canFocus) && (t !== 'Shear Check' || canSalonCheck) && (t !== 'Team TSTH' || u.role === 'owner' || u.role === 'district_leader' || u.role === 'manager') && (t !== 'Scheduling' || u.role === 'owner' || u.role === 'district_leader' || u.role === 'manager'));
+  const visibleTabs = TABS.filter(t => (t !== 'Focus Stores' || u.role === 'owner') && (t !== 'DL' || u.role === 'owner') && (t !== 'Setup' || u.role === 'owner') && (t !== 'Goals' || u.role !== 'employee') && (t !== 'Budgets' || u.role !== 'employee') && (t !== 'Leases' || u.role === 'owner') && (t !== 'Gift Cards' || u.role === 'owner' || u.role === 'district_leader') && (t !== 'Loss Prevention' || u.role === 'owner') && (t !== 'Coupons' || u.role === 'owner') && (t !== 'Focus Stylist' || canSeeFocus) && (t !== 'Shear Check' || canSeeSalonScores) && (t !== 'Team TSTH' || u.role === 'owner' || u.role === 'district_leader' || u.role === 'manager') && (t !== 'Scheduling' || u.role === 'owner' || u.role === 'district_leader' || u.role === 'manager'));
   // A live weekly Stylist Report upload is no longer the only way to power
   // these tabs — Sales-Accrual + Attendance historical imports feed the
   // exact same tables via each tab's own current-month fallback (see
@@ -13120,8 +13207,11 @@ export default function App() {
             }}
             onGoTab={t => { setTab(t); window.scrollTo(0, 0); }} />
         )}
-        {tab === 'Focus Stylist' && canFocus && (
-          <FocusStylistTab focusStylists={d.focusStylists} history={d.history} weeklyHistory={d.weeklyHistory} onSaveFocus={handleSaveFocus} isOwner={u.role === 'owner'} />
+        {tab === 'Focus Stylist' && canSeeFocus && (
+          <FocusStylistTab focusStylists={d.focusStylists} history={d.history} weeklyHistory={d.weeklyHistory} onSaveFocus={handleSaveFocus} isOwner={u.role === 'owner'} readOnly={!canFocus} />
+        )}
+        {tab === 'Shear Check' && !canSalonCheck && canSeeSalonScores && (
+          <ShearCheckManagerView salonChecks={d.salonChecks} />
         )}
         {tab === 'Shear Check' && canSalonCheck && (
           <ShearCheckTab
