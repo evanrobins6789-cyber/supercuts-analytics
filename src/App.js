@@ -1573,7 +1573,7 @@ const SITE_TIPS = [
   { icon: '📥', title: 'Keep the numbers fresh', body: 'Setup › Historical Import takes Sales-Accrual, Attendance, Tips and Pay Rates files. Re-uploading the same dates is safe; those days are replaced, not doubled.', roles: ['owner'] },
   { icon: '🔗', title: 'Different POS names', body: 'If someone’s name in the POS differs from their login ("Sammy" vs "Samantha"), type the POS spelling in Setup › Employee Access › "Also in sales as" so their numbers and pay rate line up.', roles: ['owner'] },
   { icon: '🏁', title: 'Focus Stores', body: 'On the Focus Stores tab, pick the stores leadership is focusing on for 90 days. Each one tracks its monthly Sales goal (hit it 3 months in a row to graduate) and a checklist of Karen’s, Kendra’s and Evan’s responsibilities to check off as they’re done.', roles: ['owner'] },
-  { icon: '🎟️', title: 'Ad coupons', body: 'The Coupons tab shows what people do on the ad coupon pages: page views, screenshot taps, email signups and Book Now taps, by offer, by ad source and by day.', roles: ['owner'] },
+  { icon: '🎟️', title: 'Ad coupons', body: 'The Coupons tab shows what people do on the ad coupon pages: page views, email signups and Book Now taps (with % of visitors), a daily chart, and where visits came from (Facebook, Google, etc.), by offer, by ad source and by day.', roles: ['owner'] },
   { icon: '✉️', title: 'Finalize goals', body: 'On the Goals tab, "Finalize & email DLs" sends each DL their Sales goals and leadership a roll-up of everyone. Send yourself a test first.', roles: ['owner'] },
   { icon: '🎭', title: 'Presenter mode', body: 'Showing the site in a meeting? Turn on Presenter Mode in Setup and every name and number is made up. Nothing saves while it’s on.', roles: ['owner'] },
 ];

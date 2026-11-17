@@ -1894,3 +1894,20 @@
 .sched-dot { display: inline-flex; align-items: center; justify-content: center; font-style: normal; font-size: 9.5px; font-weight: 700; line-height: 1; }
 .sched-dot-lost { color: #fff; }
 .sched-dot-guest { color: var(--navy); }
+
+/* Coupons tab (src/coupons.js): charts row, legend, "where visits came from" bars */
+.coupon-chart-grid { display: grid; grid-template-columns: 3fr 2fr; gap: 12px; margin: 12px 0; }
+@media (max-width: 900px) { .coupon-chart-grid { grid-template-columns: 1fr; } }
+.coupon-chart { position: relative; height: 240px; }
+.coupon-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: -2px 0 10px; font-size: 12px; color: var(--ink-soft); }
+.coupon-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.coupon-legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.source-bars { display: flex; flex-direction: column; gap: 10px; }
+.source-bar-row { display: grid; grid-template-columns: minmax(80px, 34%) 1fr auto; align-items: center; gap: 10px; font-size: 13px; }
+.source-bar-name { font-weight: 600; color: var(--navy); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source-bar-track { height: 12px; background: #EEF1F4; border-radius: 4px; overflow: hidden; }
+.source-bar-fill { display: block; height: 100%; min-width: 2px; background: #2a78d6; border-radius: 4px; }
+.source-bar-value { color: var(--ink-soft); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.source-bar-value strong { color: var(--navy); }
+.source-bar-note { font-size: 11px; color: var(--ink-soft); margin: 4px 0 0; }
+.source-bar-note code { background: #EEF1F4; padding: 1px 4px; border-radius: 3px; }
