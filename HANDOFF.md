@@ -2,6 +2,14 @@
 
 ## Where things stand (updated 2026-11-13)
 
+**Maintenance Request widget (2026-11-19).** User: a Homepage tile right below the review one (Shoutouts) where people pick a store and type an issue, going to a Google Sheet sorted by DL.
+- Widget + Setup page live in **`src/maintenance.js`** (`MaintenanceRequestWidget`, `MaintenanceSetupTab`). Store picker: the owner sees every store, everyone else sees their own `store_codes`. It's turned off in Presenter Mode and in View-as.
+- Server: **`api/_maintenance.js`**, reached as `scoped-data { action: 'maintenance-request' }` (the 12-function cap is already used up). It checks the session and the store, takes the DL from leaderRoster.js, and saves the request to its own `maintenance_request_<id>` row so two sends can't overwrite each other. Then it POSTs `{ secret, request }` to the Apps Script web app (`MAINTENANCE_SHEET_WEBAPP_URL` + `MAINTENANCE_SHEET_SECRET`). If the Sheet isn't connected, the request is still saved and the sender sees a warning.
+- The Apps Script is in Setup → Maintenance. It adds a row to the "Requests" tab, sorted by DL A–Z and then newest first. Status (Open/In Progress/Done) and Notes are for filling in by hand and move with their row when it sorts.
+- **The user still has to do the setup:** make the Sheet, paste the script, deploy it as a web app (Anyone), and add the 2 env vars on both Vercel projects, then redeploy.
+- No in-app list of past requests; the Sheet is the list. Not added to Tilly's context, because requests aren't loaded in the browser and Tilly is hidden (`SHOW_TILLY`).
+- Verified: clean `CI=true npm run build`; a Node check of `buildMaintenanceRecord` (right DL, rejects another store and an empty issue, owner can pick any store); `node --check` of the script. **Not verified**: the live site, a real Apps Script run, or the look on a phone.
+
 **The user's 2026-10-28 list:**
 1. ~~Bonus + tips as an hourly figure~~ **Built 2026-11-03.** The rules came from the user (see the TSTH/bonus entries below). Tips come from the new Tips report upload. Base pay comes from the Employee Pay Rate Report (locked `pay_rates` table).
 2. **Store and employee rankings within their DL group.** Not built. Still to ask: which metrics, and who sees it.

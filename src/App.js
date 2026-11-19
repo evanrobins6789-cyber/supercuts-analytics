@@ -38,6 +38,7 @@ import { SchedulingTab, parseShiftFile, mergeShiftMonth, analyzeSchedules, sched
 import { parseAppointmentsFile, classifyAppointments, mergeApptMonth, apptMonths, analyzeAppointments, appointmentsContext, lostForSchedules } from './appointments';
 import { CouponsTab, couponsContext, couponPresets } from './coupons';
 import { CollectiveGoalBars } from './CollectiveGoalBars';
+import { MaintenanceRequestWidget, MaintenanceSetupTab } from './maintenance';
 import { parseManagerListGrid, planManagerPromotions, PLAN_STATUS_LABELS } from './managerList';
 import { collectiveGoal, goalPace, goalHeat, GIFT_CARD_GOAL_PERIODS, giftCardPeriodFor, giftCardPeriodGoal, periodThrough, periodPace } from './goalProgress';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
@@ -2534,7 +2535,7 @@ function PayTrackerCard({ data, onPick = null, pickedName = null }) {
   );
 }
 
-function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore, news, events, reviews, onOpenNews, canPost, onAddNews, onAddEvent, newsGroups, onImageError, rankToken, rankRole, payTracker = null, onPayPick = null, payFocusName = null }) {
+function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore, news, events, reviews, onOpenNews, canPost, onAddNews, onAddEvent, newsGroups, onImageError, rankToken, rankRole, payTracker = null, onPayPick = null, payFocusName = null, maintenance = null }) {
   const todayISO = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const sortedNews = useMemo(() => [...news].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || '').localeCompare(a.createdAt || '')), [news]);
   const reportUsable = report && !isReportStale(report);
@@ -2714,6 +2715,7 @@ function HomepageTab({ report, history, weeklyHistory, fallbackEmployeesByStore,
 
         <div className="homepage-sidebar">
           <ReviewSpotlightWidget report={report} fallbackEmployeesByStore={fallbackEmployeesByStore} reviews={reviews} bitmojiImg={bitmojiImg} bitmojiActive={bitmojiKey === 'spotlight'} />
+          {maintenance && <MaintenanceRequestWidget {...maintenance} />}
           <CoreValuesWidget bitmojiImg={bitmojiImg} bitmojiActive={bitmojiKey === 'corevalues'} />
           <SiteTipsWidget role={rankRole} />
         </div>
@@ -9714,6 +9716,7 @@ const SETUP_SECTIONS = [
   { key: 'employeeAccess', label: 'Employee Access' },
   { key: 'rewards', label: 'Rewards' },
   { key: 'hsa', label: 'HSA' },
+  { key: 'maintenance', label: 'Maintenance' },
   { key: 'leases', label: 'Leases' },
   { key: 'presenter', label: 'Presenter Mode, DL & Manager View' },
 ];
@@ -10860,6 +10863,7 @@ function SetupTab({ configured, section, onSection, managersProps, milestoneGoal
       {section === 'employeeAccess' && <EmployeeAccessSetupTab {...employeeAccessProps} />}
       {section === 'rewards' && <RewardsSetupTab {...rewardsProps} />}
       {section === 'hsa' && <HsaSetupTab {...hsaProps} />}
+      {section === 'maintenance' && <MaintenanceSetupTab />}
       {section === 'leases' && <LeaseAdminSetupTab {...leaseAdminProps} />}
       {section === 'presenter' && <PresenterSetupTab {...presenterProps} />}
 
@@ -13184,6 +13188,10 @@ export default function App() {
             newsGroups={newsGroups} onImageError={msg => showToast(msg, 'error')}
             rankToken={!viewing && (u.role === 'manager' || u.role === 'district_leader') ? currentUser.token : null} rankRole={u.role}
             payTracker={viewing ? null : payTracker} onPayPick={setPayFocusName} payFocusName={payFocusName}
+            maintenance={{
+              token: currentUser.token, role: u.role, storeCodes: u.store_codes,
+              disabledNote: presenting ? 'Turned off in Presenter Mode.' : viewing ? 'Turned off while viewing as someone else.' : null,
+            }}
           />
         )}
         {tab === 'Scheduling' && canSchedule && <SchedulingTab shiftHistory={d.shiftHistory} loadedMonths={shiftMonths} onNeedMonths={months => loadShiftMonths(months, currentUser.token)} loading={shiftLoading} salesFor={schedSalesFor} cutsFor={schedCutsFor} apptHistory={d.apptHistory || null} storeName={schedStoreName} dlFor={u.role === 'owner' ? code => getLeaderForStoreCode(code)?.leaderName || null : null} />}

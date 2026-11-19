@@ -1915,3 +1915,12 @@
 .mgr-plan-warn td { background: rgba(200, 60, 60, 0.08); }
 .snap-sold-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
 .snap-sold-grid .snap-table td:nth-child(n+2) { text-align: right; white-space: nowrap; }
+
+/* Homepage Maintenance Request widget (src/maintenance.js) */
+.maintenance-form { display: flex; flex-direction: column; gap: 8px; }
+.maintenance-form select.homepage-input { background: var(--card); width: 100%; }
+.maintenance-form .homepage-textarea { width: 100%; box-sizing: border-box; min-height: 84px; }
+.maintenance-status { font-size: 12.5px; margin: 0; line-height: 1.4; }
+.maintenance-status--ok { color: #2e7d32; }
+.maintenance-status--warn { color: #9a6700; }
+.maintenance-status--error { color: var(--red-deep); }

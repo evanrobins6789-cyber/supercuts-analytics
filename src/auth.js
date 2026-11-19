@@ -203,6 +203,12 @@ export function saveTabFavorites(token, tabs) {
   return postJson('/api/scoped-data', { action: 'tab-favorites-save', token, tabs });
 }
 
+// Homepage maintenance request -> saved + sent to the Google Sheet
+// (api/_maintenance.js). Blocked in presenter mode like any other write.
+export function sendMaintenanceRequest(token, storeCode, issue) {
+  return postWrite('/api/scoped-data', { action: 'maintenance-request', token, storeCode, issue });
+}
+
 // Owner-only hourly pay rates (api/_pay-rates.js, locked pay_rates table).
 export function payRatesLoad(token) {
   return postJson('/api/scoped-data', { action: 'pay-rates-load', token });
