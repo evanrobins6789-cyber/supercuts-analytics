@@ -10,6 +10,50 @@ export const supabase = SUPABASE_URL
 
 export const isConfigured = () => !!SUPABASE_URL && !!SUPABASE_ANON_KEY;
 
+// 2026-11-20: weekly_report is locked to the server (the anon key in this
+// bundle can't read or write it any more). Every load/save/clear below goes
+// through /api/scoped-data's kv-* actions (api/_kv.js) with the login token,
+// which App sets with setDbToken(). The `supabase` client above is still
+// used for Storage uploads to signed URLs.
+let dbToken = null;
+export function setDbToken(token) { dbToken = token || null; }
+const remote = () => isConfigured() && !!dbToken;
+async function kv(body) {
+  let res;
+  try {
+    res = await fetch('/api/scoped-data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: dbToken, ...body }) });
+  } catch {
+    return { ok: false, error: 'Could not reach the server. Check your connection and try again.' };
+  }
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) return { ok: false, error: json.error || `Request failed (${res.status})` };
+  return { ok: true, ...json };
+}
+// Big rows go gzipped (Vercel caps a request at 4.5 MB; reviews are ~5 MB).
+const GZIP_OVER = 1024 * 1024;
+async function gzipBase64(text) {
+  if (typeof CompressionStream === 'undefined') return null;
+  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
+  const buf = new Uint8Array(await new Response(stream).arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+async function kvSave(key, payload) {
+  const text = JSON.stringify(payload);
+  const gz = text.length > GZIP_OVER ? await gzipBase64(text) : null;
+  return kv(gz ? { action: 'kv-save', key, gz } : { action: 'kv-save', key, payload });
+}
+
+// Server only, no localStorage mirror (for big rows that would fill this
+// browser's storage: shift times, appointments). Returns { ok, error }.
+export async function saveRemote(key, payload) {
+  if (isWriteBlocked()) return { ok: false, error: PRESENTER_BLOCKED_ERROR };
+  if (!remote()) return { ok: false, error: 'Not logged in, so nothing was saved.' };
+  const r = await kvSave(key, payload);
+  return { ok: r.ok, error: r.ok ? null : r.error };
+}
+
 const LOCAL_PREFIX = 'supercuts_report_v1_';
 
 function readLocal(key) {
@@ -25,12 +69,10 @@ function readLocal(key) {
 // stylist report, the employee start-date roster, etc.) sharing one table.
 // Returns { data, source: 'supabase'|'local', error }
 export async function loadData(key) {
-  if (supabase) {
-    const { data, error } = await supabase.from('weekly_report').select('*').eq('report_id', key).maybeSingle();
-    if (!error) {
-      return { data: data ? data.payload : null, source: 'supabase', error: null };
-    }
-    return { data: readLocal(key), source: 'local', error: error.message };
+  if (remote()) {
+    const r = await kv({ action: 'kv-load', key });
+    if (r.ok) return { data: r.data ?? null, source: 'supabase', error: null };
+    return { data: readLocal(key), source: 'local', error: r.error };
   }
   return { data: readLocal(key), source: 'local', error: null };
 }
@@ -42,9 +84,9 @@ export async function saveData(key, payload) {
   if (isWriteBlocked()) return { ok: false, error: PRESENTER_BLOCKED_ERROR };
   if (payload == null) return { ok: false, error: 'Internal error: no data to save' };
   let error = null;
-  if (supabase) {
-    const res = await supabase.from('weekly_report').upsert({ report_id: key, payload }, { onConflict: 'report_id' });
-    if (res.error) { error = res.error.message; console.error('Supabase save error', res.error); }
+  if (remote()) {
+    const res = await kvSave(key, payload);
+    if (!res.ok) { error = res.error; console.error('Supabase save error', res.error); }
   }
   let localError = null;
   try { localStorage.setItem(LOCAL_PREFIX + key, JSON.stringify(payload)); }
@@ -55,7 +97,7 @@ export async function saveData(key, payload) {
   // shape that caused historical-import data to vanish before, just one
   // layer deeper). When Supabase IS configured and it succeeded, a local
   // mirror failure isn't fatal — the data is safe server-side.
-  if (!error && !supabase && localError) error = localError;
+  if (!error && !remote() && localError) error = localError;
   return { ok: !error, error };
 }
 
@@ -67,9 +109,9 @@ export async function saveData(key, payload) {
 export async function clearData(key) {
   if (isWriteBlocked()) return { ok: false, error: PRESENTER_BLOCKED_ERROR };
   let error = null;
-  if (supabase) {
-    const res = await supabase.from('weekly_report').delete().eq('report_id', key);
-    if (res.error) { error = res.error.message; console.error('Supabase clear error', res.error); }
+  if (remote()) {
+    const res = await kv({ action: 'kv-delete', key });
+    if (!res.ok) { error = res.error; console.error('Supabase clear error', res.error); }
   }
   localStorage.removeItem(LOCAL_PREFIX + key);
   return { ok: !error, error };
@@ -94,33 +136,34 @@ function readLocalByPrefix(prefix) {
 
 // Returns { data: [{key, payload}], source, error }
 export async function loadDataByPrefix(prefix) {
-  if (supabase) {
+  if (remote()) {
     // PostgREST caps a single .select() at (usually) 1000 rows — for a large
     // franchise with years of history split into per-month/per-store-month
     // chunks, that cap is realistic to hit, and going over it would silently
     // drop whole months from the load with no error at all (looks exactly
     // like data loss). Page through with .range() until a page comes back
     // short, so every chunk is always fetched regardless of table size.
-    const PAGE_SIZE = 1000;
+    // The server pages by size (api/_kv.js); follow `next` until done.
     let rows = [];
     let error = null;
-    for (let from = 0; ; from += PAGE_SIZE) {
-      const { data, error: pageError } = await supabase.from('weekly_report').select('*').like('report_id', `${prefix}%`).range(from, from + PAGE_SIZE - 1);
-      if (pageError) { error = pageError; break; }
-      rows = rows.concat(data || []);
-      if (!data || data.length < PAGE_SIZE) break;
+    for (let after = null; ;) {
+      const r = await kv({ action: 'kv-load-prefix', prefix, after });
+      if (!r.ok) { error = { message: r.error }; break; }
+      rows = rows.concat(r.rows || []);
+      if (!r.next) break;
+      after = r.next;
     }
     if (!error) {
-      const remote = rows.map(row => ({ key: row.report_id, payload: row.payload }));
+      const remoteRows = rows;
       // A chunk can exist locally (every save writes local first) but be
       // missing from Supabase if that one chunk's upsert failed or hasn't
       // synced yet — e.g. a large historical-import month timing out.
       // Fill any such gaps from local so a partial sync failure on THIS
       // device doesn't look like data loss on refresh; Supabase still wins
       // for any key both sides have, since it's the cross-device source of truth.
-      const remoteKeys = new Set(remote.map(r => r.key));
+      const remoteKeys = new Set(remoteRows.map(r => r.key));
       const localOnly = readLocalByPrefix(prefix).filter(r => !remoteKeys.has(r.key));
-      return { data: [...remote, ...localOnly], source: 'supabase', error: null, localOnlyKeys: localOnly.map(r => r.key) };
+      return { data: [...remoteRows, ...localOnly], source: 'supabase', error: null, localOnlyKeys: localOnly.map(r => r.key) };
     }
     return { data: readLocalByPrefix(prefix), source: 'local', error: error.message };
   }
@@ -131,9 +174,9 @@ export async function loadDataByPrefix(prefix) {
 export async function clearDataByPrefix(prefix) {
   if (isWriteBlocked()) return { ok: false, error: PRESENTER_BLOCKED_ERROR };
   let error = null;
-  if (supabase) {
-    const res = await supabase.from('weekly_report').delete().like('report_id', `${prefix}%`);
-    if (res.error) { error = res.error.message; console.error('Supabase clear-by-prefix error', res.error); }
+  if (remote()) {
+    const res = await kv({ action: 'kv-delete-prefix', prefix });
+    if (!res.ok) { error = res.error; console.error('Supabase clear-by-prefix error', res.error); }
   }
   const toRemove = [];
   for (let i = 0; i < localStorage.length; i++) {

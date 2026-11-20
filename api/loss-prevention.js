@@ -33,15 +33,29 @@ export default async function handler(req, res) {
 
   try {
     if (action === 'load') {
-      const PAGE_SIZE = 1000;
-      let rows = [];
-      for (let from = 0; ; from += PAGE_SIZE) {
-        const { data, error } = await supabase.from('loss_prevention').select('key, payload').range(from, from + PAGE_SIZE - 1);
+      // Paged by size (2026-11-20): a year+ of guest codes would pass
+      // Vercel's 4.5 MB response limit in one go. The client follows `next`.
+      const PAGE_BYTES = 3 * 1024 * 1024;
+      const after = typeof req.body.after === 'string' ? req.body.after : null;
+      const rows = [];
+      let bytes = 0, cursor = after, next = null;
+      for (;;) {
+        let q = supabase.from('loss_prevention').select('key, payload').order('key').limit(20);
+        if (cursor) q = q.gt('key', cursor);
+        const { data, error } = await q;
         if (error) throw new Error(error.message);
-        rows = rows.concat(data || []);
-        if (!data || data.length < PAGE_SIZE) break;
+        if (!data || !data.length) break;
+        let stop = false;
+        for (const row of data) {
+          const size = JSON.stringify(row.payload).length;
+          if (rows.length && bytes + size > PAGE_BYTES) { next = cursor; stop = true; break; }
+          rows.push(row);
+          bytes += size;
+          cursor = row.key;
+        }
+        if (stop || data.length < 20) break;
       }
-      res.status(200).json({ rows });
+      res.status(200).json({ rows, next });
       return;
     }
     if (action === 'save') {

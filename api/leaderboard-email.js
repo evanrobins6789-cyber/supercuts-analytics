@@ -33,8 +33,10 @@ import { getRangeTotals, historyTotalsToReportShape, getLastFullWeekRange, sortB
 import { buildGoalProgressEmails } from './_goal-progress-email.js';
 
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY || '';
-const supabase = SUPABASE_URL ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+// Service role (2026-11-20): weekly_report is locked to the server, so the
+// public anon key can't read or write it any more.
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabase = SUPABASE_URL && SUPABASE_SERVICE_KEY ? createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY) : null;
 
 async function loadRow(key) {
   const { data, error } = await supabase.from('weekly_report').select('*').eq('report_id', key).maybeSingle();

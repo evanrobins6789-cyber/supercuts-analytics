@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip } from 'chart.js';
 import { Bar } from 'react-chartjs-2';
-import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDataByPrefix, supabase } from './db';
+import { loadData, saveData, clearData, isConfigured, loadDataByPrefix, clearDataByPrefix, supabase, saveRemote, setDbToken } from './db';
 import {
   parseStylistReport, parseEmployeeStartDates, parseManagerFile, parseMilestoneGoalFile, parseReviews, normalizeName,
   parseSalesAccrualFile, parseAttendanceHistoryFile, mergeSalesIntoHistory, mergeAttendanceIntoHistory, parseGiftCardFile, mergeGiftCardsIntoHistory, parseTipsFile, mergeTipsIntoHistory, parsePayRateFile,
@@ -11237,6 +11237,10 @@ const TABS = ['Homepage', 'My Numbers', 'News', 'HSA', 'Overview', 'Focus Stores
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState(() => getSession());
+  // db.js loads/saves go through the server with this login's token (the
+  // weekly_report table is locked to the server). Set during render so it's
+  // in place before any effect below loads data.
+  setDbToken(currentUser?.token || null);
   // Presenter mode (owner-only, this browser only) — see presenter.js.
   // initPresenterMode also arms the module-level write block in db.js/auth.js.
   const [presenting, setPresenting] = useState(() => initPresenterMode(getSession()));
@@ -12682,9 +12686,9 @@ export default function App() {
       // storage (saveData mirrors every row there).
       if (isWriteBlocked()) { lines.push(`  ✗ shift times: ${PRESENTER_BLOCKED_ERROR}`); return; }
       if (!supabase) { lines.push('  ✗ shift times: Supabase is not configured, so they were not saved'); return; }
-      const { error } = await supabase.from('weekly_report').upsert({ report_id: key, payload: merged }, { onConflict: 'report_id' });
+      const { error } = await saveRemote(key, merged);
       if (!error) saved[m] = merged;
-      else lines.push(`  ✗ shift times for ${m}: couldn't save (${error.message})`);
+      else lines.push(`  ✗ shift times for ${m}: couldn't save (${error})`);
     }
     if (Object.keys(saved).length) {
       lines.push(`  ✓ shift times: ${parsed.shifts} shifts (${Object.keys(saved).join(', ')})`);
@@ -12724,8 +12728,8 @@ export default function App() {
           const current = await loadData(key);
           if (current.error) { lines.push(`  ✗ ${m}: couldn't read what's saved (${current.error}), so nothing was changed`); failed = true; continue; }
           const merged = mergeApptMonth(current.data || {}, parsed, m);
-          const { error } = await supabase.from('weekly_report').upsert({ report_id: key, payload: merged }, { onConflict: 'report_id' });
-          if (error) { lines.push(`  ✗ ${m}: couldn't save (${error.message})`); failed = true; } else saved[m] = merged;
+          const { error } = await saveRemote(key, merged);
+          if (error) { lines.push(`  ✗ ${m}: couldn't save (${error})`); failed = true; } else saved[m] = merged;
         }
         const t = Object.values(parsed.totals).reduce((a, x) => { Object.keys(a).forEach(k => { a[k] += x[k] || 0; }); return a; }, { C: 0, N: 0, W: 0, F: 0, S: 0, X: 0, U: 0, V: 0 });
         lines.push(`${failed ? '⚠' : '✓'} ${file.name} — ${parsed.start} to ${parsed.end}: ${t.C} cancelled, ${t.N} no-shows, ${t.W} walked out counted as lost; ${t.S} serviced the same day anyway and ${t.X} marked incorrect/duplicate/test (not counted); ${t.F} started then deleted with no sale (Loss Prevention)${t.V ? `; ${t.V} visits` : ''}.`);

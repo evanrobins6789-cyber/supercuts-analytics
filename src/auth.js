@@ -104,8 +104,16 @@ export function saveScoped(token, key, patch) {
 }
 
 // Owner-only Loss Prevention storage (api/loss-prevention.js).
-export function lpLoad(token) {
-  return postJson('/api/loss-prevention', { token, action: 'load' });
+export async function lpLoad(token) {
+  // The server pages by size; gather every page.
+  let rows = [];
+  for (let after = null; ;) {
+    const r = await postJson('/api/loss-prevention', { token, action: 'load', after });
+    if (!r.ok) return r;
+    rows = rows.concat(r.rows || []);
+    if (!r.next) return { ok: true, rows };
+    after = r.next;
+  }
 }
 export function lpSave(token, key, payload) {
   return postWrite('/api/loss-prevention', { token, action: 'save', key, payload });

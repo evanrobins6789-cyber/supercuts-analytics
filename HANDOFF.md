@@ -2,6 +2,22 @@
 
 ## Where things stand (updated 2026-11-13)
 
+**weekly_report locked to the server (2026-11-20).** User: "fix that" (the anon key in the site's JS could read and write every weekly_report row).
+- **Code**: every `db.js` load/save/clear now goes to `/api/scoped-data` `kv-*` actions (**`api/_kv.js`**) with the login token (`setDbToken`, set during App render). Sensitive keys are filtered by role (filterPayload). A sensitive prefix load is owner-only (others already use loadScopedByPrefix). Prefix loads page by size (3 MB, `next` cursor). Rows over 1 MB are sent gzipped (`gz`, base64; reviews 5.05 MB → 1.39 MB). **Writes**: the owner can write any key. Other roles can only write `SHARED_WRITE_KEYS` (news reads, HSA sign-ups, review notes, gold combs, events, news, news groups, news PDFs), i.e. what their screens save today. The two direct upserts (shift times, appointments) use `saveRemote` (server, no local mirror). `api/email-report.js`, `hsa-roster.js` and `leaderboard-email.js` switched from the anon key to `SUPABASE_SERVICE_ROLE_KEY`; all three already check a shared secret. Only this app uses the table (WTC has its own; the dashboard kit isn't deployed). The `current` row is a July leftover nothing reads.
+- **Loss Prevention load is paged too** (3 MB pages, `lpLoad` loops). A year+ of guest codes would have passed Vercel's 4.5 MB response limit.
+- **The lock itself is SQL the user runs AFTER the deploy is live** (running it first would break the site):
+  ```sql
+  alter table public.weekly_report enable row level security;
+  do $$ declare p record; begin
+    for p in select policyname from pg_policies where schemaname = 'public' and tablename = 'weekly_report' loop
+      execute format('drop policy %I on public.weekly_report', p.policyname);
+    end loop;
+  end $$;
+  revoke all on public.weekly_report from anon, authenticated;
+  ```
+  Check afterwards: `curl .../rest/v1/weekly_report?select=report_id&limit=1` with the anon key should return a permission error, not rows. **Local direct REST reads with the anon key (CLAUDE.md's tip) stop working after this**; use the service key or the app.
+- Verified: clean build; temp jest test (deleted) of `handleKv` against an in-memory table: 401 with no session, a DL gets only their store's reviews, the owner gets all, 5 × 1 MB rows come back in order over 3 pages, a DL gets 403 on a sensitive prefix, on writing `reviews` and on a prefix delete; a gzipped save round-trips. The browser gzip was checked against node zlib on the real reviews file. **Not verified**: the live site after deploy, and the SQL.
+
 **100 Day Stylist tag + My Reputation (2026-11-20).**
 - **Tag**: "100 DAY STYLIST" (green) for anyone whose start date in `employee_start_dates` (Master Employee Metrics, auto-uploaded from email; 357 people, newest hire Oct 26) is under 100 days ago. `HundredDayTag` + `HundredDayContext` in App.js, matched by `normalizePersonName`. It's rendered inside `FocusTag`, so it shows everywhere the Focus Stylist tag does, and also next to the name on My Numbers. 45 people get the tag today. A POS spelling that doesn't match the start-date list = no tag (aliases aren't checked).
 - **My Reputation** (bottom of My Numbers, every role): `src/reputation.js` (`buildReputation`), shared by the server and the client. Reviews = every review at a store they work at with their first name (3+ letters) as a word, the same rule as Shoutouts/`detectEmployeeMention`, newest first, up to 50. Cards show no-shows / cancels / walkouts for the picked dates, plus the total on file.
