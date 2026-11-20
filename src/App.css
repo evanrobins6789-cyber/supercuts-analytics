@@ -51,6 +51,14 @@
   font-family: 'Inter', sans-serif; font-size: 12px; padding: 7px 14px; border-radius: 20px; cursor: pointer;
 }
 .btn-ghost:hover { border-color: var(--red); background: rgba(194,59,59,0.2); }
+/* Big link to the separate Recruitment Tracker site, left of Log Out. */
+.recruit-btn {
+  background: #F2B705; color: #142A4A; border: 2px solid #F2B705; border-radius: 24px;
+  font-family: 'Inter', sans-serif; font-size: 15px; font-weight: 700; padding: 9px 20px;
+  text-decoration: none; white-space: nowrap; cursor: pointer;
+}
+.recruit-btn:hover { background: #ffd23f; border-color: #ffd23f; }
+@media (max-width: 640px) { .header-right { flex-wrap: wrap; justify-content: center; } }
 
 /* ─── Upload ─────────────────────────────────────────────────────────── */
 .upload-center { padding: 18px 20px 6px; display: flex; flex-direction: column; align-items: center; gap: 10px; }

@@ -13266,6 +13266,7 @@ export default function App() {
           {viewing && <button className="presenter-pill view-as-pill" onClick={() => handleViewAs(null)} title={`You're seeing the site as this ${viewRoleShort === 'Manager' ? 'Manager' : 'District Leader'} would. Click to go back to your own view.`}>👁 Viewing as {shownUserName} ({viewRoleShort}) · Exit</button>}
           {presenting && <button className="presenter-pill" onClick={() => handleTogglePresenter(false)} title="Presenter mode is on — made-up data. Click to turn off.">🎭 Presenter</button>}
           <span className="header-user">{shownUserName} · {ROLE_LABELS[u.role] || u.role}</span>
+          <a className="recruit-btn" href="https://lauren4robins-crypto.github.io/sc-gc-recruit/" target="_blank" rel="noopener noreferrer">Recruitment Tracker</a>
           <button className="btn-ghost" onClick={handleLogout}>Log Out</button>
         </div>
       </header>
