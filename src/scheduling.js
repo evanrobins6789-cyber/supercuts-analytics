@@ -660,6 +660,16 @@ function lyWhy(sf, s, wd) {
   return `last year ${when}had ${pctDelta(f)} cuts than a usual ${lyDay}${own}`;
 }
 
+// One short reason for the store list ("Black Friday: 37% fewer cuts last
+// year", "35 hrs scheduled, needs about 27").
+const cap = t => t.charAt(0).toUpperCase() + t.slice(1);
+function lyBrief(sf, s) {
+  if (!sf) return null;
+  const f = s ? s.f : sf.f;
+  if (f == null || Math.abs(f - 1) < SEASON_PTS) return null;
+  return `${sf.label ? `${cap(sf.label)}: ` : ''}${pctDelta(f)} cuts last year`;
+}
+
 function buildTip(spots, kind) {
   const list = spots.filter(s => s.kind === kind);
   const future = list.filter(s => !s.past);
@@ -668,19 +678,25 @@ function buildTip(spots, kind) {
   if (!use.length || total < (kind === 'save' ? SAVE_MIN : GROW_MIN)) return { kind, ok: true };
   return { kind, top: use[0], more: use.slice(1, 3), total };
 }
-const spotShort = s => `${s.label} ${s.kind === 'save' ? '−' : '+'}${s.per.toFixed(1)} hrs${s.past ? '/day' : ''}`;
-export function tipHeadline(t) {
-  if (t.ok) return t.kind === 'save' ? "You're doing great! No day here has hours to spare." : 'No day here looks short on stylists.';
+export const spotShort = s => `${s.label} ${s.kind === 'save' ? '−' : '+'}${s.per.toFixed(1)} hrs${s.past ? '/day' : ''}`;
+// "≈ 2 shifts" next to bigger adds, so 26 hrs reads as people (8-hr shift).
+const shifts = h => (h >= 6 ? ` (≈ ${Math.round(h / 8)} ${Math.round(h / 8) === 1 ? 'shift' : 'shifts'})` : '');
+export function tipAction(t) {
+  if (t.ok) return t.kind === 'save' ? "You're doing great: no hours to cut" : 'Covered: no day is short';
   const s = t.top;
   return t.kind === 'save'
-    ? `Save about ${hrs(s.per)}${s.past ? ' a day' : ''} on ${s.label}`
-    : `Add ${s.per > 9 ? 'stylists' : 'a stylist'} on ${s.label}, about ${hrs(s.per)}${s.past ? ' a day' : ''}`;
+    ? `Cut ${s.per.toFixed(1)} hrs${s.past ? ' each' : ' on'} ${s.label}`
+    : `Add ${s.per.toFixed(1)} hrs${shifts(s.per)}${s.past ? ' each' : ' on'} ${s.label}`;
+}
+export function tipHeadline(t) {
+  if (t.ok) return t.kind === 'save' ? "You're doing great! No day here has hours to spare." : 'No day here looks short on stylists.';
+  return tipAction(t);
 }
 export function tipText(t) {
   if (t.ok) return tipHeadline(t);
   return `${tipHeadline(t)}: ${t.top.why}.${t.more.length ? ` Also ${t.more.map(spotShort).join(', ')}.` : ''}`;
 }
-export const tipShort = t => (t.ok ? (t.kind === 'save' ? "✅ Doing great" : '✅ Covered') : `${spotShort(t.top)}${t.more.length ? ` (+${t.more.length} more)` : ''}`);
+export const tipShort = t => (t.ok ? tipAction(t) : `${tipAction(t)}${t.top.brief ? ` (${t.top.brief})` : ''}`);
 
 // The whole plan for a date range. lostFor(start, end) → lostForSchedules()
 // output or null. Returns { base, range, view, viewStart, viewEnd, future,
@@ -721,6 +737,7 @@ export function planSchedules({ shiftHistory, rangeStart, rangeEnd, salesFor, cu
       const day = `${WEEKDAYS_LONG[w.wd]}s`;
       if (w.trimmable >= 0.25 && !w.hold) {
         spots.push({ kind: 'save', past: true, label: day, per: w.trimmable, total: w.trimmable * w.n,
+          brief: `only ${pct(w.busy)} busy, target ${pct(t)}`,
           why: `${day} ran ${pct(w.busy)} busy (target ${pct(t)})${w.crowdRuns.length ? ` with 3+ on ${w.crowdRuns.slice(0, 2).map(runText).join(' and ')}` : ''}; trimming shift edges keeps 2+ on at all times` });
       }
       const hot = w.busy != null && w.busy >= t + BUSY_GAP_PTS;
@@ -729,7 +746,8 @@ export function planSchedules({ shiftHistory, rangeStart, rangeEnd, salesFor, cu
         const bits = [hot ? `${day} ran ${pct(w.busy)} busy (target ${pct(t)})` : null,
           w.hold ? `losing ${w.lostRate.toFixed(1)} guests per 100 cuts (company ${w.companyRate.toFixed(1)})` : null,
           w.soloRuns.length ? `one person alone ${w.soloRuns.slice(0, 2).map(runText).join(' and ')}` : null].filter(Boolean);
-        spots.push({ kind: 'grow', past: true, label: day, per: add, total: add * w.n, why: bits.join(', ') });
+        spots.push({ kind: 'grow', past: true, label: day, per: add, total: add * w.n, why: bits.join(', '),
+          brief: hot ? `${pct(w.busy)} busy, target ${pct(t)}` : 'losing more guests than average' });
       }
     });
     // Days to come.
@@ -771,15 +789,18 @@ export function planSchedules({ shiftHistory, rangeStart, rangeEnd, salesFor, cu
       const ly = lyWhy(sf, s, wd);
       const haveText = useSched ? `${hrs(schedHours)} scheduled vs about ${hrs(need)} needed` : `plan about ${hrs(need)} vs the usual ${hrs(w.actual)}${partial ? ` (only ${hrs(schedHours)} posted so far)` : ''}`;
       if (row.save >= 0.25) {
-        const bits = [ly || `${WEEKDAYS_LONG[wd]}s usually run ${pct(w.busy)} busy (target ${pct(t)})`, haveText,
+        const bits = [(f < 1 && ly) || `${WEEKDAYS_LONG[wd]}s usually run ${pct(w.busy)} busy (target ${pct(t)})`, haveText,
           row.cuts.length ? `cut ${row.cuts.slice(0, 3).map(c => `${c.name} ${c.was} → ${c.now}`).join(', ')}` : null, 'keeps 2+ on at all times'].filter(Boolean);
-        spots.push({ kind: 'save', label: shortDate(date), per: row.save, total: row.save, why: bits.join('; ') });
+        // Last year as the reason only when it points the same way (fewer cuts).
+        const brief = (f < 1 && lyBrief(sf, s)) || (useSched ? `${schedHours.toFixed(1)} hrs scheduled, needs about ${need.toFixed(1)}` : `Usually ${w.actual.toFixed(1)} hrs, needs about ${need.toFixed(1)}`);
+        spots.push({ kind: 'save', label: shortDate(date), per: row.save, total: row.save, why: bits.join('; '), brief });
       }
       if (row.grow >= 0.5) {
-        const bits = [ly, hot ? `${WEEKDAYS_LONG[wd]}s usually run ${pct(w.busy)} busy (target ${pct(t)})` : null,
+        const bits = [f > 1 ? ly : null, hot ? `${WEEKDAYS_LONG[wd]}s usually run ${pct(w.busy)} busy (target ${pct(t)})` : null,
           w.hold ? `${WEEKDAYS_LONG[wd]}s lose ${w.lostRate.toFixed(1)} guests per 100 cuts (company ${w.companyRate.toFixed(1)})` : null,
           haveText, w.soloRuns.length ? `usually one person alone ${w.soloRuns.slice(0, 2).map(runText).join(' and ')}` : null].filter(Boolean);
-        spots.push({ kind: 'grow', label: shortDate(date), per: row.grow, total: row.grow, why: bits.join('; ') });
+        const brief = (f > 1 && lyBrief(sf, s)) || (hot ? `${WEEKDAYS_LONG[wd]}s run ${pct(w.busy)} busy, target ${pct(t)}` : w.hold ? `${WEEKDAYS_LONG[wd]}s lose more guests than average` : `${(have || 0).toFixed(1)} hrs scheduled, needs about ${need.toFixed(1)}`);
+        spots.push({ kind: 'grow', label: shortDate(date), per: row.grow, total: row.grow, why: bits.join('; '), brief });
       }
     });
     stores[code] = { code, save: buildTip(spots, 'save'), grow: buildTip(spots, 'grow'), days };
@@ -936,6 +957,18 @@ const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]; // Monday first
 const shortDate = iso => { const d = new Date(`${iso}T12:00:00`); return `${WEEKDAYS[d.getDay()]} ${d.getMonth() + 1}/${d.getDate()}`; };
 const hourShort = h => `${h % 12 || 12}${h < 12 ? 'a' : 'p'}`;
 const fmtLong = iso => { const d = new Date(`${iso}T12:00:00`); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); };
+
+// One tip in the store list.
+function TipCell({ t }) {
+  if (t.ok) return <td className="sched-tip-cell"><span className="sched-tipline sched-tipline-ok">✅ {tipAction(t)}</span></td>;
+  return (
+    <td className="sched-tip-cell">
+      <span className={`sched-tipline sched-tipline-${t.kind}`}>{tipAction(t)}</span>
+      {t.top.brief && <span className="sched-tipwhy">{cap(t.top.brief)}</span>}
+      {t.more.length > 0 && <span className="sched-tipmore">Also {t.more.map(spotShort).join(' · ')}</span>}
+    </td>
+  );
+}
 
 // The two tips for one store: #1 to protect TSTH, #1 to grow sales.
 function TipPair({ p }) {
@@ -1304,8 +1337,6 @@ export function SchedulingTab({ shiftHistory, loadedMonths, onNeedMonths, salesF
   const saveTot = list.reduce((t, s) => t + (plan.stores[s.code]?.save.total || 0), 0);
   const growTot = list.reduce((t, s) => t + (plan.stores[s.code]?.grow.total || 0), 0);
   const showLost = !!appt;
-  // Last year's swing on the days to come (company-wide), holidays first.
-  const swings = plan.future.map(d => ({ d, sf: plan.factors[d] })).filter(x => x.sf && x.sf.f != null && (x.sf.label || Math.abs(x.sf.f - 1) >= 0.15));
 
   return (
     <div className="tab-content">
@@ -1317,19 +1348,6 @@ export function SchedulingTab({ shiftHistory, loadedMonths, onNeedMonths, salesF
       </div>
       <p className="section-hint">{fmtLong(start)} – {fmtLong(end)}. Latest clock-ins {fmtLong(latest)}{plan.future.length ? `; days after that are planned from each store's usual week and last year's cuts on the same day` : ''}. Cuts never leave anyone working alone.</p>
 
-      {swings.length > 0 && (
-        <div className="sched-ly">
-          <span className="sched-tip-title">Last year, same days (company cuts vs a usual day)</span>
-          <div className="sched-ly-chips">
-            {swings.map(({ d, sf }) => (
-              <span key={d} className={sf.f === 0 ? 'sched-ly-closed' : sf.f >= 1 ? 'sched-ly-up' : 'sched-ly-down'} title={`Matched to ${sf.ly}`}>
-                <b>{shortDate(d)}</b>{sf.label ? ` ${sf.label}` : ''}: {sf.f === 0 ? 'closed' : signedPct(sf.f)}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
       <div className="sched-cards">
         <div className="sched-card"><span>Busy %</span><strong>{pct(allA ? allS / allA : null)}</strong><em>target {target ? `${target}%` : pct(plan.target)}</em></div>
         <div className="sched-card"><span>Staff hrs / week</span><strong>{Math.round(tot('hoursPerWeek')).toLocaleString()}</strong><em>{list.length} stores</em></div>
@@ -1340,7 +1358,7 @@ export function SchedulingTab({ shiftHistory, loadedMonths, onNeedMonths, salesF
 
       <div className="sched-table-wrap">
         <table className="ledger-table">
-          <thead><tr><th className="ledger-name-col">Store</th>{dlFor && <th>DL</th>}<th>Busy %</th><th>Hrs / wk</th>{showLost && <th>Lost / 100 cuts</th>}<th>✂️ Protect TSTH</th><th>📈 Grow sales</th></tr></thead>
+          <thead><tr><th className="ledger-name-col">Store</th>{dlFor && <th>DL</th>}<th>Busy %</th><th>Hrs / wk</th>{showLost && <th>Lost / 100 cuts</th>}<th className="sched-tip-cell">✂️ Protect TSTH: hours to cut</th><th className="sched-tip-cell">📈 Grow sales: hours to add</th></tr></thead>
           <tbody>
             {sorted.map(st => {
               const a = appt?.stores[st.code];
@@ -1352,8 +1370,8 @@ export function SchedulingTab({ shiftHistory, loadedMonths, onNeedMonths, salesF
                   <td className={st.busy == null ? '' : st.busy < st.target - 0.05 ? 'sched-cool' : st.busy > st.target + BUSY_GAP_PTS ? 'sched-hot' : ''}>{pct(st.busy)}</td>
                   <td>{st.hoursPerWeek.toFixed(0)}</td>
                   {showLost && <td className={a?.per100 && appt.company.per100 && a.per100.all >= appt.company.per100.all * 1.25 ? 'sched-warn' : ''}>{a?.per100 ? a.per100.all.toFixed(1) : '—'}</td>}
-                  <td className="sched-tip-cell">{p ? tipShort(p.save) : '—'}</td>
-                  <td className="sched-tip-cell">{p ? tipShort(p.grow) : '—'}</td>
+                  {p ? <TipCell t={p.save} /> : <td className="sched-tip-cell">—</td>}
+                  {p ? <TipCell t={p.grow} /> : <td className="sched-tip-cell">—</td>}
                 </tr>
               );
             })}

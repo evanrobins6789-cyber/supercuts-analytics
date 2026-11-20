@@ -1755,7 +1755,13 @@
 .sched-card em { font-style: normal; font-size: 11.5px; color: var(--ink-soft); }
 .sched-table-wrap { overflow-x: auto; background: var(--card); border-radius: 10px; box-shadow: var(--shadow); }
 .sched-click { cursor: pointer; }
-.ledger-table td.sched-tip-cell { text-align: left; white-space: normal; min-width: 260px; font-family: 'Inter', sans-serif; font-size: 12px; }
+.ledger-table th.sched-tip-cell, .ledger-table td.sched-tip-cell { text-align: left; white-space: normal; min-width: 240px; max-width: 320px; font-family: 'Inter', sans-serif; font-size: 12px; }
+.sched-tipline { display: block; font-weight: 700; font-size: 13px; line-height: 1.3; }
+.sched-tipline-save { color: #1F5FBF; }
+.sched-tipline-grow { color: #B5562A; }
+.sched-tipline-ok { color: var(--green); font-weight: 600; }
+.sched-tipwhy { display: block; color: var(--ink); font-size: 12px; line-height: 1.35; margin-top: 2px; }
+.sched-tipmore { display: block; color: var(--ink-soft); font-size: 11.5px; margin-top: 2px; }
 .ledger-table td.sched-hot { color: #B5562A; font-weight: 700; }
 .ledger-table td.sched-cool { color: #1F5FBF; font-weight: 700; }
 .ledger-table td.sched-warn { color: var(--red); font-weight: 700; }
@@ -1864,12 +1870,6 @@
 .sched-tip-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); font-weight: 600; }
 .sched-tip-more { color: var(--ink-soft) !important; font-size: 12.5px !important; }
 .sched-controls input[type="date"] { padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
-.sched-ly { background: var(--card); border-radius: 10px; padding: 10px 12px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px; }
-.sched-ly-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.sched-ly-chips span { font-size: 12.5px; padding: 4px 9px; border-radius: 999px; background: var(--paper); border: 1px solid var(--line); }
-.sched-ly-chips .sched-ly-up { border-color: #E3A27F; background: #FCEFE7; }
-.sched-ly-chips .sched-ly-down { border-color: #9DBBE3; background: #EAF1FA; }
-.sched-ly-chips .sched-ly-closed { color: var(--ink-soft); }
 .sched-upflat { border-top: 1px dashed var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 5px; }
 .sched-upflat > p { margin: 0; font-size: 13.5px; }
 .sched-cutline { font-size: 12.5px !important; color: var(--ink-soft); line-height: 1.5; }
