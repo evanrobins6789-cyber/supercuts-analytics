@@ -32,6 +32,7 @@ import { BITMOJI_POOLS } from './bitmoji';
 import { buildPayRows, topTsthRow, payPeriodFor, MIN_HOURS_FOR_TOP, buildRateLookup, haircutPriceFor } from './payTracker';
 import { buildMyNumbers, pickOwnRecords, normalizePersonName, buildPeerStats, bestSellerStart } from './myNumbers';
 import { buildPayBreakdown, buildCoaching } from './payCoach';
+import { buildReputation, reputationContext } from './reputation';
 import { TabMenu } from './TabMenu';
 import { FocusStoresTab, focusStoresContext } from './focusStores';
 import { SchedulingTab, parseShiftFile, mergeShiftMonth, analyzeSchedules, schedulingContext, lastWorkedDate, planSchedules } from './scheduling';
@@ -1981,7 +1982,41 @@ function PayExplainer({ pay, coaching, leaderName = null, stores = [], peers = n
 // Leadership (owner) instead sees the TOP-TSTH person for the dates picked
 // (min MIN_HOURS_FOR_TOP hours), worked out locally from the full history the
 // owner already has, in the same by-store layout.
-function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = false, history = null, weeklyHistory = null, tipsHistory = null, payRates = [], nameAliases = {}, payFocusName = null, onPayPick = null, localSelf = null }) {
+// "My Reputation" on My Numbers (src/reputation.js has the rules).
+function ReputationSection({ rep, range, self }) {
+  const [showAll, setShowAll] = useState(false);
+  const l = rep.lost;
+  const shown = showAll ? rep.reviews : rep.reviews.slice(0, 5);
+  const their = self ? 'your' : 'their';
+  const card = (label, n, all) => (
+    <div className="sched-card"><span>{label}</span><strong>{n}</strong><em>{l.from ? `${all} on file since ${fmtDateLong(l.from)}` : 'no appointment data yet'}</em></div>
+  );
+  return (
+    <div className="rep-section">
+      <h3 className="chart-title">⭐ {self ? 'My' : 'Their'} Reputation</h3>
+      <div className="sched-cards">
+        <div className="sched-card"><span>Reviews naming {self ? 'you' : 'them'}</span><strong>{rep.reviewCount}</strong><em>{rep.avgRating != null ? `${rep.avgRating.toFixed(1)} ★ average` : 'none yet'}</em></div>
+        {card('No-shows', l.range.N, l.all.N)}
+        {card('Cancels', l.range.C, l.all.C)}
+        {card('Walkouts', l.range.W, l.all.W)}
+      </div>
+      <p className="section-hint">No-shows, cancels and walkouts are for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}, from appointments booked under {their} name (the system picks a stylist for "anyone" bookings). A guest who was serviced that same day anyway isn't counted. Reviews are every review at {their} stores with {their} first name in it.</p>
+      {shown.length > 0 && (
+        <div className="rep-reviews">
+          {shown.map((r, i) => (
+            <div key={`${r.code}|${r.postedAt}|${i}`} className="rep-review">
+              <div className="rep-review-head"><StarRating value={Math.round(r.rating || 0)} /><span>{STORE_CODE_TO_NAME[r.code] || `Store ${r.code}`}{r.postedAt ? ` · ${String(r.postedAt).slice(0, 10)}` : ''}{r.userName ? ` · ${r.userName}` : ''}</span></div>
+              <p>{r.message}</p>
+            </div>
+          ))}
+          {rep.reviews.length > 5 && <button className="link-btn" onClick={() => setShowAll(v => !v)}>{showAll ? 'Show fewer' : `Show all ${rep.reviews.length}`}</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = false, history = null, weeklyHistory = null, tipsHistory = null, payRates = [], nameAliases = {}, payFocusName = null, onPayPick = null, localSelf = null, reviews = null, apptStaff = null }) {
   const today = localTodayISO();
   const cur = payPeriodFor(today);
   const [range, setRange] = useState({ start: cur.start, end: today < cur.end ? today : cur.end });
@@ -2028,6 +2063,17 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
       : null;
   }, [isOwner, leaderTop, serverData, range.start, range.end]);
   const loading = isOwner || localSelf ? false : state.loading;
+  // My Reputation. Employees: from the server (their own only). Leadership's
+  // pick and View as DL: worked out here the same way (src/reputation.js).
+  const reputation = useMemo(() => {
+    if (!isOwner && !localSelf) return serverData?.reputation || null;
+    const who = isOwner ? (leaderTop?.top ? [leaderTop.top.name] : null) : localSelf.names;
+    if (!who || !range.start || !range.end) return null;
+    const names = new Set(who.map(normalizePersonName).filter(Boolean));
+    const codes = new Set();
+    Object.values((isOwner ? history : localSelf.history) || {}).forEach(r => { if (r && r.code && Object.keys(r.employees || {}).some(n => names.has(normalizePersonName(n)))) codes.add(String(r.code)); });
+    return buildReputation({ names, codes, reviews: reviews || [], staffDays: apptStaff || {}, start: range.start, end: range.end });
+  }, [isOwner, localSelf, serverData, leaderTop, history, reviews, apptStaff, range.start, range.end]);
   // Pay breakdown + coaching. Employees: their own rate and store-peer
   // averages come from the server. Leadership: worked out locally for the
   // top-TSTH person.
@@ -2075,11 +2121,11 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
             <span className="my-numbers-picker-label">Showing:</span>
             <EmployeePicker rows={leaderTop?.rows} value={payFocusName} onChange={onPayPick} />
           </div>
-          <p className="section-hint">Leadership view: {leaderTop?.picked ? 'the employee you picked' : `the top-TSTH person for these dates (at least ${MIN_HOURS_FOR_TOP} hours)`}{leaderTop?.top ? <>: <b>{leaderTop.top.name}</b> ({leaderTop.top.store}, TSTH ${leaderTop.top.tsth.toFixed(2)})</> : ''}. Pick anyone above; the Homepage card follows the same pick. Everyone else sees only their own numbers here. TSTH is total sales (service, color and retail) ÷ hours.</p>
+          <p className="section-hint">Leadership view: {leaderTop?.picked ? 'the employee you picked' : `the top-TSTH person for these dates (at least ${MIN_HOURS_FOR_TOP} hours)`}{leaderTop?.top ? <>: <b>{leaderTop.top.name}</b><HundredDayTag name={leaderTop.top.name} /> ({leaderTop.top.store}, TSTH ${leaderTop.top.tsth.toFixed(2)})</> : ''}. Pick anyone above; the Homepage card follows the same pick. Everyone else sees only their own numbers here. TSTH is total sales (service, color and retail) ÷ hours.</p>
           {payFocusName && !leaderTop?.picked && <p className="empty-note">{payFocusName} has no hours in these dates, so the top-TSTH person is shown.</p>}
         </>
       ) : (
-        <p className="section-hint">Your own numbers{userName ? `, ${userName}` : ''}, by the store where you did the work (as the POS recorded it). TSTH is total sales (service, color and retail) ÷ hours. Only you can see this.</p>
+        <p className="section-hint">Your own numbers{userName ? <>, {userName}<HundredDayTag name={userName} /></> : ''}, by the store where you did the work (as the POS recorded it). TSTH is total sales (service, color and retail) ÷ hours. Only you can see this.</p>
       )}
       <PayPeriodPicker range={range} onChange={(st, en) => setRange({ start: st, end: en })} />
       {loading && <span className="spinner small" />}
@@ -2100,6 +2146,7 @@ function MyNumbersTab({ token, userName, userRole = null, presenting, isOwner = 
       ) : (
         <p className="empty-note">No sales, hours or tips found under your name ({(serverData?.matchedNames || []).join(', ') || userName}) for {fmtDateLong(range.start)} – {fmtDateLong(range.end)}. If the POS spells your name differently, ask leadership to link that spelling to your login in Setup › Employee Access.</p>
       ))}
+      {!loading && reputation && <ReputationSection rep={reputation} range={range} self={!isOwner} />}
     </div>
   );
 }
@@ -4541,10 +4588,28 @@ const useIsFocusStylist = () => {
   const names = React.useContext(FocusNamesContext);
   return name => names.has(normalizePersonName(name));
 };
-// The tag itself, the Focus Stylist version of MANAGER.
+// "100 DAY STYLIST" (2026-11-20, user): anyone who started with us under 100
+// days ago, from the employee start-date list (employee_start_dates, the
+// Master Employee Metrics upload). Matched by name like the focus tag.
+const HUNDRED_DAYS = 100;
+const HundredDayContext = React.createContext(new Map());
+const hundredDayStarts = roster => {
+  const m = new Map();
+  (roster?.employees || []).forEach(e => { const t = Date.parse(e.startDate); if (Number.isFinite(t)) m.set(normalizePersonName(e.name), t); });
+  return m;
+};
+function HundredDayTag({ name }) {
+  const starts = React.useContext(HundredDayContext);
+  const t = starts.get(normalizePersonName(name));
+  if (t == null) return null;
+  const days = Math.floor((Date.now() - t) / DAY_MS);
+  return days >= 0 && days < HUNDRED_DAYS ? <span className="hundred-tag" title={`Started ${new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}: day ${days + 1} of ${HUNDRED_DAYS}`}> 100 DAY STYLIST</span> : null;
+}
+// The tag itself, the Focus Stylist version of MANAGER. Also carries the
+// 100 Day Stylist tag, so it shows everywhere the focus tag can.
 function FocusTag({ name }) {
   const isFocus = useIsFocusStylist();
-  return isFocus(name) ? <span className="focus-tag"> FOCUS STYLIST</span> : null;
+  return <>{isFocus(name) ? <span className="focus-tag"> FOCUS STYLIST</span> : null}<HundredDayTag name={name} /></>;
 }
 
 // The FOCUS button + goal popup, shared by Overview and the DL tab. Spread
@@ -4778,7 +4843,7 @@ function EmployeeTable({ rows, showStoreCol = true, footer = null, footerLabel =
               <td className="ledger-name-col">
                 {e.name}
                 {e.isManager && <span className="manager-tag"> MANAGER</span>}
-                {!focusKeys?.has(focusKey(e.name)) && <FocusTag name={e.name} />}
+                {!focusKeys?.has(focusKey(e.name)) ? <FocusTag name={e.name} /> : <HundredDayTag name={e.name} />}
                 {onFocusStylist && (
                   <button
                     type="button"
@@ -9603,6 +9668,7 @@ function buildAIContext(report, fallbackEmployeesByStore, history, weeklyHistory
       if (ps?.topProducts?.length) lines.push(`  Best-selling products at ${s.name} in the last 90 days (everyone there combined): ${fmtList(ps.topProducts)}`);
       if (ps?.topExtras?.length) lines.push(`  Most popular extra services at ${s.name} in the last 90 days: ${fmtList(ps.topExtras)}`);
     });
+    if (m.reputation) lines.push(reputationContext(m.reputation, m.name).trim());
   }
 
   // Pay tracker (owner only, src/payTracker.js): this pay period's TSTH,
@@ -11261,7 +11327,7 @@ export default function App() {
   // each a days map. Stored via api/loss-prevention.js, never weekly_report.
   // lpTokenRef is the owner's token (null for anyone else) so the import
   // handlers below, which are memoized once, know whether to capture it.
-  const [lpData, setLpData] = useState({ sales: {}, att: {}, reg: {}, appt: {} });
+  const [lpData, setLpData] = useState({ sales: {}, att: {}, reg: {}, appt: {}, apptstaff: {} });
   const [couponTilly, setCouponTilly] = useState(null); // owner-only: last 30 days of ad coupon numbers for Tilly (src/coupons.js)
   const [lpStatus, setLpStatus] = useState({ loaded: false, error: null });
   const lpRef = useRef(lpData);
@@ -11530,7 +11596,7 @@ export default function App() {
     if (!lpTokenRef.current) { setLpData({ sales: {}, att: {}, reg: {} }); setLpStatus({ loaded: false, error: null }); return; }
     lpLoad(currentUser.token).then(res => {
       if (!res.ok) { setLpStatus({ loaded: true, error: res.error }); return; }
-      const next = { sales: {}, att: {}, reg: {}, appt: {} };
+      const next = { sales: {}, att: {}, reg: {}, appt: {}, apptstaff: {} };
       (res.rows || []).forEach(({ key, payload }) => {
         const kind = key.split('_')[1];
         if (next[kind]) Object.assign(next[kind], payload?.days || {});
@@ -12672,6 +12738,10 @@ export default function App() {
           lpRef.current = { ...lpRef.current, appt: merged.days };
           merged.months.forEach(m => lpMonthsTouched.add(m));
           await saveLpMonths('appt', lpMonthsTouched, lines);
+          // No-shows / cancels / walkouts per stylist, for My Reputation.
+          const staffMerged = mergeLpDays(lpRef.current.apptstaff || {}, { rangeStart: parsed.start, rangeEnd: parsed.end, days: parsed.staff });
+          lpRef.current = { ...lpRef.current, apptstaff: staffMerged.days };
+          await saveLpMonths('apptstaff', staffMerged.months, lines);
         }
         if (Object.keys(saved).length) setApptHistory(prev => {
           const next = { ...prev };
@@ -12959,7 +13029,7 @@ export default function App() {
     const end = today < period.end ? today : period.end;
     myNumbers(currentUser.token, period.start, end).then(r => {
       if (!r.ok) return;
-      setMyNumbersSummary({ period, end, name: r.name, peers: r.peers, ...buildMyNumbers({ history: r.history, weeklyHistory: r.weeklyHistory, tips: r.tips, start: period.start, end }) });
+      setMyNumbersSummary({ period, end, name: r.name, peers: r.peers, reputation: r.reputation || null, ...buildMyNumbers({ history: r.history, weeklyHistory: r.weeklyHistory, tips: r.tips, start: period.start, end }) });
     });
   }, [currentUser, presenting]);
 
@@ -13174,9 +13244,11 @@ export default function App() {
     return schedulingContext(sched, schedStoreName, plan) + appointmentsContext(appt, schedStoreName);
   };
   const focusNames = currentFocusNames(d.focusStylists);
+  const hundredStarts = hundredDayStarts(d.employeeRoster);
 
   return (
     <FocusNamesContext.Provider value={focusNames}>
+    <HundredDayContext.Provider value={hundredStarts}>
     <div className="app">
       {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
       {idleWarning && <div className="toast toast-error">You've been idle — you'll be signed out in under a minute. Move the mouse or tap anywhere to stay signed in.</div>}
@@ -13211,7 +13283,7 @@ export default function App() {
         )}
         {tab === 'Scheduling' && canSchedule && <SchedulingTab shiftHistory={d.shiftHistory} loadedMonths={shiftMonths} onNeedMonths={months => loadShiftMonths(months, currentUser.token)} loading={shiftLoading} salesFor={schedSalesFor} cutsFor={schedCutsFor} hoursFor={schedHoursFor} apptHistory={d.apptHistory || null} storeName={schedStoreName} dlFor={u.role === 'owner' ? code => getLeaderForStoreCode(code)?.leaderName || null : null} />}
         {tab === 'Team TSTH' && <TeamTsthTab token={currentUser.token} role={u.role} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={viewing ? viewScope.teamTips : d.tipsHistory} payRates={viewing ? viewScope.full.payRates : d.payRates} nameAliases={viewing ? viewScope.full.nameAliases : d.nameAliases} localData={viewing} />}
-        {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={shownUserName} userRole={u.role} presenting={presenting} isOwner={u.role === 'owner'} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={d.tipsHistory} payRates={d.payRates} nameAliases={d.nameAliases} payFocusName={payFocusName} onPayPick={setPayFocusName} localSelf={viewSelf} />}
+        {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={shownUserName} userRole={u.role} presenting={presenting} isOwner={u.role === 'owner'} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={d.tipsHistory} payRates={d.payRates} nameAliases={d.nameAliases} payFocusName={payFocusName} onPayPick={setPayFocusName} localSelf={viewSelf} reviews={presenting ? null : (d.reviews?.reviews || null)} apptStaff={presenting ? null : (lpData.apptstaff || null)} />}
         {tab === 'News' && (
           <NewsTab news={d.news} newsGroups={newsGroups} openNews={openNews} onConsumeOpenNews={handleConsumeOpenNews} currentUser={u} newsReads={d.newsReads} onSignOff={handleSignOffNews} />
         )}
@@ -13372,6 +13444,7 @@ export default function App() {
       </main>
       {SHOW_TILLY && <AIChatWidget key={`${presenting ? 'chat-presenting' : 'chat-live'}-${viewing ? viewAs.name : ''}`} report={d.report} fallbackEmployeesByStore={d.fallbackEmployeesByStore} history={d.history} weeklyHistory={d.weeklyHistory} goals={d.goals} reviews={d.reviews} employeeRoster={d.employeeRoster} reviewNotes={d.reviewNotes} goldCombs={d.goldCombs} managers={d.managers} milestoneGoals={d.milestoneGoals} news={d.news} events={events} points={d.pointsSummary} hsaSignups={d.hsaSignups} leases={u.role === 'owner' ? d.leases : null} newsReads={d.newsReads} giftCardHistory={u.role === 'owner' ? d.giftCardHistory : null} lpData={u.role === 'owner' ? (d.lpData || lpData) : null} focusStylists={d.focusStylists} salonChecks={d.salonChecks} salonQuestions={salonQuestions} payTracker={viewing ? viewTeamPayTracker : (payTracker || teamPayTracker)} myNumbersSummary={viewing ? null : myNumbersSummary} extraContext={u.role !== 'owner' ? (canSchedule ? schedTilly : null) : () => [schedTilly(), focusStoresContext(d.focusStores, d.goals, (code, mk) => focusMonthSales(mk)?.[code]?.sales || null, getCurrentMonthRange().end, code => STORE_CODE_TO_NAME[code] || `Store ${code}`), viewing ? '' : couponsContext(couponTilly)].filter(Boolean).join('\n\n')} rankToken={!viewing && (u.role === 'manager' || u.role === 'district_leader') ? currentUser.token : null} />}
     </div>
+    </HundredDayContext.Provider>
     </FocusNamesContext.Provider>
   );
 }

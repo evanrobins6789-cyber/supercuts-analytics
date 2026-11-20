@@ -12,7 +12,8 @@
 import { createServiceClient, requireSession } from '../src/serverAuth.js';
 
 // lp_appt_: services started then deleted with no sale (src/appointments.js).
-const KEY_PATTERN = /^lp_(sales|att|reg|appt)_\d{4}-\d{2}$/;
+// lp_apptstaff_: no-shows / cancels / walkouts per stylist (src/reputation.js).
+const KEY_PATTERN = /^lp_(sales|att|reg|appt|apptstaff)_\d{4}-\d{2}$/;
 
 function setupHint(message) {
   return /loss_prevention/.test(message || '') && /(does not exist|could not find|schema cache)/i.test(message)

@@ -1,5 +1,6 @@
 import { readWorkbookGrid } from './parser';
 import { guestKey } from './lossPrevention';
+import { staffDaysFrom } from './reputation';
 
 // ─── Appointments (lost guests + guest check-ins) ───────────────────────────
 // From the Appointments report. User (2026-11-13): compare when cancelled,
@@ -108,6 +109,7 @@ const ADMIN = /incorrect|duplicate|test/i;
 // that store-day, or null if there's no Sales-Accrual guest data for it.
 export function classifyAppointments(parsed, salesFor) {
   const days = {}, totals = {}, lp = {};
+  const staffRows = []; // C/N/W by stylist → lp_apptstaff (My Reputation)
   const T = code => (totals[code] = totals[code] || emptyTotals());
   const checked = {};
   const push = (r, s, min) => {
@@ -136,6 +138,7 @@ export function classifyAppointments(parsed, salesFor) {
       if (r.flags & 4) t.first++;
       if (r.door) t.door++;
     }
+    if (s !== 'F') staffRows.push({ date: r.date, code: r.code, stylist: r.stylist, s });
     const fl = r.flags | (s !== 'F' && r.door ? 8 : 0);
     const at = s === 'F' ? r.aStart : s === 'W' ? (r.checkin ?? r.start) : (r.start ?? r.checkin);
     if (at != null) ((days[r.date] = days[r.date] || {})[r.code] = days[r.date][r.code] || []).push([at, s, fl]);
@@ -151,7 +154,7 @@ export function classifyAppointments(parsed, salesFor) {
     }
   }
   Object.entries(checked).forEach(([code, set]) => { T(code).d = [...set].sort(); });
-  return { start: parsed.start, end: parsed.end, days, totals, lp };
+  return { start: parsed.start, end: parsed.end, days, totals, lp, staff: staffDaysFrom(staffRows) };
 }
 
 export const apptMonths = c => {

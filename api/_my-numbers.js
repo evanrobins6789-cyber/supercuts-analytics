@@ -15,6 +15,7 @@
 
 import { createServiceClient, requireSession } from '../src/serverAuth.js';
 import { normalizePersonName, pickOwnRecords, buildPeerStats, bestSellerStart } from '../src/myNumbers.js';
+import { buildReputation } from '../src/reputation.js';
 
 const MAX_DAYS = 400;
 
@@ -84,7 +85,22 @@ export async function handleMyNumbers(req, res) {
       const { data: rateRow } = await supabase.from('pay_rates').select('rate').eq('emp_number', employee.employee_code).maybeSingle();
       if (rateRow && rateRow.rate != null) payRate = Number(rateRow.rate);
     } catch { /* table not set up: no base pay */ }
-    res.status(200).json({ ok: true, name: employee.name, role: employee.role, matchedNames: [...names], ...picked, peers, payRate });
+    // My Reputation: reviews naming them at stores they work at, and the
+    // no-shows / cancels / walkouts booked under their name (owner-only
+    // loss_prevention table; only their own counts leave the server).
+    let reputation = null;
+    try {
+      const repCodes = new Set([...(employee.store_codes || []).map(String), ...codes.map(String)]);
+      Object.values(fullHistory).forEach(r => { if (r && r.code && Object.keys(r.employees || {}).some(n => names.has(normalizePersonName(n)))) repCodes.add(String(r.code)); });
+      const [{ data: reviewRow }, staffRes] = await Promise.all([
+        supabase.from('weekly_report').select('payload').eq('report_id', 'reviews').maybeSingle(),
+        supabase.from('loss_prevention').select('key, payload').like('key', 'lp_apptstaff_%'),
+      ]);
+      const staffDays = {};
+      (staffRes.data || []).forEach(r => Object.assign(staffDays, r.payload?.days || {}));
+      reputation = buildReputation({ names, codes: repCodes, reviews: reviewRow?.payload?.reviews || [], staffDays, start, end });
+    } catch { /* reputation is extra: never fail My Numbers over it */ }
+    res.status(200).json({ ok: true, name: employee.name, role: employee.role, matchedNames: [...names], ...picked, peers, payRate, reputation });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }

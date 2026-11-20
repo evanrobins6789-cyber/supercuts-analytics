@@ -550,6 +550,12 @@
 
 .manager-tag { font-size: 10px; font-weight: 700; color: var(--red); letter-spacing: 0.03em; }
 .focus-tag { font-size: 10px; font-weight: 700; color: var(--gold); letter-spacing: 0.03em; white-space: nowrap; }
+.hundred-tag { font-size: 10px; font-weight: 700; color: #2E7D5B; letter-spacing: 0.03em; white-space: nowrap; }
+.rep-section { margin-top: 18px; display: flex; flex-direction: column; gap: 10px; }
+.rep-reviews { display: flex; flex-direction: column; gap: 8px; }
+.rep-review { background: var(--card); border-radius: 10px; padding: 10px 12px; box-shadow: var(--shadow); }
+.rep-review-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; color: var(--ink-soft); }
+.rep-review p { margin: 6px 0 0; font-size: 13.5px; line-height: 1.45; }
 
 /* ─── Focus Stylist ──────────────────────────────────────────────────── */
 .focus-btn {
