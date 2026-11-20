@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { readWorkbookGrid } from './parser';
-import { analyzeAppointments, storeApptFindings, lostForSchedules, DOOR_MINUTES } from './appointments';
+import { analyzeAppointments, lostForSchedules, DOOR_MINUTES } from './appointments';
 
 // ─── Scheduling tab ─────────────────────────────────────────────────────────
 // Hours, coverage gaps and payroll, from the Attendance report's shift times
@@ -325,7 +325,9 @@ function upcomingAdvice(u, w, t) {
 // lost: lostForSchedules() from src/appointments.js (optional). Lost guests
 // count toward the hours a weekday needs, and a weekday losing more guests
 // per 100 cuts than the company is "held": no cuts suggested.
-export function analyzeSchedules({ shiftHistory, start, end, salesFor, codes = null, targetBusy = null, today = undefined, lost = null }) {
+// skip(date): leave a date out of the history (planSchedules leaves holiday
+// weeks out of the "usual week" it projects from).
+export function analyzeSchedules({ shiftHistory, start, end, salesFor, codes = null, targetBusy = null, today = undefined, lost = null, skip = null }) {
   const ahead = {};
   const aheadDates = upcomingDates(shiftHistory, end, today);
   // A date most stores aren't scheduled at all (under half the usual number
@@ -343,6 +345,7 @@ export function analyzeSchedules({ shiftHistory, start, end, salesFor, codes = n
   const byStore = {};
   Object.entries(shiftHistory || {}).forEach(([date, stores]) => {
     if (date < start || date > end) return;
+    if (skip && skip(date)) return;
     Object.entries(stores || {}).forEach(([code, recs]) => {
       if (codes && !codes.has(code)) return;
       // A day with no hours on anyone is a closed day or a report pulled
@@ -413,8 +416,11 @@ export function analyzeSchedules({ shiftHistory, start, end, salesFor, codes = n
       const close = mc == null ? null : Math.round(mc);
       const avg = new Array(SLOTS).fill(0);
       ds.forEach(d => d.counts.forEach((c, s) => { avg[s] += c / n; }));
-      let solo = 0, zero = 0, peak3 = 0;
+      let solo = 0, zero = 0, peak3 = 0, above2 = 0;
       const zeroDays = [];
+      // Person-hours beyond 2 on, on an average day: the most a lighter day
+      // can drop while still keeping 2 people on at all times.
+      if (open != null && close != null) for (let s = open; s < close; s++) above2 += Math.max(0, avg[s] - MIN_ON_AFTER_CUT);
       ds.forEach(d => {
         if (open == null || close == null) return;
         let z = 0;
@@ -457,7 +463,7 @@ export function analyzeSchedules({ shiftHistory, start, end, salesFor, codes = n
         actual: actual / n, serviced: serviced / n, sales: sales / n,
         busy, salesPerHour: actual > 0 && sales > 0 ? sales / actual : null,
         soloHours: (solo * SLOT) / 60 / n, zeroHours: (zero * SLOT) / 60 / n, peakHours: (peak3 * SLOT) / 60 / n,
-        zeroDays, extra: extra / n, trimmable: trimmable / n,
+        zeroDays, extra: extra / n, trimmable: trimmable / n, above2: (above2 * SLOT) / 60,
         soloRuns: open != null ? runsWhere(avg, open, close, c => c > 0 && c < 1.5) : [],
         crowdRuns: open != null ? runsWhere(avg, open, close, c => c >= 3) : [],
         plan: latestOver >= 0.25 ? { date: latest.date, ...safeTrimPlan(latest.recs, latestOver) } : null,
@@ -539,8 +545,250 @@ function storeTips(st) {
   return tips;
 }
 
+// ─── Holidays and last year ─────────────────────────────────────────────────
+// User (2026-11-20): tips should reflect holidays, from 2025 sales and
+// attendance — the week before Thanksgiving staffs differently from the week
+// after. Each date is matched to its twin last year: the same day around a
+// moving holiday (Thanksgiving, Easter, Memorial Day, Labor Day), the same
+// calendar date around Christmas / New Year's / July 4th, else 364 days back
+// (same weekday). That day's cuts vs a usual day of that weekday last year
+// scale how many hours the date needs.
+const ymd = (y, m, d) => `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+const dayDiff = (a, b) => Math.round((new Date(`${a}T12:00:00`) - new Date(`${b}T12:00:00`)) / 86400000);
+function nthWeekday(y, m, wd, n) { const first = new Date(y, m - 1, 1).getDay(); return ymd(y, m, 1 + ((wd - first + 7) % 7) + (n - 1) * 7); }
+function lastWeekday(y, m, wd) { const last = new Date(y, m, 0); return ymd(y, m, last.getDate() - ((last.getDay() - wd + 7) % 7)); }
+function easterOf(y) { // anonymous Gregorian algorithm
+  const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4;
+  const f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31), day = ((h + l - 7 * m + 114) % 31) + 1;
+  return ymd(y, month, day);
+}
+const MOVING_HOLIDAYS = [
+  { on: y => nthWeekday(y, 11, 4, 4), from: -9, to: 10, label: o => (o === -1 ? 'the day before Thanksgiving' : o === 0 ? 'Thanksgiving' : o === 1 ? 'Black Friday' : o === 2 ? 'the Saturday after Thanksgiving' : o === 3 ? 'the Sunday after Thanksgiving' : o < 0 ? 'the week before Thanksgiving' : 'the week after Thanksgiving') },
+  { on: easterOf, from: -2, to: 1, label: o => (o === 0 ? 'Easter' : o < 0 ? 'Easter weekend' : 'the day after Easter') },
+  { on: y => lastWeekday(y, 5, 1), from: -3, to: 0, label: o => (o === 0 ? 'Memorial Day' : 'Memorial Day weekend') },
+  { on: y => nthWeekday(y, 9, 1, 1), from: -3, to: 0, label: o => (o === 0 ? 'Labor Day' : 'Labor Day weekend') },
+];
+function fixedHoliday(md) {
+  if (md >= '12-20' && md <= '12-23') return 'the days before Christmas';
+  if (md === '12-24') return 'Christmas Eve';
+  if (md === '12-25') return 'Christmas';
+  if (md >= '12-26' && md <= '12-30') return 'the week after Christmas';
+  if (md === '12-31') return "New Year's Eve";
+  if (md === '01-01') return "New Year's Day";
+  if (md === '01-02') return "the day after New Year's";
+  if (md === '07-03') return 'the day before July 4th';
+  if (md === '07-04') return 'July 4th';
+  if (md === '07-05') return 'the day after July 4th';
+  return null;
+}
+// { label, ly } for a date in a holiday window, else null.
+export function holidayInfo(iso) {
+  const y = Number(iso.slice(0, 4));
+  const fixed = fixedHoliday(iso.slice(5));
+  if (fixed) return { label: fixed, ly: `${y - 1}${iso.slice(4)}` };
+  for (const h of MOVING_HOLIDAYS) {
+    const off = dayDiff(iso, h.on(y));
+    if (off >= h.from && off <= h.to) return { label: h.label(off), ly: addDays(h.on(y - 1), off) };
+  }
+  return null;
+}
+export const lastYearDate = iso => (holidayInfo(iso) || {}).ly || addDays(iso, -364);
+
+// cutsFor/hoursFor(code, date) come from the daily sales history. Returns
+// { [date]: { ly, label, f (company), stores: { code: { f, lyCuts, base, lyHours, baseHours, closed } } } }.
+// f = cuts that day last year ÷ cuts on a usual day of that weekday in the
+// same weeks last year as the "usual week" now. A store's own f leans toward
+// the company's when the store is small (one day of one store is noisy).
+const SHRINK_CUTS = 15; // display choice
+export function seasonFactors({ dates, codes, baseStart, baseEnd, cutsFor, hoursFor = null }) {
+  const out = {};
+  if (!cutsFor || !dates.length) return out;
+  const lyBase = [];
+  for (let d = addDays(baseStart, -364); d <= addDays(baseEnd, -364); d = addDays(d, 1)) if (!holidayInfo(d)) lyBase.push(d);
+  const avgOf = (code, ds, fn) => { const v = ds.map(d => fn(code, d) || 0).filter(x => x > 0); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+  dates.forEach(date => {
+    const h = holidayInfo(date);
+    const ly = h ? h.ly : addDays(date, -364);
+    const bds = lyBase.filter(d => weekdayOf(d) === weekdayOf(ly));
+    const stores = {};
+    let cLy = 0, cBase = 0;
+    codes.forEach(code => {
+      const base = avgOf(code, bds, cutsFor);
+      if (base == null) return;
+      const lyCuts = cutsFor(code, ly) || 0;
+      stores[code] = { base, lyCuts, lyHours: hoursFor ? hoursFor(code, ly) || 0 : null, baseHours: hoursFor ? avgOf(code, bds, hoursFor) : null };
+      cLy += lyCuts; cBase += base;
+    });
+    const cf = cBase > 0 ? cLy / cBase : null;
+    Object.values(stores).forEach(s => {
+      const w = s.base / (s.base + SHRINK_CUTS);
+      s.closed = s.lyCuts === 0 && !(s.lyHours > 0);
+      s.f = s.closed ? 0 : Math.min(3, cf == null ? s.lyCuts / s.base : w * (s.lyCuts / s.base) + (1 - w) * cf);
+    });
+    out[date] = { ly, label: h ? h.label : null, f: cf, stores };
+  });
+  return out;
+}
+
+// ─── The two tips per store ─────────────────────────────────────────────────
+// User (2026-11-20): too many tips. Per store, just the #1 tip to protect
+// TSTH (the days that can cut or save hours, or "you're doing great") and
+// the #1 tip to grow sales (the days that need more stylists), for the date
+// range picked at the top of the tab.
+//  - Days in the range that are already worked: judged on what happened
+//    (by weekday), same safe-cut rules as before.
+//  - Days still to come: the store's usual week (the BASE_WEEKS of clock-ins
+//    up to the latest day, holiday weeks left out) scaled by last year's
+//    cuts that day (seasonFactors), against the posted schedule if there is
+//    one, else against the hours that weekday usually gets.
+export const BASE_WEEKS = 8;
+const SEASON_PTS = 0.1;  // last year ±10% counts as a holiday swing (display choice)
+const SAVE_MIN = 1;      // hrs in the range before a "save" tip shows (display choice)
+const GROW_MIN = 2;      // hrs in the range before a "grow" tip shows (display choice)
+const signedPct = f => { const p = Math.round((f - 1) * 100); return p > 0 ? `+${p}%` : p < 0 ? `−${-p}%` : '0%'; };
+const pctDelta = f =>`${Math.round(Math.abs(f - 1) * 100)}% ${f >= 1 ? 'more' : 'fewer'}`;
+
+function lyWhy(sf, s, wd) {
+  if (!sf) return null;
+  const f = s ? s.f : sf.f;
+  if (f == null || Math.abs(f - 1) < SEASON_PTS) return null;
+  const when = sf.label ? `${sf.label} ` : '';
+  const lyDay = WEEKDAYS_LONG[weekdayOf(sf.ly)];
+  const own = s && s.base >= 5 ? ` (${s.lyCuts} cuts on ${shortDate(sf.ly)}/${sf.ly.slice(2, 4)} vs ${Math.round(s.base)} on a usual ${lyDay})` : '';
+  return `last year ${when}had ${pctDelta(f)} cuts than a usual ${lyDay}${own}`;
+}
+
+function buildTip(spots, kind) {
+  const list = spots.filter(s => s.kind === kind);
+  const future = list.filter(s => !s.past);
+  const use = (future.length ? future : list).sort((a, b) => b.total - a.total);
+  const total = use.reduce((t, s) => t + s.total, 0);
+  if (!use.length || total < (kind === 'save' ? SAVE_MIN : GROW_MIN)) return { kind, ok: true };
+  return { kind, top: use[0], more: use.slice(1, 3), total };
+}
+const spotShort = s => `${s.label} ${s.kind === 'save' ? '−' : '+'}${s.per.toFixed(1)} hrs${s.past ? '/day' : ''}`;
+export function tipHeadline(t) {
+  if (t.ok) return t.kind === 'save' ? "You're doing great! No day here has hours to spare." : 'No day here looks short on stylists.';
+  const s = t.top;
+  return t.kind === 'save'
+    ? `Save about ${hrs(s.per)}${s.past ? ' a day' : ''} on ${s.label}`
+    : `Add ${s.per > 9 ? 'stylists' : 'a stylist'} on ${s.label}, about ${hrs(s.per)}${s.past ? ' a day' : ''}`;
+}
+export function tipText(t) {
+  if (t.ok) return tipHeadline(t);
+  return `${tipHeadline(t)}: ${t.top.why}.${t.more.length ? ` Also ${t.more.map(spotShort).join(', ')}.` : ''}`;
+}
+export const tipShort = t => (t.ok ? (t.kind === 'save' ? "✅ Doing great" : '✅ Covered') : `${spotShort(t.top)}${t.more.length ? ` (+${t.more.length} more)` : ''}`);
+
+// The whole plan for a date range. lostFor(start, end) → lostForSchedules()
+// output or null. Returns { base, range, view, viewStart, viewEnd, future,
+// factors, closedDays, stores: { code: { save, grow, days } } } or null.
+export function planSchedules({ shiftHistory, rangeStart, rangeEnd, salesFor, cutsFor = null, hoursFor = null, targetBusy = null, lostFor = () => null, today = localISO(new Date()), codes = null }) {
+  const latest = lastWorkedDate(shiftHistory);
+  if (!latest) return null;
+  const baseEnd = latest;
+  const baseStart = addDays(latest, -BASE_WEEKS * 7 + 1);
+  const base = analyzeSchedules({ shiftHistory, start: baseStart, end: baseEnd, salesFor, codes, targetBusy, today, lost: lostFor(baseStart, baseEnd), skip: d => !!holidayInfo(d) });
+  const target = targetBusy || base.groupTarget || null;
+  const pastEnd = rangeEnd < latest ? rangeEnd : latest;
+  const range = rangeStart <= pastEnd ? analyzeSchedules({ shiftHistory, start: rangeStart, end: pastEnd, salesFor, codes, targetBusy: target, today, lost: lostFor(rangeStart, pastEnd) }) : null;
+  const workedDays = range ? new Set(Object.values(range.stores).flatMap(s => s.days.map(d => d.date))).size : 0;
+  const view = range && workedDays >= 7 ? range : base;
+
+  // Days still to come in the range.
+  const future = [];
+  const first = [rangeStart, today, addDays(latest, 1)].sort().pop();
+  for (let d = first; d <= rangeEnd; d = addDays(d, 1)) future.push(d);
+  // A date most stores aren't scheduled (under half the usual) is a day off.
+  const storesOn = d => Object.values(shiftHistory[d] || {}).filter(recs => (recs || []).some(r => schedInterval(r))).length;
+  const withSched = future.filter(d => storesOn(d) > 0);
+  const usualOn = median(withSched.map(storesOn));
+  const closedDays = new Set(withSched.filter(d => usualOn && storesOn(d) < usualOn / 2));
+  const allCodes = [...new Set([...Object.keys(base.stores), ...Object.keys(range ? range.stores : {})])];
+  const factors = seasonFactors({ dates: future, codes: allCodes, baseStart, baseEnd, cutsFor, hoursFor });
+
+  const stores = {};
+  allCodes.forEach(code => {
+    const bst = base.stores[code];
+    const rst = range && range.stores[code];
+    const t = (rst || bst || {}).target || target;
+    const spots = [];
+    const days = [];
+    // Worked days in the range, by weekday.
+    if (rst && t) rst.weekdays.filter(w => w.n).forEach(w => {
+      const day = `${WEEKDAYS_LONG[w.wd]}s`;
+      if (w.trimmable >= 0.25 && !w.hold) {
+        spots.push({ kind: 'save', past: true, label: day, per: w.trimmable, total: w.trimmable * w.n,
+          why: `${day} ran ${pct(w.busy)} busy (target ${pct(t)})${w.crowdRuns.length ? ` with 3+ on ${w.crowdRuns.slice(0, 2).map(runText).join(' and ')}` : ''}; trimming shift edges keeps 2+ on at all times` });
+      }
+      const hot = w.busy != null && w.busy >= t + BUSY_GAP_PTS;
+      const add = (w.serviced + w.lostDay * GUEST_HOURS) / t - w.actual;
+      if ((hot || w.hold) && add >= 0.5) {
+        const bits = [hot ? `${day} ran ${pct(w.busy)} busy (target ${pct(t)})` : null,
+          w.hold ? `losing ${w.lostRate.toFixed(1)} guests per 100 cuts (company ${w.companyRate.toFixed(1)})` : null,
+          w.soloRuns.length ? `one person alone ${w.soloRuns.slice(0, 2).map(runText).join(' and ')}` : null].filter(Boolean);
+        spots.push({ kind: 'grow', past: true, label: day, per: add, total: add * w.n, why: bits.join(', ') });
+      }
+    });
+    // Days to come.
+    if (bst && t) future.forEach(date => {
+      const wd = weekdayOf(date);
+      const w = bst.weekdays[wd];
+      if (!w.n) return;
+      const sf = factors[date];
+      const s = sf && sf.stores[code];
+      const f = s ? s.f : sf && sf.f != null ? sf.f : 1;
+      const recs = ((shiftHistory[date] || {})[code] || []);
+      const scheduled = recs.some(r => schedInterval(r));
+      const sched = recs.map(schedInterval);
+      const schedHours = scheduled ? r2(recs.reduce((x, r, i) => x + (r[7] || (sched[i] ? ((sched[i][1] - sched[i][0]) * SLOT) / 60 : 0)), 0)) : null;
+      const row = { date, wd, f, label: sf ? sf.label : null, ly: sf ? sf.ly : null, lyCuts: s ? s.lyCuts : null, baseCuts: s ? s.base : null, lyHours: s ? s.lyHours : null, usual: w.actual, schedHours, need: null, save: 0, grow: 0, hold: w.hold, cuts: [] };
+      days.push(row);
+      if (f === 0) { row.note = 'Closed last year'; return; }
+      if (closedDays.has(date)) { row.note = 'Most stores off'; return; }
+      const need = (w.serviced * f + w.lostDay * f * GUEST_HOURS) / t;
+      // Under half the usual hours posted = a schedule still being built:
+      // judged against the usual hours instead (same LIGHT_DAY rule as before).
+      const partial = scheduled && schedHours < w.actual * LIGHT_DAY;
+      if (partial) row.note2 = 'Schedule looks unfinished';
+      const useSched = scheduled && !partial;
+      const have = useSched ? schedHours : w.actual;
+      row.need = need;
+      if (!w.hold) {
+        if (useSched) {
+          const plan = have - need >= 0.5 ? safeTrimPlan(recs, have - need, { scheduled: true }) : null;
+          row.save = plan ? plan.hours : 0;
+          row.cuts = plan ? plan.cuts : [];
+        } else {
+          row.save = Math.max(0, Math.min(have - need, w.above2));
+        }
+      }
+      const seasonal = f >= 1 + SEASON_PTS;
+      const hot = w.busy != null && w.busy >= t + BUSY_GAP_PTS;
+      row.grow = seasonal || hot || w.hold ? Math.max(0, need - have) : 0;
+      const ly = lyWhy(sf, s, wd);
+      const haveText = useSched ? `${hrs(schedHours)} scheduled vs about ${hrs(need)} needed` : `plan about ${hrs(need)} vs the usual ${hrs(w.actual)}${partial ? ` (only ${hrs(schedHours)} posted so far)` : ''}`;
+      if (row.save >= 0.25) {
+        const bits = [ly || `${WEEKDAYS_LONG[wd]}s usually run ${pct(w.busy)} busy (target ${pct(t)})`, haveText,
+          row.cuts.length ? `cut ${row.cuts.slice(0, 3).map(c => `${c.name} ${c.was} → ${c.now}`).join(', ')}` : null, 'keeps 2+ on at all times'].filter(Boolean);
+        spots.push({ kind: 'save', label: shortDate(date), per: row.save, total: row.save, why: bits.join('; ') });
+      }
+      if (row.grow >= 0.5) {
+        const bits = [ly, hot ? `${WEEKDAYS_LONG[wd]}s usually run ${pct(w.busy)} busy (target ${pct(t)})` : null,
+          w.hold ? `${WEEKDAYS_LONG[wd]}s lose ${w.lostRate.toFixed(1)} guests per 100 cuts (company ${w.companyRate.toFixed(1)})` : null,
+          haveText, w.soloRuns.length ? `usually one person alone ${w.soloRuns.slice(0, 2).map(runText).join(' and ')}` : null].filter(Boolean);
+        spots.push({ kind: 'grow', label: shortDate(date), per: row.grow, total: row.grow, why: bits.join('; ') });
+      }
+    });
+    stores[code] = { code, save: buildTip(spots, 'save'), grow: buildTip(spots, 'grow'), days };
+  });
+  return { base, range, view, viewStart: view === range ? rangeStart : baseStart, viewEnd: view === range ? pastEnd : baseEnd, baseStart, baseEnd, latest, future, factors, closedDays, target, stores };
+}
+
 // ─── Tilly ──────────────────────────────────────────────────────────────────
-export function schedulingContext(result, storeName) {
+export function schedulingContext(result, storeName, plan = null) {
   const list = Object.values(result?.stores || {});
   if (!list.length) return '';
   const lines = ['', `SCHEDULING (Attendance shift times, ${result.start} to ${result.end}; "busy %" = serviced hours ÷ clocked hours; suggested cuts only trim where 3+ are on, so nobody is ever left working alone, and no shift goes under ${MIN_SHIFT_HOURS} hrs):`];
@@ -555,8 +803,10 @@ export function schedulingContext(result, storeName) {
     let line = `${storeName(st.code)}: ${st.hoursPerWeek.toFixed(0)} hrs/wk, ${pct(st.busy)} busy vs target ${pct(st.target)}, sales/labor hr ${money(st.salesPerHour)}, alone ${st.soloPerWeek.toFixed(1)} hrs/wk, nobody on ${st.zeroPerWeek.toFixed(1)} hrs/wk, could cut ${st.trimPerWeek.toFixed(1)} hrs/wk safely, ${st.overSched.toFixed(1)} hrs over schedule, ${st.callOuts} call-outs.`;
     if (detailed.has(st.code)) {
       const wd = st.weekdays.filter(w => w.n).map(w => `${WEEKDAYS[w.wd]} ${pct(w.busy)}, ${w.actual.toFixed(0)} hrs, alone ${w.soloHours.toFixed(1)}, cut ${w.trimmable.toFixed(1)}`).join('; ');
-      line += ` By day: ${wd}. Tips: ${st.tips.slice(0, 3).map(t => t.text).join(' ') || 'none'}`;
+      line += ` By day: ${wd}.${plan ? '' : ` Tips: ${st.tips.slice(0, 3).map(t => t.text).join(' ') || 'none'}`}`;
     }
+    const p = plan && plan.stores[st.code];
+    if (p) line += ` #1 to protect TSTH: ${tipText(p.save)} #1 to grow sales: ${tipText(p.grow)}`;
     // The schedule ahead: only days with something to change, kept short.
     const weekOut = result.upcoming && result.upcoming.length ? result.upcoming[Math.min(6, result.upcoming.length - 1)] : null;
     const flagged = (st.upcoming || []).filter(u => !u.light && u.date <= weekOut && ((u.plan && u.plan.hours >= 1) || u.short || u.zeroRuns.length));
@@ -571,16 +821,31 @@ export function schedulingContext(result, storeName) {
     }
     lines.push(line);
   });
+  if (plan && plan.future.length) {
+    const swings = plan.future.map(d => ({ d, sf: plan.factors[d] })).filter(x => x.sf && x.sf.f != null && (x.sf.label || Math.abs(x.sf.f - 1) >= SEASON_PTS));
+    lines.splice(2, 0, `Plan for ${plan.future[0]} to ${plan.future[plan.future.length - 1]}: each store's usual week (clock-ins ${plan.baseStart} to ${plan.baseEnd}, holiday weeks left out) scaled by last year's cuts on the matching day (holiday-aligned).${swings.length ? ` Company cuts last year: ${swings.map(x => `${x.d}${x.sf.label ? ` (${x.sf.label})` : ''} ${x.sf.f === 0 ? 'closed' : signedPct(x.sf.f)}`).join(', ')}.` : ''} Each store line ends with its #1 tip to protect TSTH and #1 to grow sales, the same ones the Scheduling tab shows.`);
+  }
   if (result.upcoming && result.upcoming.length) lines.splice(2, 0, `Upcoming schedule on file: ${result.upcoming[0]} to ${result.upcoming[result.upcoming.length - 1]} (shifts planned, not worked yet)${result.holidays && result.holidays.length ? `; most stores closed ${result.holidays.join(', ')}` : ''}. Per-store lines below cover the next 7 days with something to change; the Scheduling tab has the rest. "needed" = that weekday's usual serviced hours (or hours already booked, if more) ÷ the busy target; cuts never leave anyone alone.`);
   return lines.join('\n');
 }
 
 // ─── UI ─────────────────────────────────────────────────────────────────────
-const RANGE_PRESETS = [{ weeks: 2, label: '2 weeks' }, { weeks: 4, label: '4 weeks' }, { weeks: 8, label: '8 weeks' }, { weeks: 13, label: '13 weeks' }];
+// Quick picks for the date range at the top of the tab (custom dates too).
+function rangePresets(today) {
+  const wd = weekdayOf(today);
+  const monday = addDays(today, wd === 0 ? -6 : 1 - wd);
+  return [
+    { id: 'next2', label: 'Next 2 weeks', start: today, end: addDays(today, 13) },
+    { id: 'thisweek', label: 'This week', start: monday, end: addDays(monday, 6) },
+    { id: 'nextweek', label: 'Next week', start: addDays(monday, 7), end: addDays(monday, 13) },
+    { id: 'next4', label: 'Next 4 weeks', start: today, end: addDays(today, 27) },
+    { id: 'last4', label: 'Last 4 weeks', start: addDays(today, -28), end: addDays(today, -1) },
+    { id: 'last8', label: 'Last 8 weeks', start: addDays(today, -56), end: addDays(today, -1) },
+  ];
+}
 const addDays = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 const monthsBetween = (a, b) => { const out = []; for (let m = a.slice(0, 7); m <= b.slice(0, 7);) { out.push(m); const [y, mo] = m.split('-').map(Number); m = mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, '0')}`; } return out; };
 const TARGET_KEY = 'supercuts_sched_target';
-const TIP_ICON = { grow: '📈', move: '↔️', trim: '✂️', gap: '⚠️', payroll: '💵' };
 
 const HEAT = { zero: '#D9473F', solo: '#F2A541', two: '#BFD8F2', three: '#6E9FD6', four: '#1F5FBF' };
 function heatColor(c) {
@@ -667,15 +932,48 @@ function DayTimeline({ day }) {
   );
 }
 
-const ADVICE_ICON = { grow: '📈', trim: '✂️', gap: '⚠️', payroll: '💵', info: 'ℹ️', ok: '✅', move: '↔️', total: '📊', when: '🕒', staff: '👥', link: '🔗', who: '📱', stores: '🏪' };
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]; // Monday first
 const shortDate = iso => { const d = new Date(`${iso}T12:00:00`); return `${WEEKDAYS[d.getDay()]} ${d.getMonth() + 1}/${d.getDate()}`; };
 const hourShort = h => `${h % 12 || 12}${h < 12 ? 'a' : 'p'}`;
 const fmtLong = iso => { const d = new Date(`${iso}T12:00:00`); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }); };
 
-function AdviceList({ items, small = false }) {
-  if (!items || !items.length) return null;
-  return <ul className={`sched-advice ${small ? 'sched-advice-sm' : ''}`}>{items.map((t, i) => <li key={i} className={`sched-advice-${t.kind}`}><span>{ADVICE_ICON[t.kind]}</span>{t.text}</li>)}</ul>;
+// The two tips for one store: #1 to protect TSTH, #1 to grow sales.
+function TipPair({ p }) {
+  const box = (t, title, icon) => (
+    <div className={`sched-tip-box ${t.ok ? 'sched-tip-ok' : `sched-tip-${t.kind}`}`}>
+      <span className="sched-tip-title">{icon} {title}</span>
+      <b>{t.ok ? `✅ ${tipHeadline(t)}` : tipHeadline(t)}</b>
+      {!t.ok && <p>{t.top.why.charAt(0).toUpperCase() + t.top.why.slice(1)}.</p>}
+      {!t.ok && t.more.length > 0 && <p className="sched-tip-more">Also {t.more.map(spotShort).join(' · ')}</p>}
+    </div>
+  );
+  return <div className="sched-tip-pair">{box(p.save, 'Protect TSTH', '✂️')}{box(p.grow, 'Grow sales', '📈')}</div>;
+}
+
+// Days to come in the range, one row each: last year, usual, scheduled, plan.
+function PlanTable({ days, target }) {
+  if (!days.length) return null;
+  return (
+    <div className="sched-table-wrap">
+      <table className="ledger-table">
+        <thead><tr><th className="ledger-name-col">Day</th><th>Holiday</th><th>Last year</th><th>Usual hrs</th><th>Scheduled</th><th>Plan</th><th>Change</th></tr></thead>
+        <tbody>
+          {days.map(r => (
+            <tr key={r.date}>
+              <td className="ledger-name-col">{shortDate(r.date)}</td>
+              <td>{r.label || '—'}</td>
+              <td title={r.ly ? `Matched to ${r.ly}` : ''}>{r.f === 0 ? 'closed' : r.baseCuts ? `${r.lyCuts} cuts vs ${Math.round(r.baseCuts)} usual (${signedPct(r.f)})` : '—'}</td>
+              <td>{r.usual.toFixed(1)}</td>
+              <td title={r.note2 || ''}>{r.schedHours != null ? `${r.schedHours.toFixed(1)}${r.note2 ? ' *' : ''}` : '—'}</td>
+              <td>{r.need != null ? r.need.toFixed(1) : '—'}</td>
+              <td className={r.save >= 0.25 ? 'sched-cool' : r.grow >= 0.5 ? 'sched-hot' : ''}>{r.note || (r.save >= 0.25 ? `−${r.save.toFixed(1)}` : r.grow >= 0.5 ? `+${r.grow.toFixed(1)}` : r.hold && r.need != null ? 'hold' : '✓')}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="section-hint" style={{ padding: '0 10px' }}>Plan = this weekday's usual serviced hours × last year's cuts that day vs a usual day, ÷ the {pct(target)} busy target. Change compares the plan to what's scheduled (or the usual hours if no schedule is posted yet). Cuts keep 2+ on at all times; "hold" = this weekday loses more guests than average, so no cuts. * = under half the usual hours posted, so the plan compares to the usual hours instead.</p>
+    </div>
+  );
 }
 
 // ─── Hourly heat maps (guests / lost guests / both) ─────────────────────────
@@ -741,56 +1039,20 @@ function HourHeat({ st, appt, mode }) {
   );
 }
 
-// ─── One weekday: everything, no clicks ─────────────────────────────────────
-function DayCard({ st, w, appt }) {
-  const day = WEEKDAYS_LONG[w.wd];
-  const lostDay = appt && appt.daysByWd[w.wd] ? appt.lostByWd[w.wd] / appt.daysByWd[w.wd] : null;
-  return (
-    <div className="sched-daycard">
-      <div className="sched-daycard-head">
-        <b>{day}s</b>
-        {w.n ? (
-          <span>
-            usually {w.open != null ? `${slotLabel(w.open)}–${slotLabel(w.close)}` : '—'} · {w.actual.toFixed(0)} staff hrs ·{' '}
-            <b className={w.busy == null || st.target == null ? '' : w.busy >= st.target + BUSY_GAP_PTS ? 'sched-hot' : w.busy < st.target ? 'sched-cool' : ''}>{pct(w.busy)} busy</b>
-            {w.soloHours >= 0.25 ? ` · ${hrs(w.soloHours)} alone` : ''}{lostDay != null ? ` · ${lostDay.toFixed(1)} lost guests/day` : ''} · from {w.n} {day}{w.n === 1 ? '' : 's'}
-          </span>
-        ) : <span className="section-hint">no worked {day}s in range</span>}
-      </div>
-      {w.n > 0 && (w.advice.length ? <AdviceList items={w.advice} /> : <p className="sched-ok">✅ Hours line up with how busy {day}s are.</p>)}
-      {w.upcoming.map(u => (
-        <div key={u.date} className="sched-upflat">
-          <p><b>{shortDate(u.date)}</b> as scheduled: {u.people} {u.people === 1 ? 'person' : 'people'}, {hrs(u.schedHours)}{u.open != null ? `, ${slotLabel(u.open)}–${slotLabel(u.close)}` : ''}</p>
-          <AdviceList items={u.advice.filter(a => a.kind !== 'info' || !/booked/.test(a.text))} small />
-          {u.plan && u.plan.cuts.length > 0 && <p className="sched-cutline">✂️ {u.plan.cuts.map(c => `${c.name} ${c.was} → ${c.now}`).join(' · ')}</p>}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function StoreDetail({ st, storeName, onBack, appt, apptCompany, apptFindings }) {
+function StoreDetail({ st, p, storeName, onBack, appt, apptCompany, viewNote, target }) {
   const [dayIdx, setDayIdx] = useState(st.days.length - 1);
   const day = st.days.length ? st.days[Math.max(0, Math.min(dayIdx, st.days.length - 1))] : null;
-  const storeWide = st.tips.filter(t => t.kind === 'move' || t.kind === 'payroll');
   return (
     <div className="sched-store">
       <button className="link-btn" onClick={onBack}>← All stores</button>
       <h3 className="chart-title">{storeName(st.code)}</h3>
+      {p && <TipPair p={p} />}
       <div className="sched-cards">
         <div className="sched-card"><span>Busy %</span><strong>{pct(st.busy)}</strong><em>target {pct(st.target)}</em></div>
         <div className="sched-card"><span>Staff hrs / week</span><strong>{st.hoursPerWeek.toFixed(0)}</strong><em>{st.soloPerWeek.toFixed(1)} hrs alone</em></div>
-        <div className="sched-card"><span>Could cut / week</span><strong>{st.trimPerWeek.toFixed(1)}</strong><em>hrs, nobody left alone</em></div>
-        {st.upcoming.length > 0 && <div className="sched-card"><span>Schedule ahead</span><strong>{st.upcomingCut >= 0.5 ? `−${st.upcomingCut.toFixed(1)}` : st.upcomingShort >= 2 ? `+${st.upcomingShort.toFixed(1)}` : '✓'}</strong><em>{st.upcomingCut >= 0.5 ? 'hrs could come off' : st.upcomingShort >= 2 ? 'hrs short' : 'lines up'}, through {shortDate(st.upcoming[st.upcoming.length - 1].date)}</em></div>}
         {appt && appt.per100 && <div className="sched-card"><span>Lost guests</span><strong>{appt.per100.all.toFixed(1)}</strong><em>per 100 cuts{apptCompany?.per100 ? ` (company ${apptCompany.per100.all.toFixed(1)})` : ''}</em></div>}
       </div>
-
-      {apptFindings && apptFindings.length > 0 && <AdviceList items={apptFindings} />}
-
-      <p className="chart-title">Day by day</p>
-      <div className="sched-daycards">
-        {WEEK_ORDER.map(i => st.weekdays[i]).filter(w => w.n || w.upcoming.length).map(w => <DayCard key={w.wd} st={st} w={w} appt={appt} />)}
-      </div>
+      <p className="section-hint">{viewNote}</p>
 
       <p className="chart-title">Staff on, by 15 minutes</p>
       <CoverageHeatmap weekdays={WEEK_ORDER.map(i => st.weekdays[i])} />
@@ -800,7 +1062,7 @@ function StoreDetail({ st, storeName, onBack, appt, apptCompany, apptFindings })
         {appt.V > 0 && <><p className="chart-title">Guests checking in, by hour</p><HourHeat st={st} appt={appt} mode="guests" /></>}
       </>}
 
-      {storeWide.length > 0 && <><p className="chart-title">Across the week</p><AdviceList items={storeWide} /></>}
+      {p && p.days.length > 0 && <><p className="chart-title">Day by day, still to come</p><PlanTable days={p.days} target={target} /></>}
 
       {day && (
         <>
@@ -960,113 +1222,145 @@ function StaffingReport({ result, appt, storeName, dlFor, onClose }) {
 }
 export { StaffingReport };
 
-export function SchedulingTab({ shiftHistory, loadedMonths, onNeedMonths, salesFor, cutsFor = null, apptHistory = null, storeName, dlFor, loading }) {
-  // The latest day with hours worked, not the last date stored: a schedule
-  // uploaded ahead adds future dates with no hours yet.
-  const latest = useMemo(() => lastWorkedDate(shiftHistory), [shiftHistory]);
-  const hasAhead = useMemo(() => upcomingDates(shiftHistory, latest).length > 0, [shiftHistory, latest]);
-  const [weeks, setWeeks] = useState(4);
+export function SchedulingTab({ shiftHistory, loadedMonths, onNeedMonths, salesFor, cutsFor = null, hoursFor = null, apptHistory = null, storeName, dlFor, loading }) {
+  const today = localISO(new Date());
+  const presets = useMemo(() => rangePresets(today), [today]);
+  const [range, setRange] = useState({ id: 'next2', start: presets[0].start, end: presets[0].end });
   const [open, setOpen] = useState(null);
   const [search, setSearch] = useState('');
   const [report, setReport] = useState(false);
   const [target, setTarget] = useState(() => { try { return Number(localStorage.getItem(TARGET_KEY)) || null; } catch { return null; } });
-  const end = latest;
-  const start = end ? addDays(end, -(weeks * 7) + 1) : null;
+  const latest = useMemo(() => lastWorkedDate(shiftHistory), [shiftHistory]);
+  const hasAhead = useMemo(() => upcomingDates(shiftHistory, latest).length > 0, [shiftHistory, latest]);
+  const { start, end } = range;
+  const pickPreset = id => { const p = presets.find(x => x.id === id); if (p) setRange({ id, start: p.start, end: p.end }); };
+  const setDate = (k, v) => { if (!v) return; setRange(r => { const n = { ...r, id: 'custom', [k]: v }; if (n.start > n.end) { if (k === 'start') n.end = v; else n.start = v; } return n; }); };
 
+  // Months to load: the usual-week history before the latest day worked,
+  // through the end of the range.
   useEffect(() => {
-    if (!start || !end || !onNeedMonths) return;
-    const missing = monthsBetween(start, end).filter(m => !loadedMonths.has(m));
+    if (!onNeedMonths) return;
+    const from = [start, addDays(latest || today, -BASE_WEEKS * 7)].sort()[0];
+    const missing = monthsBetween(from, end).filter(m => !loadedMonths.has(m));
     if (missing.length) onNeedMonths(missing);
-  }, [start, end, loadedMonths, onNeedMonths]);
+  }, [start, end, latest, today, loadedMonths, onNeedMonths]);
 
-  // Lost guests first (by store and weekday), so the schedule math never
-  // suggests cutting hours on a day that's losing guests; then again with the
-  // schedule result for the store-level comparisons.
-  const lost = useMemo(() => (apptHistory ? lostForSchedules(analyzeAppointments({ apptHistory, start: start || '0000', end: end || '9999', cutsFor })) : null), [apptHistory, start, end, cutsFor]);
-  const result = useMemo(() => (start || hasAhead ? analyzeSchedules({ shiftHistory, start: start || '9999', end: end || '', salesFor, targetBusy: target ? target / 100 : null, lost }) : null), [shiftHistory, start, end, salesFor, target, hasAhead, lost]);
-  const appt = useMemo(() => (apptHistory ? analyzeAppointments({ apptHistory, start: start || '0000', end: end || '9999', cutsFor, sched: result, shiftHistory }) : null), [apptHistory, start, end, cutsFor, result, shiftHistory]);
+  const lostFor = useMemo(() => {
+    const cache = {};
+    return (s, e) => {
+      if (!apptHistory) return null;
+      const k = `${s}|${e}`;
+      if (!(k in cache)) cache[k] = lostForSchedules(analyzeAppointments({ apptHistory, start: s, end: e, cutsFor }));
+      return cache[k];
+    };
+  }, [apptHistory, cutsFor]);
+  const plan = useMemo(() => (latest ? planSchedules({ shiftHistory, rangeStart: start, rangeEnd: end, salesFor, cutsFor, hoursFor, targetBusy: target ? target / 100 : null, lostFor, today }) : null),
+    [shiftHistory, start, end, salesFor, cutsFor, hoursFor, target, lostFor, today, latest]);
+  const result = plan ? plan.view : null;
+  const appt = useMemo(() => (apptHistory && plan ? analyzeAppointments({ apptHistory, start: plan.viewStart, end: plan.viewEnd, cutsFor, sched: result, shiftHistory }) : null), [apptHistory, plan, result, cutsFor, shiftHistory]);
   const saveTarget = v => { setTarget(v); try { if (v) localStorage.setItem(TARGET_KEY, String(v)); else localStorage.removeItem(TARGET_KEY); } catch { /* per-viewer only */ } };
-  const named = items => items.map(f => ({ ...f, text: f.text.replace(/\{(\d+)\}/g, (_, c) => storeName(c)) }));
 
-  if (!latest && !hasAhead) {
+  if (!latest) {
     if (loading) return <div className="tab-content"><p>Loading shift times…</p></div>;
     return (
       <div className="tab-content">
         <h2 className="chart-title">Scheduling</h2>
-        <p>No shift times yet. They come from the Attendance report: upload Attendance files in Setup → Historical Import and the shift times are saved along with the hours. Files uploaded before 2026-11-10 need uploading again.</p>
+        <p>{hasAhead ? 'A schedule ahead is on file, but no worked days yet, so there is no usual week to plan from.' : 'No shift times yet.'} Shift times come from the Attendance report: upload Attendance files in Setup → Historical Import and the shift times are saved along with the hours. Files uploaded before 2026-11-10 need uploading again.</p>
       </div>
     );
   }
   if (report && appt) return <StaffingReport result={result} appt={appt} storeName={storeName} dlFor={dlFor} onClose={() => setReport(false)} />;
 
-  const list = Object.values(result.stores).filter(st => !search || storeName(st.code).toLowerCase().includes(search.toLowerCase()) || st.code.includes(search));
+  const viewNote = plan.view === plan.range
+    ? `Heat maps and busy %: clock-ins ${fmtLong(plan.viewStart)} – ${fmtLong(plan.viewEnd)}.`
+    : `Heat maps and busy %: a usual week, from clock-ins ${fmtLong(plan.viewStart)} – ${fmtLong(plan.viewEnd)} (holiday weeks left out).`;
+  const controls = (
+    <div className="sched-controls">
+      <select value={range.id} onChange={e => pickPreset(e.target.value)} aria-label="Date range">
+        {presets.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+        {range.id === 'custom' && <option value="custom">Custom dates</option>}
+      </select>
+      <label>From <input type="date" value={start} onChange={e => setDate('start', e.target.value)} /></label>
+      <label>To <input type="date" value={end} onChange={e => setDate('end', e.target.value)} /></label>
+      <label title={'"Busy %" = serviced hours ÷ clocked hours'}>Busy target <input type="number" min="20" max="95" placeholder={plan.base.groupTarget ? String(Math.round(plan.base.groupTarget * 100)) : 'auto'} value={target || ''} onChange={e => saveTarget(e.target.value ? Math.max(20, Math.min(95, Number(e.target.value))) : null)} />%</label>
+    </div>
+  );
+
   if (open && result.stores[open]) {
     return (
       <div className="tab-content">
-        <StoreDetail st={result.stores[open]} storeName={storeName} onBack={() => setOpen(null)}
-          appt={appt?.stores[open] || null} apptCompany={appt?.company || null} apptFindings={appt ? storeApptFindings(appt, open) : null} />
+        {controls}
+        <StoreDetail st={result.stores[open]} p={plan.stores[open]} storeName={storeName} onBack={() => setOpen(null)} target={plan.target}
+          appt={appt?.stores[open] || null} apptCompany={appt?.company || null} viewNote={viewNote} />
       </div>
     );
   }
-  const sorted = [...list].sort((a, b) => b.trimPerWeek - a.trimPerWeek);
+
+  const list = Object.values(result.stores).filter(st => !search || storeName(st.code).toLowerCase().includes(search.toLowerCase()) || st.code.includes(search));
+  const sorted = [...list].sort((a, b) => ((plan.stores[b.code]?.save.total || 0) - (plan.stores[a.code]?.save.total || 0)) || ((plan.stores[b.code]?.grow.total || 0) - (plan.stores[a.code]?.grow.total || 0)));
   const tot = k => list.reduce((t, s) => t + (s[k] || 0), 0);
   const allA = list.reduce((t, s) => t + s.days.reduce((x, d) => x + d.actual, 0), 0);
   const allS = list.reduce((t, s) => t + s.days.reduce((x, d) => x + d.serviced, 0), 0);
-  const ahead = result.upcoming.length > 0;
+  const saveTot = list.reduce((t, s) => t + (plan.stores[s.code]?.save.total || 0), 0);
+  const growTot = list.reduce((t, s) => t + (plan.stores[s.code]?.grow.total || 0), 0);
   const showLost = !!appt;
+  // Last year's swing on the days to come (company-wide), holidays first.
+  const swings = plan.future.map(d => ({ d, sf: plan.factors[d] })).filter(x => x.sf && x.sf.f != null && (x.sf.label || Math.abs(x.sf.f - 1) >= 0.15));
 
   return (
     <div className="tab-content">
       <h2 className="chart-title">Scheduling</h2>
+      {controls}
       <div className="sched-controls">
-        <select value={weeks} onChange={e => setWeeks(Number(e.target.value))} aria-label="Range">
-          {RANGE_PRESETS.map(p => <option key={p.weeks} value={p.weeks}>Last {p.label}</option>)}
-        </select>
-        <label title={'"Busy %" = serviced hours ÷ clocked hours'}>Busy target <input type="number" min="20" max="95" placeholder={result.groupTarget ? String(Math.round(result.groupTarget * 100)) : 'auto'} value={target || ''} onChange={e => saveTarget(e.target.value ? Math.max(20, Math.min(95, Number(e.target.value))) : null)} />%</label>
         <input type="search" placeholder="Search stores" value={search} onChange={e => setSearch(e.target.value)} />
         {showLost && <button className="btn-secondary sched-report-btn" onClick={() => setReport(true)}>📄 PDF report</button>}
       </div>
-      <p className="section-hint">{latest ? <>Clock-ins {start} to {end}.</> : <>No worked days yet, only the schedule ahead.</>}{ahead && <> Schedule ahead through {result.upcoming[result.upcoming.length - 1]}.</>} Cuts never leave anyone working alone. Uploads are in Setup → Historical Import.</p>
+      <p className="section-hint">{fmtLong(start)} – {fmtLong(end)}. Latest clock-ins {fmtLong(latest)}{plan.future.length ? `; days after that are planned from each store's usual week and last year's cuts on the same day` : ''}. Cuts never leave anyone working alone.</p>
 
-      <div className="sched-cards">
-        <div className="sched-card"><span>Busy %</span><strong>{pct(allA ? allS / allA : null)}</strong><em>target {target ? `${target}%` : result.groupTarget ? pct(result.groupTarget) : 'own'}</em></div>
-        <div className="sched-card"><span>Staff hrs / week</span><strong>{Math.round(tot('hoursPerWeek')).toLocaleString()}</strong><em>{list.length} stores · {tot('soloPerWeek').toFixed(0)} hrs alone</em></div>
-        <div className="sched-card"><span>Could cut / week</span><strong>{tot('trimPerWeek').toFixed(0)}</strong><em>hrs, nobody left alone</em></div>
-        {ahead && <div className="sched-card"><span>Schedule ahead</span><strong>−{tot('upcomingCut').toFixed(0)}</strong><em>hrs could come off</em></div>}
-        {showLost && appt.company.per100 && <div className="sched-card"><span>Lost guests</span><strong>{appt.company.per100.all.toFixed(1)}</strong><em>per 100 cuts</em></div>}
-      </div>
-
-      {showLost && (
-        <div className="sched-tips">
-          <p className="chart-title">Lost guests: when, and what lines up</p>
-          <AdviceList items={named(appt.findings)} />
+      {swings.length > 0 && (
+        <div className="sched-ly">
+          <span className="sched-tip-title">Last year, same days (company cuts vs a usual day)</span>
+          <div className="sched-ly-chips">
+            {swings.map(({ d, sf }) => (
+              <span key={d} className={sf.f === 0 ? 'sched-ly-closed' : sf.f >= 1 ? 'sched-ly-up' : 'sched-ly-down'} title={`Matched to ${sf.ly}`}>
+                <b>{shortDate(d)}</b>{sf.label ? ` ${sf.label}` : ''}: {sf.f === 0 ? 'closed' : signedPct(sf.f)}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
+      <div className="sched-cards">
+        <div className="sched-card"><span>Busy %</span><strong>{pct(allA ? allS / allA : null)}</strong><em>target {target ? `${target}%` : pct(plan.target)}</em></div>
+        <div className="sched-card"><span>Staff hrs / week</span><strong>{Math.round(tot('hoursPerWeek')).toLocaleString()}</strong><em>{list.length} stores</em></div>
+        <div className="sched-card"><span>Hours to save</span><strong>{saveTot.toFixed(0)}</strong><em>in this range, nobody left alone</em></div>
+        <div className="sched-card"><span>Hours to add</span><strong>{growTot.toFixed(0)}</strong><em>on the busy days</em></div>
+        {showLost && appt.company.per100 && <div className="sched-card"><span>Lost guests</span><strong>{appt.company.per100.all.toFixed(1)}</strong><em>per 100 cuts</em></div>}
+      </div>
+
       <div className="sched-table-wrap">
         <table className="ledger-table">
-          <thead><tr><th className="ledger-name-col">Store</th>{dlFor && <th>DL</th>}<th>Busy %</th><th>Hrs / wk</th><th>Alone / wk</th><th>Could cut / wk</th>{ahead && <th>Schedule ahead</th>}{showLost && <th>Lost / 100 cuts</th>}<th>Top tip</th></tr></thead>
+          <thead><tr><th className="ledger-name-col">Store</th>{dlFor && <th>DL</th>}<th>Busy %</th><th>Hrs / wk</th>{showLost && <th>Lost / 100 cuts</th>}<th>✂️ Protect TSTH</th><th>📈 Grow sales</th></tr></thead>
           <tbody>
             {sorted.map(st => {
               const a = appt?.stores[st.code];
+              const p = plan.stores[st.code];
               return (
                 <tr key={st.code} className="sched-click" onClick={() => setOpen(st.code)}>
                   <td className="ledger-name-col"><span className="sched-storelink">{storeName(st.code)}</span></td>
                   {dlFor && <td>{dlFor(st.code) || '—'}</td>}
                   <td className={st.busy == null ? '' : st.busy < st.target - 0.05 ? 'sched-cool' : st.busy > st.target + BUSY_GAP_PTS ? 'sched-hot' : ''}>{pct(st.busy)}</td>
                   <td>{st.hoursPerWeek.toFixed(0)}</td>
-                  <td>{st.soloPerWeek.toFixed(1)}</td>
-                  <td><b>{st.trimPerWeek.toFixed(1)}</b></td>
-                  {ahead && <td className={st.upcomingCut >= 0.5 ? 'sched-cool' : st.upcomingShort >= 2 ? 'sched-hot' : ''}>{!st.upcoming.length ? '—' : st.upcomingCut >= 0.5 ? `−${st.upcomingCut.toFixed(1)}` : st.upcomingShort >= 2 ? `+${st.upcomingShort.toFixed(1)}` : '✓'}</td>}
                   {showLost && <td className={a?.per100 && appt.company.per100 && a.per100.all >= appt.company.per100.all * 1.25 ? 'sched-warn' : ''}>{a?.per100 ? a.per100.all.toFixed(1) : '—'}</td>}
-                  <td className="sched-tip-cell">{st.tips[0] ? `${TIP_ICON[st.tips[0].kind]} ${st.tips[0].text.split('. ')[0]}.` : '—'}</td>
+                  <td className="sched-tip-cell">{p ? tipShort(p.save) : '—'}</td>
+                  <td className="sched-tip-cell">{p ? tipShort(p.grow) : '—'}</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
-      <p className="section-hint">Tap a store for every day of its week. Blue busy % = under target (room to trim), orange = well over (likely short). Schedule ahead: − hrs can come off the posted schedule, + hrs short.</p>
+      <p className="section-hint">Tap a store for its two tips in full, the heat maps and each day still to come. Blue busy % = under target, orange = well over.</p>
     </div>
   );
 }

@@ -1848,6 +1848,22 @@
 .sched-daycard-head > b { font-size: 16px; color: var(--navy); min-width: 100px; }
 .sched-daycard-head .sched-hot { color: #B5562A; } .sched-daycard-head .sched-cool { color: #1F5FBF; }
 .sched-ok { margin: 0; font-size: 13.5px; }
+.sched-tip-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 6px 0 12px; }
+.sched-tip-box { background: var(--card); border-radius: 10px; padding: 12px 14px; box-shadow: var(--shadow); border-left: 5px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.sched-tip-box b { font-size: 15.5px; color: var(--navy); line-height: 1.35; }
+.sched-tip-box p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--ink); }
+.sched-tip-box.sched-tip-save { border-left-color: #1F5FBF; }
+.sched-tip-box.sched-tip-grow { border-left-color: #B5562A; }
+.sched-tip-box.sched-tip-ok { border-left-color: var(--green); }
+.sched-tip-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); font-weight: 600; }
+.sched-tip-more { color: var(--ink-soft) !important; font-size: 12.5px !important; }
+.sched-controls input[type="date"] { padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+.sched-ly { background: var(--card); border-radius: 10px; padding: 10px 12px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 8px; }
+.sched-ly-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.sched-ly-chips span { font-size: 12.5px; padding: 4px 9px; border-radius: 999px; background: var(--paper); border: 1px solid var(--line); }
+.sched-ly-chips .sched-ly-up { border-color: #E3A27F; background: #FCEFE7; }
+.sched-ly-chips .sched-ly-down { border-color: #9DBBE3; background: #EAF1FA; }
+.sched-ly-chips .sched-ly-closed { color: var(--ink-soft); }
 .sched-upflat { border-top: 1px dashed var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 5px; }
 .sched-upflat > p { margin: 0; font-size: 13.5px; }
 .sched-cutline { font-size: 12.5px !important; color: var(--ink-soft); line-height: 1.5; }

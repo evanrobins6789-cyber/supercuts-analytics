@@ -34,7 +34,7 @@ import { buildMyNumbers, pickOwnRecords, normalizePersonName, buildPeerStats, be
 import { buildPayBreakdown, buildCoaching } from './payCoach';
 import { TabMenu } from './TabMenu';
 import { FocusStoresTab, focusStoresContext } from './focusStores';
-import { SchedulingTab, parseShiftFile, mergeShiftMonth, analyzeSchedules, schedulingContext, lastWorkedDate } from './scheduling';
+import { SchedulingTab, parseShiftFile, mergeShiftMonth, analyzeSchedules, schedulingContext, lastWorkedDate, planSchedules } from './scheduling';
 import { parseAppointmentsFile, classifyAppointments, mergeApptMonth, apptMonths, analyzeAppointments, appointmentsContext, lostForSchedules } from './appointments';
 import { CouponsTab, couponsContext, couponPresets } from './coupons';
 import { CollectiveGoalBars } from './CollectiveGoalBars';
@@ -13140,6 +13140,13 @@ export default function App() {
     Object.values(d.history || {}).forEach(r => { if (r && r.code && r.date) m.set(`${r.code}|${r.date}`, r.haircuts || 0); });
     return (code, date) => m.get(`${code}|${date}`) || 0;
   })();
+  // Hours worked per store-day (Attendance, in the daily history), for
+  // last year's staffing on the same day.
+  const schedHoursFor = (() => {
+    const m = new Map();
+    Object.values(d.history || {}).forEach(r => { if (r && r.code && r.date) m.set(`${r.code}|${r.date}`, r.hours || 0); });
+    return (code, date) => m.get(`${code}|${date}`) || 0;
+  })();
   const schedStoreName = code => STORE_CODE_TO_NAME[code] || `Store ${code}`;
   const canSchedule = u.role === 'owner' || u.role === 'district_leader' || u.role === 'manager';
   const schedTilly = () => {
@@ -13156,7 +13163,15 @@ export default function App() {
     const lost = d.apptHistory ? lostForSchedules(analyzeAppointments({ apptHistory: d.apptHistory, start, end: latest, cutsFor: schedCutsFor })) : null;
     const sched = analyzeSchedules({ shiftHistory: d.shiftHistory, start, end: latest, salesFor: schedSalesFor, lost });
     const appt = d.apptHistory ? analyzeAppointments({ apptHistory: d.apptHistory, start, end: latest, cutsFor: schedCutsFor, sched, shiftHistory: d.shiftHistory }) : null;
-    return schedulingContext(sched, schedStoreName) + appointmentsContext(appt, schedStoreName);
+    // The Scheduling tab's two tips per store, for the next 2 weeks
+    // (holiday-aware from last year's cuts).
+    const now = new Date();
+    const iso = x => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+    const today = iso(now);
+    const two = new Date(now); two.setDate(two.getDate() + 13);
+    const lostFor = (s, e) => (d.apptHistory ? lostForSchedules(analyzeAppointments({ apptHistory: d.apptHistory, start: s, end: e, cutsFor: schedCutsFor })) : null);
+    const plan = planSchedules({ shiftHistory: d.shiftHistory, rangeStart: today, rangeEnd: iso(two), salesFor: schedSalesFor, cutsFor: schedCutsFor, hoursFor: schedHoursFor, lostFor, today });
+    return schedulingContext(sched, schedStoreName, plan) + appointmentsContext(appt, schedStoreName);
   };
   const focusNames = currentFocusNames(d.focusStylists);
 
@@ -13194,7 +13209,7 @@ export default function App() {
             }}
           />
         )}
-        {tab === 'Scheduling' && canSchedule && <SchedulingTab shiftHistory={d.shiftHistory} loadedMonths={shiftMonths} onNeedMonths={months => loadShiftMonths(months, currentUser.token)} loading={shiftLoading} salesFor={schedSalesFor} cutsFor={schedCutsFor} apptHistory={d.apptHistory || null} storeName={schedStoreName} dlFor={u.role === 'owner' ? code => getLeaderForStoreCode(code)?.leaderName || null : null} />}
+        {tab === 'Scheduling' && canSchedule && <SchedulingTab shiftHistory={d.shiftHistory} loadedMonths={shiftMonths} onNeedMonths={months => loadShiftMonths(months, currentUser.token)} loading={shiftLoading} salesFor={schedSalesFor} cutsFor={schedCutsFor} hoursFor={schedHoursFor} apptHistory={d.apptHistory || null} storeName={schedStoreName} dlFor={u.role === 'owner' ? code => getLeaderForStoreCode(code)?.leaderName || null : null} />}
         {tab === 'Team TSTH' && <TeamTsthTab token={currentUser.token} role={u.role} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={viewing ? viewScope.teamTips : d.tipsHistory} payRates={viewing ? viewScope.full.payRates : d.payRates} nameAliases={viewing ? viewScope.full.nameAliases : d.nameAliases} localData={viewing} />}
         {tab === 'My Numbers' && <MyNumbersTab token={currentUser.token} userName={shownUserName} userRole={u.role} presenting={presenting} isOwner={u.role === 'owner'} history={d.history} weeklyHistory={d.weeklyHistory} tipsHistory={d.tipsHistory} payRates={d.payRates} nameAliases={d.nameAliases} payFocusName={payFocusName} onPayPick={setPayFocusName} localSelf={viewSelf} />}
         {tab === 'News' && (
