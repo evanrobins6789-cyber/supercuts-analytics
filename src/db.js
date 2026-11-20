@@ -68,9 +68,26 @@ function readLocal(key) {
 // Generic loader/saver — `key` distinguishes multiple datasets (the weekly
 // stylist report, the employee start-date roster, etc.) sharing one table.
 // Returns { data, source: 'supabase'|'local', error }
+// loadData calls made in the same tick (the startup Promise.all asks for 8)
+// go to the server as one kv-load-many request instead of one each.
+let loadQueue = null;
+function queueLoad(key) {
+  return new Promise(resolve => {
+    if (!loadQueue) {
+      loadQueue = [];
+      setTimeout(async () => {
+        const batch = loadQueue; loadQueue = null;
+        const keys = [...new Set(batch.map(b => b.key))];
+        const r = keys.length === 1 ? await kv({ action: 'kv-load', key: keys[0] }) : await kv({ action: 'kv-load-many', keys });
+        batch.forEach(b => b.resolve(r.ok ? { ok: true, data: keys.length === 1 ? r.data : r.results[keys.indexOf(b.key)] } : r));
+      }, 0);
+    }
+    loadQueue.push({ key, resolve });
+  });
+}
 export async function loadData(key) {
   if (remote()) {
-    const r = await kv({ action: 'kv-load', key });
+    const r = await queueLoad(key);
     if (r.ok) return { data: r.data ?? null, source: 'supabase', error: null };
     return { data: readLocal(key), source: 'local', error: r.error };
   }

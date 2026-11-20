@@ -36,11 +36,13 @@ export default async function handler(req, res) {
       // Paged by size (2026-11-20): a year+ of guest codes would pass
       // Vercel's 4.5 MB response limit in one go. The client follows `next`.
       const PAGE_BYTES = 3 * 1024 * 1024;
+      // 3 rows per query: rows past the page limit are fetched again by the
+      // next call, so a big batch wastes a lot of transfer.
       const after = typeof req.body.after === 'string' ? req.body.after : null;
       const rows = [];
       let bytes = 0, cursor = after, next = null;
       for (;;) {
-        let q = supabase.from('loss_prevention').select('key, payload').order('key').limit(20);
+        let q = supabase.from('loss_prevention').select('key, payload').order('key').limit(3);
         if (cursor) q = q.gt('key', cursor);
         const { data, error } = await q;
         if (error) throw new Error(error.message);
@@ -53,7 +55,7 @@ export default async function handler(req, res) {
           bytes += size;
           cursor = row.key;
         }
-        if (stop || data.length < 20) break;
+        if (stop || data.length < 3) break;
       }
       res.status(200).json({ rows, next });
       return;

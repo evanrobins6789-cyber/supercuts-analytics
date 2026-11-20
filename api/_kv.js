@@ -27,6 +27,10 @@ const KEY_RE = /^[A-Za-z0-9_:.\-|]{1,200}$/;
 const SHARED_WRITE_KEYS = new Set(['homepage_news_reads', 'hsa_signups', 'review_notes', 'review_gold_combs', 'homepage_events', 'homepage_news', 'homepage_news_groups']);
 const SHARED_WRITE_PREFIXES = ['homepage_news_pdf_'];
 const PAGE_BYTES = 3 * 1024 * 1024; // keep each response well under Vercel's 4.5 MB
+// Rows fetched per Supabase query while filling a page. Rows past the page
+// limit are thrown away and fetched again by the next call, so this stays
+// small: with 20, a page of 3 big rows also pulled 17 more for nothing.
+const BATCH = 3;
 
 const canWrite = (employee, key) => employee.role === 'owner' || SHARED_WRITE_KEYS.has(key) || SHARED_WRITE_PREFIXES.some(p => key.startsWith(p));
 
@@ -48,6 +52,23 @@ export async function handleKv(req, res, { isSensitiveKey, sensitivePrefixes }) 
       return;
     }
 
+    // Several single keys in one call (2026-11-20): the startup load asks for
+    // 8 small rows at once; one request instead of 8 saves 7 function calls
+    // and 14 session lookups on every login/refresh.
+    if (action === 'kv-load-many') {
+      const keys = Array.isArray(req.body.keys) ? req.body.keys : null;
+      if (!keys || !keys.length || keys.length > 50 || !keys.every(k => KEY_RE.test(k || ''))) { res.status(400).json({ error: 'Invalid keys.' }); return; }
+      const { data, error } = await table().select('report_id, payload').in('report_id', keys);
+      if (error) throw new Error(error.message);
+      const byKey = new Map((data || []).map(r => [r.report_id, r.payload]));
+      const results = keys.map(k => {
+        const value = byKey.has(k) ? byKey.get(k) : null;
+        return value != null && isSensitiveKey(k) ? filterPayload(k, value, employee) : value;
+      });
+      res.status(200).json({ ok: true, results });
+      return;
+    }
+
     if (action === 'kv-load-prefix') {
       if (!KEY_RE.test(prefix || '') || prefix.length < 4) { res.status(400).json({ error: 'Invalid prefix.' }); return; }
       const touchesSensitive = sensitivePrefixes.some(p => p.startsWith(prefix) || prefix.startsWith(p)) || isSensitiveKey(prefix);
@@ -55,7 +76,7 @@ export async function handleKv(req, res, { isSensitiveKey, sensitivePrefixes }) 
       const rows = [];
       let bytes = 0, cursor = after || null, next = null;
       for (;;) {
-        let q = table().select('report_id, payload').like('report_id', `${prefix}%`).order('report_id').limit(20);
+        let q = table().select('report_id, payload').like('report_id', `${prefix}%`).order('report_id').limit(BATCH);
         if (cursor) q = q.gt('report_id', cursor);
         const { data, error } = await q;
         if (error) throw new Error(error.message);
@@ -68,7 +89,7 @@ export async function handleKv(req, res, { isSensitiveKey, sensitivePrefixes }) 
           bytes += size;
           cursor = row.report_id;
         }
-        if (stop || data.length < 20) break;
+        if (stop || data.length < BATCH) break;
       }
       res.status(200).json({ ok: true, rows, next });
       return;
