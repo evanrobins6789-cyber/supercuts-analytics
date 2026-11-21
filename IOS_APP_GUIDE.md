@@ -4,7 +4,7 @@ The iPhone app is a native shell (Capacitor, in `ios/`) that opens
 https://supercuts-analytics.vercel.app. Website changes show up in the app
 right away. You only rebuild the app for native changes (name, icon, plugins).
 
-- App name: **Robin Dashboard** (`capacitor.config.json` → `appName`, and `CFBundleDisplayName` in `ios/App/App/Info.plist`)
+- App name: **Supercuts Dashboard** (`capacitor.config.json` → `appName`, and `CFBundleDisplayName` in `ios/App/App/Info.plist`)
 - Bundle ID: **com.robinsdashboard.app** (can't be changed after the first upload to Apple)
 - Push notifications: `src/push.js` (phone side + Setup → iPhone App), `api/_push.js` (sends via Apple)
 

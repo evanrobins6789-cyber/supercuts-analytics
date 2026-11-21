@@ -1,6 +1,6 @@
 {
   "appId": "com.robinsdashboard.app",
-  "appName": "Robin Dashboard",
+  "appName": "Supercuts Dashboard",
   "webDir": "native-shell",
   "server": {
     "url": "https://supercuts-analytics.vercel.app",
