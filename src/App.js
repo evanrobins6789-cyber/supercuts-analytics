@@ -40,6 +40,7 @@ import { parseAppointmentsFile, classifyAppointments, mergeApptMonth, apptMonths
 import { CouponsTab, couponsContext, couponPresets } from './coupons';
 import { CollectiveGoalBars } from './CollectiveGoalBars';
 import { MaintenanceRequestWidget, MaintenanceSetupTab } from './maintenance';
+import { startPush, stopPush, sendPushNotification, PushSetupTab } from './push';
 import { parseManagerListGrid, planManagerPromotions, PLAN_STATUS_LABELS } from './managerList';
 import { collectiveGoal, goalPace, goalHeat, GIFT_CARD_GOAL_PERIODS, giftCardPeriodFor, giftCardPeriodGoal, periodThrough, periodPace } from './goalProgress';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
@@ -9783,6 +9784,7 @@ const SETUP_SECTIONS = [
   { key: 'rewards', label: 'Rewards' },
   { key: 'hsa', label: 'HSA' },
   { key: 'maintenance', label: 'Maintenance' },
+  { key: 'iphone', label: 'iPhone App' },
   { key: 'leases', label: 'Leases' },
   { key: 'presenter', label: 'Presenter Mode, DL & Manager View' },
 ];
@@ -10870,7 +10872,7 @@ function LeaseAdminSetupTab({ leaseCount, onClearAll }) {
   );
 }
 
-function SetupTab({ configured, section, onSection, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps, employeeAccessProps, rewardsProps, hsaProps, leaseAdminProps, presenterProps }) {
+function SetupTab({ pushToken, configured, section, onSection, managersProps, milestoneGoalsProps, homepageAdminProps, historyProps, uploadProps, employeeAccessProps, rewardsProps, hsaProps, leaseAdminProps, presenterProps }) {
   const [unlocked, setUnlocked] = useState(false);
   const [pwInput, setPwInput] = useState('');
   const [pwError, setPwError] = useState(false);
@@ -10930,6 +10932,7 @@ function SetupTab({ configured, section, onSection, managersProps, milestoneGoal
       {section === 'rewards' && <RewardsSetupTab {...rewardsProps} />}
       {section === 'hsa' && <HsaSetupTab {...hsaProps} />}
       {section === 'maintenance' && <MaintenanceSetupTab />}
+      {section === 'iphone' && <PushSetupTab token={pushToken} />}
       {section === 'leases' && <LeaseAdminSetupTab {...leaseAdminProps} />}
       {section === 'presenter' && <PresenterSetupTab {...presenterProps} />}
 
@@ -11241,6 +11244,10 @@ export default function App() {
   // weekly_report table is locked to the server). Set during render so it's
   // in place before any effect below loads data.
   setDbToken(currentUser?.token || null);
+  // iPhone app only (src/push.js): ask for notification permission and
+  // register this phone for the logged-in person. No-op in a browser.
+  const pushLoginToken = currentUser?.token || null;
+  useEffect(() => { if (pushLoginToken) startPush(pushLoginToken); }, [pushLoginToken]);
   // Presenter mode (owner-only, this browser only) — see presenter.js.
   // initPresenterMode also arms the module-level write block in db.js/auth.js.
   const [presenting, setPresenting] = useState(() => initPresenterMode(getSession()));
@@ -11663,7 +11670,7 @@ export default function App() {
   // only reacts when currentUser itself actually changes.
   const handleLogout = useCallback(() => {
     setCurrentUser(current => {
-      if (current) logOut(current.token);
+      if (current) { stopPush(current.token); logOut(current.token); }
       return null;
     });
     clearSession();
@@ -12152,10 +12159,16 @@ export default function App() {
       const next = [item, ...prev];
       saveNews(next).then(result => {
         if (isConfigured() && !result.ok) showToast(`Update saved locally, but couldn't sync to Supabase (${result.error})`, 'error');
+        // iPhone app: tell everyone with the app about the new post (src/push.js).
+        // Only the owner can post; skipped in presenter mode / View as.
+        else if (pushLoginToken && !isPresenting()) {
+          const snippet = String(fields.body || '').replace(/s+/g, ' ').trim();
+          sendPushNotification(pushLoginToken, { title: fields.title ? `News: ${fields.title}` : 'New News post', body: snippet.length > 140 ? snippet.slice(0, 137) + '…' : snippet, audience: { all: true } });
+        }
       });
       return next;
     });
-  }, [ensureNewsGroup]);
+  }, [ensureNewsGroup, pushLoginToken]);
 
   const handleUpdateNews = useCallback((id, fields) => {
     ensureNewsGroup(fields.group);
@@ -13419,6 +13432,7 @@ export default function App() {
         )}
         {tab === 'Setup' && (
           <SetupTab
+            pushToken={currentUser.token}
             configured={isConfigured()} section={setupSection} onSection={setSetupSection}
             managersProps={{ report: d.report, managers: d.managers, onSaveManager: handleSaveManager, onImportManagers: handleImportManagers }}
             milestoneGoalsProps={{ report: d.report, milestoneGoals: d.milestoneGoals, onSaveMilestoneGoal: handleSaveMilestoneGoal, onImportMilestoneGoals: handleImportMilestoneGoals }}

@@ -1,0 +1,17 @@
+{
+  "appId": "com.robinsdashboard.app",
+  "appName": "Robin Dashboard",
+  "webDir": "native-shell",
+  "server": {
+    "url": "https://supercuts-analytics.vercel.app",
+    "errorPath": "index.html"
+  },
+  "ios": {
+    "contentInset": "automatic"
+  },
+  "plugins": {
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"]
+    }
+  }
+}

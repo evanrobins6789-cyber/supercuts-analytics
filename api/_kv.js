@@ -32,7 +32,11 @@ const PAGE_BYTES = 3 * 1024 * 1024; // keep each response well under Vercel's 4.
 // small: with 20, a page of 3 big rows also pulled 17 more for nothing.
 const BATCH = 3;
 
-const canWrite = (employee, key) => employee.role === 'owner' || SHARED_WRITE_KEYS.has(key) || SHARED_WRITE_PREFIXES.some(p => key.startsWith(p));
+// iPhone push device rows (api/_push.js): owner-only to read, never written here.
+const OWNER_ONLY_PREFIXES = ['push_device_'];
+const ownerOnly = (employee, key) => employee.role !== 'owner' && OWNER_ONLY_PREFIXES.some(p => String(key).startsWith(p));
+
+const canWrite = (employee, key) => !OWNER_ONLY_PREFIXES.some(p => String(key).startsWith(p)) && (employee.role === 'owner' || SHARED_WRITE_KEYS.has(key) || SHARED_WRITE_PREFIXES.some(p => key.startsWith(p)));
 
 export async function handleKv(req, res, { isSensitiveKey, sensitivePrefixes }) {
   const supabase = createServiceClient();
@@ -47,7 +51,7 @@ export async function handleKv(req, res, { isSensitiveKey, sensitivePrefixes }) 
       if (!KEY_RE.test(key || '')) { res.status(400).json({ error: 'Invalid key.' }); return; }
       const { data, error } = await table().select('payload').eq('report_id', key).maybeSingle();
       if (error) throw new Error(error.message);
-      const value = data ? data.payload : null;
+      const value = data && !ownerOnly(employee, key) ? data.payload : null;
       res.status(200).json({ ok: true, data: value != null && isSensitiveKey(key) ? filterPayload(key, value, employee) : value });
       return;
     }
@@ -62,7 +66,7 @@ export async function handleKv(req, res, { isSensitiveKey, sensitivePrefixes }) 
       if (error) throw new Error(error.message);
       const byKey = new Map((data || []).map(r => [r.report_id, r.payload]));
       const results = keys.map(k => {
-        const value = byKey.has(k) ? byKey.get(k) : null;
+        const value = byKey.has(k) && !ownerOnly(employee, k) ? byKey.get(k) : null;
         return value != null && isSensitiveKey(k) ? filterPayload(k, value, employee) : value;
       });
       res.status(200).json({ ok: true, results });
@@ -72,7 +76,8 @@ export async function handleKv(req, res, { isSensitiveKey, sensitivePrefixes }) 
     if (action === 'kv-load-prefix') {
       if (!KEY_RE.test(prefix || '') || prefix.length < 4) { res.status(400).json({ error: 'Invalid prefix.' }); return; }
       const touchesSensitive = sensitivePrefixes.some(p => p.startsWith(prefix) || prefix.startsWith(p)) || isSensitiveKey(prefix);
-      if (touchesSensitive && employee.role !== 'owner') { res.status(403).json({ error: 'Not allowed.' }); return; }
+      const touchesOwnerOnly = OWNER_ONLY_PREFIXES.some(p => p.startsWith(prefix) || prefix.startsWith(p));
+      if ((touchesSensitive || touchesOwnerOnly) && employee.role !== 'owner') { res.status(403).json({ error: 'Not allowed.' }); return; }
       const rows = [];
       let bytes = 0, cursor = after || null, next = null;
       for (;;) {
