@@ -30,7 +30,11 @@ https://appstoreconnect.apple.com → Apps → + → New App: platform iOS, name
 2. App Store Connect → Users and Access → Integrations → **App Store Connect API** → + → name "Codemagic", access **App Manager** → download the `.p8` key, note the Issuer ID and Key ID.
 3. Codemagic → Team settings → Integrations → **Developer Portal** → Connect → name it exactly **App Store Key**, paste Issuer ID, Key ID, upload that `.p8`.
 4. Codemagic → Add application → the repo → it finds `codemagic.yaml`.
-5. **Start new build** → workflow "iPhone app -> App Store Connect". About 15–20 min. Codemagic creates the signing certificate and profile, builds, and uploads to App Store Connect.
+5. **Signing files (once)**: the `ios_signing` block only uses certificates/profiles already saved in Codemagic; it does not create them (first build failed with "No matching profiles found", 2026-11-23).
+   - Codemagic → Settings → codemagic.yaml settings → Code signing identities → **iOS certificates** → Generate certificate (key "App Store Key", type Apple Distribution). Save the .p12 and password it shows.
+   - developer.apple.com → Profiles → + → **App Store Connect** (Distribution) → App ID `com.robinsdashboard.app` → that certificate → name it → Generate.
+   - Back in Codemagic → **iOS provisioning profiles** → Fetch profiles → select it → Download selected.
+6. **Start new build** → workflow "iPhone app -> App Store Connect". About 15–20 min. Builds, signs and uploads to App Store Connect.
 
 ## 5. Listing + review
 In App Store Connect, on the app's version page:
