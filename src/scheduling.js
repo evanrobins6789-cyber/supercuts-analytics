@@ -1016,7 +1016,9 @@ const GUEST_SCALE = ['#FFFFFF', '#DCE6F2', '#A9C4E6', '#6E9FD6', '#1F5FBF'];
 const LOST_SCALE = ['#FFFFFF', '#FBE0DC', '#F4A99F', '#E46A5C', '#B8281C'];
 const scaleColor = (scale, v, max) => (!v || !max ? scale[0] : scale[Math.min(4, 1 + Math.floor((v / max) * 3.999))]);
 
-function HourHeat({ st, appt, mode }) {
+// dots="lost": the staff map with lost guests (cancelled / no-show / walkout)
+// as the dots, even when the export has visits (user, 2026-11-23).
+function HourHeat({ st, appt, mode, dots = null }) {
   const rows = WEEK_ORDER.map(i => st.weekdays[i]);
   const hasVisits = appt.V > 0;
   const opens = rows.filter(w => w.n && w.open != null);
@@ -1032,7 +1034,8 @@ function HourHeat({ st, appt, mode }) {
   for (let h = lo; h < hi; h++) hours.push(h);
   // Staff on, averaged over the hour; null outside that weekday's usual hours.
   const staffHour = (w, h) => (w.n && w.open != null && h * 4 + 4 > w.open && h * 4 < w.close ? (w.avg[h * 4] + w.avg[h * 4 + 1] + w.avg[h * 4 + 2] + w.avg[h * 4 + 3]) / 4 : null);
-  const gKey = hasVisits ? 'V' : 'L';
+  const guestDots = hasVisits && dots !== 'lost';
+  const gKey = guestDots ? 'V' : 'L';
   const maxOf = k => Math.max(0, ...appt.heat[k].flat());
   const maxV = maxOf('V'), maxL = maxOf('L'), maxG = maxOf(gKey);
   return (
@@ -1057,8 +1060,8 @@ function HourHeat({ st, appt, mode }) {
                 // Big enough to hold the count; bigger = more.
                 const size = maxG ? Math.round(15 + (g / maxG) * 11) : 0;
                 return (
-                  <td key={h} style={{ background: s == null ? 'transparent' : heatColor(s) }} title={`${WEEKDAYS_LONG[w.wd]} ${hourShort(h)}: ${s == null ? 'closed' : `${s.toFixed(1)} on`}, ${gN != null ? `${gN} ${hasVisits ? 'guests' : 'lost guests'} in all, ` : ''}${g.toFixed(hasVisits ? 1 : 2)} a day`}>
-                    {g > 0 && <i className={`sched-dot ${hasVisits ? 'sched-dot-guest' : 'sched-dot-lost'}`} style={{ width: size, height: size }}>{gN != null ? gN : ''}</i>}
+                  <td key={h} style={{ background: s == null ? 'transparent' : heatColor(s) }} title={`${WEEKDAYS_LONG[w.wd]} ${hourShort(h)}: ${s == null ? 'closed' : `${s.toFixed(1)} on`}, ${gN != null ? `${gN} ${guestDots ? 'guests' : 'lost guests'} in all, ` : ''}${g.toFixed(guestDots ? 1 : 2)} a day`}>
+                    {g > 0 && <i className={`sched-dot ${guestDots ? 'sched-dot-guest' : 'sched-dot-lost'}`} style={{ width: size, height: size }}>{gN != null ? gN : ''}</i>}
                   </td>
                 );
               })}
@@ -1069,7 +1072,7 @@ function HourHeat({ st, appt, mode }) {
       <div className="sched-legend">
         {mode === 'both' ? <>
           <span><i style={{ background: HEAT.zero }} />Nobody</span><span><i style={{ background: HEAT.solo }} />1 alone</span><span><i style={{ background: HEAT.two }} />2</span><span><i style={{ background: HEAT.three }} />3</span><span><i style={{ background: HEAT.four }} />4+</span>
-          <span><i className={`sched-dot ${hasVisits ? 'sched-dot-guest' : 'sched-dot-lost'}`} style={{ width: 14, height: 14, borderRadius: '50%' }} />= {hasVisits ? 'guests' : 'lost guests'} that hour, all days in range</span>
+          <span><i className={`sched-dot ${guestDots ? 'sched-dot-guest' : 'sched-dot-lost'}`} style={{ width: 14, height: 14, borderRadius: '50%' }} />= {guestDots ? 'guests' : 'lost guests'} that hour, all days in range</span>
         </> : mode === 'guests'
           ? <span className="section-hint">Darker = more guests. Average per day.</span>
           : <span className="section-hint">Number = guests lost in that hour, all days in range. Darker = more.</span>}
@@ -1207,8 +1210,8 @@ function StoreDetail({ st, p, storeName, onBack, appt, apptCompany, viewNote, ta
       )}
 
       {appt && (
-        <Section title="When guests are lost" sub="Cancelled, no-shows and walkouts by hour.">
-          <HourHeat st={st} appt={appt} mode="lost" />
+        <Section title="Staff on vs guests lost" sub="Were guests lost when too few people were on?">
+          <HourHeat st={st} appt={appt} mode="both" dots="lost" />
         </Section>
       )}
       {!appt && <p className="section-hint">Upload Appointments (Setup → Historical Import) to see guests and lost guests here.</p>}
