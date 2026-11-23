@@ -907,7 +907,7 @@ function CoverageHeatmap({ weekdays }) {
         <span><i style={{ background: HEAT.two }} />2</span>
         <span><i style={{ background: HEAT.three }} />3</span>
         <span><i style={{ background: HEAT.four }} />4+</span>
-        <span className="section-hint">Average people clocked in, by 15 minutes. Blank = outside usual hours.</span>
+
       </div>
     </div>
   );
@@ -948,7 +948,7 @@ function DayTimeline({ day }) {
           {zero.map(([a, b], j) => <div key={`z${j}`} className="sched-bar-zero" style={{ left: pos(a), width: width(a, b) }} title={`Nobody clocked in ${runText([a, b])}`} />)}
         </div>
       </div>
-      <p className="section-hint">Light bar = scheduled, dark bar = clocked in. Orange = one person alone, red = nobody on, during the day's scheduled hours.</p>
+      <p className="section-hint">Light = scheduled · dark = clocked in · orange = alone · red = nobody on</p>
     </div>
   );
 }
@@ -1004,7 +1004,7 @@ function PlanTable({ days, target }) {
           ))}
         </tbody>
       </table>
-      <p className="section-hint" style={{ padding: '0 10px' }}>Plan = this weekday's usual serviced hours × last year's cuts that day vs a usual day, ÷ the {pct(target)} busy target. Change compares the plan to what's scheduled (or the usual hours if no schedule is posted yet). Cuts keep 2+ on at all times; "hold" = this weekday loses more guests than average, so no cuts. * = under half the usual hours posted, so the plan compares to the usual hours instead.</p>
+      <p className="section-hint" style={{ padding: '0 10px' }} title={`Plan = this weekday's usual serviced hours × last year's cuts that day vs a usual day, ÷ the ${pct(target)} busy target. Cuts keep 2+ on at all times. * = under half the usual hours posted, so the plan compares to the usual hours instead.`}>− = hours to cut · + = hours to add · hold = this day loses guests, don't cut · * = schedule not finished</p>
     </div>
   );
 }
@@ -1046,7 +1046,11 @@ function HourHeat({ st, appt, mode }) {
               {hours.map(h => {
                 const v = appt.heat.V[w.wd][h], l = appt.heat.L[w.wd][h];
                 if (mode === 'guests') return <td key={h} style={{ background: scaleColor(GUEST_SCALE, v, maxV) }} title={`${WEEKDAYS_LONG[w.wd]} ${hourShort(h)}: ${v.toFixed(1)} guests a day`} />;
-                if (mode === 'lost') return <td key={h} style={{ background: scaleColor(LOST_SCALE, l, maxL) }} title={`${WEEKDAYS_LONG[w.wd]} ${hourShort(h)}: ${l.toFixed(2)} lost guests a day`} />;
+                if (mode === 'lost') {
+                  const lN = appt.heatN ? appt.heatN.L[w.wd][h] : null;
+                  const dark = maxL && l / maxL > 0.5;
+                  return <td key={h} className="sched-num-cell" style={{ background: scaleColor(LOST_SCALE, l, maxL), color: dark ? '#fff' : 'var(--navy)' }} title={`${WEEKDAYS_LONG[w.wd]} ${hourShort(h)}: ${lN != null ? `${lN} lost in all, ` : ''}${l.toFixed(2)} a day`}>{lN ? lN : ''}</td>;
+                }
                 const s = staffHour(w, h);
                 const g = appt.heat[gKey][w.wd][h];
                 const gN = appt.heatN ? appt.heatN[gKey][w.wd][h] : null;
@@ -1065,41 +1069,168 @@ function HourHeat({ st, appt, mode }) {
       <div className="sched-legend">
         {mode === 'both' ? <>
           <span><i style={{ background: HEAT.zero }} />Nobody</span><span><i style={{ background: HEAT.solo }} />1 alone</span><span><i style={{ background: HEAT.two }} />2</span><span><i style={{ background: HEAT.three }} />3</span><span><i style={{ background: HEAT.four }} />4+</span>
-          <span><i className="sched-dot sched-dot-lost" style={{ width: 14, height: 14, borderRadius: '50%' }} />number = {hasVisits ? 'guests' : 'lost guests'} in that hour, all days in range</span>
-        </> : <span className="section-hint">{mode === 'guests' ? 'Darker = more guests checking in that hour.' : 'Darker red = more lost guests that hour.'} Average per day.</span>}
+          <span><i className={`sched-dot ${hasVisits ? 'sched-dot-guest' : 'sched-dot-lost'}`} style={{ width: 14, height: 14, borderRadius: '50%' }} />= {hasVisits ? 'guests' : 'lost guests'} that hour, all days in range</span>
+        </> : mode === 'guests'
+          ? <span className="section-hint">Darker = more guests. Average per day.</span>
+          : <span className="section-hint">Number = guests lost in that hour, all days in range. Darker = more.</span>}
       </div>
     </div>
   );
 }
 
-function StoreDetail({ st, p, storeName, onBack, appt, apptCompany, viewNote, target }) {
+// ─── Coming up: guests booked vs stylists scheduled ─────────────────────────
+// User (2026-11-23): a heat map of guests booked for the days ahead against
+// the stylists on the posted schedule. Rows = each day still to come in the
+// range, columns = hours. Square color = stylists scheduled that hour (same
+// colors as the other maps; receptionists not counted); number = guests
+// booked to start that hour (Appointments rows that aren't cancelled, no-show
+// or deleted: the 'V' rows in appt_history). A red ring = more booked than
+// the stylists on can cut at GUEST_HOURS (20 min) each.
+const MAX_AHEAD_ROWS = 14;
+export function bookedVsStaff({ code, shiftHistory, apptHistory, start, end, today }) {
+  const from = start > today ? start : today;
+  const rows = [];
+  for (let d = from; d <= end && rows.length < MAX_AHEAD_ROWS; d = addDays(d, 1)) {
+    const recs = ((shiftHistory || {})[d] || {})[code] || [];
+    const sched = recs.filter(r => r[1] !== 'R').map(schedInterval).filter(Boolean);
+    const appts = (((apptHistory || {})[d] || {})[code] || []).filter(r => r[1] === 'V' && r[0] != null);
+    if (!sched.length && !appts.length) continue;
+    const counts = countsFrom(sched.map(i => [i]));
+    const staff = new Array(24).fill(null);
+    const open = sched.length ? Math.min(...sched.map(i => i[0])) : null;
+    const close = sched.length ? Math.max(...sched.map(i => i[1])) : null;
+    for (let h = 0; h < 24; h++) {
+      if (open == null || h * 4 + 4 <= open || h * 4 >= close) continue;
+      staff[h] = (counts[h * 4] + counts[h * 4 + 1] + counts[h * 4 + 2] + counts[h * 4 + 3]) / 4;
+    }
+    const booked = new Array(24).fill(0);
+    appts.forEach(r => { booked[Math.min(23, Math.floor(r[0] / 60))]++; });
+    rows.push({ date: d, staff, booked, total: appts.length, sched: sched.length });
+  }
+  return rows;
+}
+
+// Tilly: guests booked ahead vs stylists scheduled (same numbers as the map).
+export function bookedContext({ shiftHistory, apptHistory, start, end, today, storeName }) {
+  const codes = new Set();
+  for (let d = start > today ? start : today; d <= end; d = addDays(d, 1)) {
+    Object.keys((shiftHistory || {})[d] || {}).forEach(c => codes.add(c));
+    Object.keys((apptHistory || {})[d] || {}).forEach(c => codes.add(c));
+  }
+  const lines = [];
+  [...codes].sort().forEach(code => {
+    const rows = bookedVsStaff({ code, shiftHistory, apptHistory, start, end, today });
+    const total = rows.reduce((t, r) => t + r.total, 0);
+    if (!total) return;
+    const over = [];
+    rows.forEach(r => r.booked.forEach((b, h) => { if (b > 0 && (r.staff[h] || 0) / GUEST_HOURS < b) over.push(`${shortDate(r.date)} ${hourShort(h)} (${b} booked, ${(r.staff[h] || 0).toFixed(1)} scheduled)`); }));
+    lines.push(`- ${storeName(code)}: ${total} guests booked ahead${over.length ? `; more booked than the scheduled stylists can cut at ${over.slice(0, 6).join(', ')}${over.length > 6 ? ` and ${over.length - 6} more hours` : ''}` : ''}`);
+  });
+  if (!lines.length) return '';
+  return `\nBOOKED AHEAD vs STYLISTS SCHEDULED (${start > today ? start : today} to ${end}; Appointments bookings that aren't cancelled/no-show/deleted vs the posted schedule, receptionists not counted; a stylist can cut about 3 guests an hour):\n${lines.join('\n')}`;
+}
+
+function BookedHeat({ rows }) {
+  const hrs = [];
+  rows.forEach(r => r.staff.forEach((v, h) => { if (v != null || r.booked[h]) hrs.push(h); }));
+  if (!hrs.length) return null;
+  const hours = [];
+  for (let h = Math.min(...hrs); h <= Math.max(...hrs); h++) hours.push(h);
+  return (
+    <div className="sched-heat-wrap">
+      <table className="sched-heat sched-heat-hour">
+        <thead><tr><th />{hours.map(h => <th key={h}>{hourShort(h)}</th>)}</tr></thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.date}>
+              <th>{shortDate(r.date)}</th>
+              {hours.map(h => {
+                const st = r.staff[h];
+                const b = r.booked[h];
+                const over = b > 0 && (st || 0) / GUEST_HOURS < b;
+                return (
+                  <td key={h} className={`sched-num-cell${over ? ' sched-over' : ''}`} style={{ background: st == null ? 'transparent' : heatColor(st) }}
+                    title={`${shortDate(r.date)} ${hourShort(h)}: ${st == null ? 'nobody scheduled' : `${st.toFixed(1)} scheduled`}, ${b} booked${over ? ' (more than they can cut)' : ''}`}>
+                    {b > 0 && <i className="sched-dot sched-dot-guest" style={{ width: 18, height: 18 }}>{b}</i>}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="sched-legend">
+        <span><i style={{ background: HEAT.zero }} />Nobody</span><span><i style={{ background: HEAT.solo }} />1</span><span><i style={{ background: HEAT.two }} />2</span><span><i style={{ background: HEAT.three }} />3</span><span><i style={{ background: HEAT.four }} />4+</span>
+        <span><i className="sched-dot sched-dot-guest" style={{ width: 14, height: 14, borderRadius: '50%' }} />= guests booked</span>
+        <span><i className="sched-legend-over" />more booked than they can cut</span>
+      </div>
+    </div>
+  );
+}
+
+// A titled block on the store page: what it is, in one short line.
+const Section = ({ title, sub, children }) => (
+  <section className="sched-sec">
+    <h4 className="sched-sec-title">{title}</h4>
+    {sub && <p className="sched-sec-sub">{sub}</p>}
+    {children}
+  </section>
+);
+
+function StoreDetail({ st, p, storeName, onBack, appt, apptCompany, viewNote, target, ahead }) {
   const [dayIdx, setDayIdx] = useState(st.days.length - 1);
   const day = st.days.length ? st.days[Math.max(0, Math.min(dayIdx, st.days.length - 1))] : null;
+  const aheadBooked = (ahead || []).reduce((t, r) => t + r.total, 0);
   return (
     <div className="sched-store">
       <button className="link-btn" onClick={onBack}>← All stores</button>
       <h3 className="chart-title">{storeName(st.code)}</h3>
-      {p && <TipPair p={p} />}
+
+      {p && <Section title="What to do"><TipPair p={p} /></Section>}
+
       <div className="sched-cards">
-        <div className="sched-card"><span>Busy %</span><strong>{pct(st.busy)}</strong><em>target {pct(st.target)}</em></div>
+        <div className="sched-card"><span>Busy %</span><strong>{pct(st.busy)}</strong><em>time spent on guests · target {pct(st.target)}</em></div>
         <div className="sched-card"><span>Staff hrs / week</span><strong>{st.hoursPerWeek.toFixed(0)}</strong><em>{st.soloPerWeek.toFixed(1)} hrs alone</em></div>
-        {appt && appt.per100 && <div className="sched-card"><span>Lost guests</span><strong>{appt.per100.all.toFixed(1)}</strong><em>per 100 cuts{apptCompany?.per100 ? ` (company ${apptCompany.per100.all.toFixed(1)})` : ''}</em></div>}
+        {appt && appt.per100 && <div className="sched-card"><span>Lost guests</span><strong>{appt.per100.all.toFixed(1)}</strong><em>per 100 cuts{apptCompany?.per100 ? ` · company ${apptCompany.per100.all.toFixed(1)}` : ''}</em></div>}
       </div>
-      <p className="section-hint">{viewNote}</p>
 
-      <p className="chart-title">Staff on, by 15 minutes</p>
-      <CoverageHeatmap weekdays={WEEK_ORDER.map(i => st.weekdays[i])} />
-      {appt && <>
-        <p className="chart-title">Staff on + {appt.V > 0 ? 'guests' : 'lost guests'}, by hour</p>
-        <HourHeat st={st} appt={appt} mode="both" />
-        {appt.V > 0 && <><p className="chart-title">Guests checking in, by hour</p><HourHeat st={st} appt={appt} mode="guests" /></>}
-      </>}
+      <Section title="Coming up: booked vs stylists" sub="Is the schedule ready for who's booked?">
+        {ahead && ahead.length > 0 && <BookedHeat rows={ahead} />}
+        {ahead && ahead.length > 0 && aheadBooked === 0 && <p className="section-hint">No future bookings on file yet. Upload an Appointments export that runs into the coming days, with every status.</p>}
+        {(!ahead || !ahead.length) && <p className="section-hint">No schedule or bookings on file for the days ahead in this range.</p>}
+      </Section>
 
-      {p && p.days.length > 0 && <><p className="chart-title">Day by day, still to come</p><PlanTable days={p.days} target={target} /></>}
+      {appt && appt.V > 0 && (
+        <Section title="When guests come in" sub="Average guests checking in each hour.">
+          <HourHeat st={st} appt={appt} mode="guests" />
+        </Section>
+      )}
+
+      {appt && (
+        <Section title="When guests are lost" sub="Cancelled, no-shows and walkouts by hour.">
+          <HourHeat st={st} appt={appt} mode="lost" />
+        </Section>
+      )}
+      {!appt && <p className="section-hint">Upload Appointments (Setup → Historical Import) to see guests and lost guests here.</p>}
+
+      {appt && appt.V > 0 && (
+        <Section title="Staff vs guests" sub="Enough people on when guests come in?">
+          <HourHeat st={st} appt={appt} mode="both" />
+        </Section>
+      )}
+
+      <Section title="Who's on the floor" sub="Average people clocked in, every 15 minutes.">
+        <CoverageHeatmap weekdays={WEEK_ORDER.map(i => st.weekdays[i])} />
+      </Section>
+
+      {p && p.days.length > 0 && (
+        <Section title="Day-by-day plan" sub="Hours each day ahead needs vs what's scheduled.">
+          <PlanTable days={p.days} target={target} />
+        </Section>
+      )}
 
       {day && (
-        <>
-          <p className="chart-title">One worked day up close</p>
+        <Section title="One day up close" sub="Scheduled vs clocked in, person by person.">
           <div className="sched-day-pick">
             <select value={dayIdx} onChange={e => setDayIdx(Number(e.target.value))}>
               {st.days.map((dd, i) => <option key={dd.date} value={i}>{WEEKDAYS[dd.wd]} {dd.date}</option>)}
@@ -1107,8 +1238,10 @@ function StoreDetail({ st, p, storeName, onBack, appt, apptCompany, viewNote, ta
             <span className="section-hint">{day.actual.toFixed(1)} hrs clocked, {day.serviced.toFixed(1)} serviced, {money(day.sales)} sales</span>
           </div>
           <DayTimeline day={day} />
-        </>
+        </Section>
       )}
+
+      <p className="section-hint">{viewNote}</p>
     </div>
   );
 }
@@ -1324,7 +1457,8 @@ export function SchedulingTab({ shiftHistory, loadedMonths, onNeedMonths, salesF
       <div className="tab-content">
         {controls}
         <StoreDetail st={result.stores[open]} p={plan.stores[open]} storeName={storeName} onBack={() => setOpen(null)} target={plan.target}
-          appt={appt?.stores[open] || null} apptCompany={appt?.company || null} viewNote={viewNote} />
+          appt={appt?.stores[open] || null} apptCompany={appt?.company || null} viewNote={viewNote}
+          ahead={bookedVsStaff({ code: open, shiftHistory, apptHistory, start, end, today })} />
       </div>
     );
   }
@@ -1341,24 +1475,25 @@ export function SchedulingTab({ shiftHistory, loadedMonths, onNeedMonths, salesF
   return (
     <div className="tab-content">
       <h2 className="chart-title">Scheduling</h2>
+      <p className="sched-sec-sub">Where to cut hours to protect TSTH, and where to add hours to grow sales.</p>
       {controls}
       <div className="sched-controls">
         <input type="search" placeholder="Search stores" value={search} onChange={e => setSearch(e.target.value)} />
         {showLost && <button className="btn-secondary sched-report-btn" onClick={() => setReport(true)}>📄 PDF report</button>}
       </div>
-      <p className="section-hint">{fmtLong(start)} – {fmtLong(end)}. Latest clock-ins {fmtLong(latest)}{plan.future.length ? `; days after that are planned from each store's usual week and last year's cuts on the same day` : ''}. Cuts never leave anyone working alone.</p>
+      <p className="section-hint" title={plan.future.length ? "Days after the latest clock-ins are planned from each store's usual week and last year's cuts on the same day. Cuts never leave anyone working alone." : 'Cuts never leave anyone working alone.'}>{fmtLong(start)} – {fmtLong(end)} · clock-ins through {fmtLong(latest)}</p>
 
       <div className="sched-cards">
-        <div className="sched-card"><span>Busy %</span><strong>{pct(allA ? allS / allA : null)}</strong><em>target {target ? `${target}%` : pct(plan.target)}</em></div>
+        <div className="sched-card"><span>Busy %</span><strong>{pct(allA ? allS / allA : null)}</strong><em>time spent on guests · target {target ? `${target}%` : pct(plan.target)}</em></div>
         <div className="sched-card"><span>Staff hrs / week</span><strong>{Math.round(tot('hoursPerWeek')).toLocaleString()}</strong><em>{list.length} stores</em></div>
-        <div className="sched-card"><span>Hours to save</span><strong>{saveTot.toFixed(0)}</strong><em>in this range, nobody left alone</em></div>
-        <div className="sched-card"><span>Hours to add</span><strong>{growTot.toFixed(0)}</strong><em>on the busy days</em></div>
+        <div className="sched-card"><span>Hours to cut</span><strong>{saveTot.toFixed(0)}</strong><em>nobody left alone</em></div>
+        <div className="sched-card"><span>Hours to add</span><strong>{growTot.toFixed(0)}</strong><em>on busy days</em></div>
         {showLost && appt.company.per100 && <div className="sched-card"><span>Lost guests</span><strong>{appt.company.per100.all.toFixed(1)}</strong><em>per 100 cuts</em></div>}
       </div>
 
       <div className="sched-table-wrap">
         <table className="ledger-table">
-          <thead><tr><th className="ledger-name-col">Store</th>{dlFor && <th>DL</th>}<th>Busy %</th><th>Hrs / wk</th>{showLost && <th>Lost / 100 cuts</th>}<th className="sched-tip-cell">✂️ Protect TSTH: hours to cut</th><th className="sched-tip-cell">📈 Grow sales: hours to add</th></tr></thead>
+          <thead><tr><th className="ledger-name-col">Store</th>{dlFor && <th className="sched-col-opt">DL</th>}<th>Busy %</th><th className="sched-col-opt">Hrs / wk</th>{showLost && <th>Lost / 100 cuts</th>}<th className="sched-tip-cell">✂️ Cut hours</th><th className="sched-tip-cell">📈 Add hours</th></tr></thead>
           <tbody>
             {sorted.map(st => {
               const a = appt?.stores[st.code];
@@ -1366,9 +1501,9 @@ export function SchedulingTab({ shiftHistory, loadedMonths, onNeedMonths, salesF
               return (
                 <tr key={st.code} className="sched-click" onClick={() => setOpen(st.code)}>
                   <td className="ledger-name-col"><span className="sched-storelink">{storeName(st.code)}</span></td>
-                  {dlFor && <td>{dlFor(st.code) || '—'}</td>}
+                  {dlFor && <td className="sched-col-opt">{dlFor(st.code) || '—'}</td>}
                   <td className={st.busy == null ? '' : st.busy < st.target - 0.05 ? 'sched-cool' : st.busy > st.target + BUSY_GAP_PTS ? 'sched-hot' : ''}>{pct(st.busy)}</td>
-                  <td>{st.hoursPerWeek.toFixed(0)}</td>
+                  <td className="sched-col-opt">{st.hoursPerWeek.toFixed(0)}</td>
                   {showLost && <td className={a?.per100 && appt.company.per100 && a.per100.all >= appt.company.per100.all * 1.25 ? 'sched-warn' : ''}>{a?.per100 ? a.per100.all.toFixed(1) : '—'}</td>}
                   {p ? <TipCell t={p.save} /> : <td className="sched-tip-cell">—</td>}
                   {p ? <TipCell t={p.grow} /> : <td className="sched-tip-cell">—</td>}
@@ -1378,7 +1513,7 @@ export function SchedulingTab({ shiftHistory, loadedMonths, onNeedMonths, salesF
           </tbody>
         </table>
       </div>
-      <p className="section-hint">Tap a store for its two tips in full, the heat maps and each day still to come. Blue busy % = under target, orange = well over.</p>
+      <p className="section-hint">Tap a store for its heat maps and day-by-day plan. Busy %: blue = under target, orange = well over.</p>
     </div>
   );
 }

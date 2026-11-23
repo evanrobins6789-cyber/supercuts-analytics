@@ -2017,6 +2017,9 @@ body { -webkit-tap-highlight-color: rgba(20,42,74,0.12); }
   .date-range-input { width: 100%; min-width: 0; min-height: 40px; padding: 6px 8px; }
   .date-range-bar > button, .date-range-bar > .date-range-quick-btn, .date-range-clear { grid-column: 1 / -1; min-height: 40px; }
   .date-range-bar > .date-range-to { text-align: center; }
+  /* Current Week | Current Month side by side. */
+  .date-range-bar > .date-range-quick-btn { grid-column: 1; }
+  .date-range-bar > .date-range-quick-btn + .date-range-quick-btn { grid-column: 2 / -1; }
   .date-range-bar > .date-range-note { grid-column: 1 / -1; }
 
   /* Equal-width tiles (long numbers were stretching one column). */
@@ -2062,3 +2065,18 @@ body { -webkit-tap-highlight-color: rgba(20,42,74,0.12); }
 }
 /* Shear Check's sticky score bar holds Save buttons at the bottom-right. */
 .app:has(.sc-footer) .back-to-top { display: none; }
+
+/* Scheduling store page: titled sections, one short line each (2026-11-23). */
+.sched-sec { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.sched-sec-title { margin: 0; font-family: 'Barlow Condensed', sans-serif; font-size: 18px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; color: var(--navy); }
+.sched-sec-sub { margin: -2px 0 2px; font-size: 13px; color: var(--ink-soft); }
+.sched-num-cell { font-size: 10.5px; font-weight: 700; }
+/* Booked vs stylists: more booked than the stylists on can cut. */
+.sched-heat td.sched-over { box-shadow: inset 0 0 0 2px var(--red); }
+.sched-legend-over { background: transparent !important; box-shadow: inset 0 0 0 2px var(--red); }
+@media (max-width: 640px) {
+  .sched-col-opt { display: none; }
+  .sched-sec-title { font-size: 17px; }
+}
+.sched-store > h3.chart-title { font-family: 'Barlow Condensed', sans-serif; font-size: 26px; font-weight: 700; margin: 4px 0 0; }
+.tab-content > h2.chart-title { font-family: 'Barlow Condensed', sans-serif; font-size: 24px; font-weight: 700; margin: 0; }

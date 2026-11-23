@@ -35,7 +35,7 @@ import { buildPayBreakdown, buildCoaching } from './payCoach';
 import { buildReputation, reputationContext } from './reputation';
 import { TabMenu } from './TabMenu';
 import { FocusStoresTab, focusStoresContext } from './focusStores';
-import { SchedulingTab, parseShiftFile, mergeShiftMonth, analyzeSchedules, schedulingContext, lastWorkedDate, planSchedules } from './scheduling';
+import { SchedulingTab, parseShiftFile, mergeShiftMonth, analyzeSchedules, schedulingContext, lastWorkedDate, planSchedules, bookedContext } from './scheduling';
 import { parseAppointmentsFile, classifyAppointments, mergeApptMonth, apptMonths, analyzeAppointments, appointmentsContext, lostForSchedules } from './appointments';
 import { CouponsTab, couponsContext, couponPresets } from './coupons';
 import { CollectiveGoalBars } from './CollectiveGoalBars';
@@ -599,6 +599,24 @@ function getCurrentMonthRange() {
   return { start, end };
 }
 
+// This Mon–Sun week (the Weekly tab's weeks) through the latest day with
+// data, like getCurrentMonthRange.
+function getCurrentWeekRange() {
+  const now = new Date();
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
+  let start = localISO(monday);
+  const today = localISO(now);
+  let end = latestDataISO && latestDataISO < today ? latestDataISO : today;
+  // Nothing uploaded yet this week (a Monday before the first upload): show
+  // the latest week that has data instead of an empty day.
+  if (end < start) {
+    const d = new Date(`${end}T12:00:00`);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    start = localISO(d);
+  }
+  return { start, end };
+}
+
 // Company-level CPD = average per store per day (total cuts ÷ total
 // store-days), so it reads on the same scale as a single store's CPD.
 function companyCpd(byStore, codes) {
@@ -670,12 +688,14 @@ function getEmployeesByStoreFromHistory(history, weeklyHistory) {
 
 function DateRangeBar({ start, end, onChange }) {
   const applyCurrentMonth = () => { const r = getCurrentMonthRange(); onChange(r.start, r.end); };
+  const applyCurrentWeek = () => { const r = getCurrentWeekRange(); onChange(r.start, r.end); };
   return (
     <div className="date-range-bar">
       <span className="date-range-label">Date range:</span>
       <input type="date" className="date-range-input" value={start || ''} onChange={e => onChange(e.target.value || null, end)} />
       <span className="date-range-to">to</span>
       <input type="date" className="date-range-input" value={end || ''} onChange={e => onChange(start, e.target.value || null)} />
+      <button className="date-range-quick-btn" onClick={applyCurrentWeek}>Current Week</button>
       <button className="date-range-quick-btn" onClick={applyCurrentMonth}>Current Month</button>
       {(start || end) && (
         <button className="btn-ghost date-range-clear" onClick={() => onChange(null, null)}>Clear — use current report</button>
@@ -7732,12 +7752,14 @@ const REVIEW_SORT_OPTIONS = [
 // history those tabs filter against.
 function ReviewDateRangeBar({ start, end, onChange }) {
   const applyCurrentMonth = () => { const r = getCurrentMonthRange(); onChange(r.start, r.end); };
+  const applyCurrentWeek = () => { const r = getCurrentWeekRange(); onChange(r.start, r.end); };
   return (
     <div className="date-range-bar">
       <span className="date-range-label">Date range:</span>
       <input type="date" className="date-range-input" value={start || ''} onChange={e => onChange(e.target.value || null, end)} />
       <span className="date-range-to">to</span>
       <input type="date" className="date-range-input" value={end || ''} onChange={e => onChange(start, e.target.value || null)} />
+      <button className="date-range-quick-btn" onClick={applyCurrentWeek}>Current Week</button>
       <button className="date-range-quick-btn" onClick={applyCurrentMonth}>Current Month</button>
       <button className="btn-ghost date-range-clear" onClick={() => onChange(null, null)}>Show All Reviews</button>
       {(start && end) && <span className="date-range-note">Showing only reviews posted between these dates.</span>}
@@ -13294,7 +13316,8 @@ export default function App() {
     const two = new Date(now); two.setDate(two.getDate() + 13);
     const lostFor = (s, e) => (d.apptHistory ? lostForSchedules(analyzeAppointments({ apptHistory: d.apptHistory, start: s, end: e, cutsFor: schedCutsFor })) : null);
     const plan = planSchedules({ shiftHistory: d.shiftHistory, rangeStart: today, rangeEnd: iso(two), salesFor: schedSalesFor, cutsFor: schedCutsFor, hoursFor: schedHoursFor, lostFor, today });
-    return schedulingContext(sched, schedStoreName, plan) + appointmentsContext(appt, schedStoreName);
+    return schedulingContext(sched, schedStoreName, plan) + appointmentsContext(appt, schedStoreName)
+      + bookedContext({ shiftHistory: d.shiftHistory, apptHistory: d.apptHistory, start: today, end: iso(two), today, storeName: schedStoreName });
   };
   const focusNames = currentFocusNames(d.focusStylists);
   const hundredStarts = hundredDayStarts(d.employeeRoster);
