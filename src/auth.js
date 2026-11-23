@@ -93,6 +93,17 @@ export async function loadScopedByPrefix(prefix, token) {
   return { data: res.data, source: 'supabase', error: null };
 }
 
+// Fast history loading: list the row keys (+ versions) the caller may see,
+// then fetch just the ones needed (api/scoped-data.js `list` / `keys`).
+export async function listScopedKeys(prefix, token) {
+  if (!token) return { ok: false, error: 'Not logged in' };
+  return postJson('/api/scoped-data', { token, prefix, list: true });
+}
+export async function loadScopedKeys(prefix, keys, token) {
+  if (!token) return { ok: false, error: 'Not logged in' };
+  return postJson('/api/scoped-data', { token, prefix, keys });
+}
+
 // Merge-in write for store_goals/store_managers/milestone_goals — `patch` is
 // { [storeCode]: {...fields} } for just the store(s) being changed. The
 // server reads the current full row, merges only these codes into it, and

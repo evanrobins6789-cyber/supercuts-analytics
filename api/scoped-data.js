@@ -8,6 +8,7 @@
 // of this app's data, which the client fetches directly from Supabase with
 // the public anon key. An owner session gets everything, unfiltered.
 
+import crypto from 'crypto';
 import { createServiceClient, requireSession } from '../src/serverAuth.js';
 import { filterPayload, isOwnerOnlyGoalField, FOCUS_ROLES, SALON_CHECK_ROLES } from '../src/scopeFilter.js';
 import { handleFinalizeGoals } from './_finalize-goals.js';
@@ -246,6 +247,50 @@ export default async function handler(req, res) {
     if (prefix) {
       if (!SENSITIVE_PREFIXES.includes(prefix)) {
         res.status(400).json({ error: `"${prefix}" is not available through this endpoint.` });
+        return;
+      }
+      // Fast history loading (2026-11-23): `list` returns just the row keys
+      // (+ updated_at, when the column exists) the caller may see, without
+      // reading any payloads; `keys` then fetches only those rows, in
+      // batches the client chooses. Lets the browser load recent months
+      // first, skip rows it already has cached, and keeps each response far
+      // under Vercel's 4.5 MB limit. Split rows (`<prefix>YYYY-MM__CODE`) of
+      // stores outside a non-owner's scope are skipped before any read.
+      const { list, keys } = req.body || {};
+      if (list || Array.isArray(keys)) {
+        const allowedCodes = new Set(employee.store_codes || []);
+        const inScope = k => {
+          if (!k.startsWith(prefix)) return false;
+          if (employee.role === 'owner') return true;
+          const split = k.indexOf('__');
+          return split === -1 || allowedCodes.has(k.slice(split + 2));
+        };
+        if (list) {
+          let rows = [];
+          let withVersion = true;
+          for (let from = 0; ; from += 1000) {
+            let q = await supabase.from('weekly_report').select(withVersion ? 'report_id, updated_at' : 'report_id').like('report_id', `${prefix}%`).order('report_id').range(from, from + 999);
+            if (q.error && withVersion && from === 0) {
+              // No updated_at column yet (see HANDOFF): list without versions,
+              // so the client simply doesn't cache.
+              withVersion = false;
+              q = await supabase.from('weekly_report').select('report_id').like('report_id', `${prefix}%`).order('report_id').range(from, from + 999);
+            }
+            if (q.error) throw new Error(q.error.message);
+            rows = rows.concat(q.data || []);
+            if (!q.data || q.data.length < 1000) break;
+          }
+          const scope = crypto.createHash('sha256').update([employee.id, employee.role, [...allowedCodes].sort().join(',')].join('|')).digest('hex').slice(0, 16);
+          res.status(200).json({ ok: true, scope, keys: rows.filter(r => inScope(r.report_id)).map(r => ({ k: r.report_id, v: r.updated_at || null })) });
+          return;
+        }
+        const wanted = [...new Set(keys.map(String))].filter(inScope);
+        if (wanted.length > 250) { res.status(400).json({ error: 'Too many keys in one request.' }); return; }
+        if (!wanted.length) { res.status(200).json({ ok: true, data: [] }); return; }
+        let q = await supabase.from('weekly_report').select('report_id, payload, updated_at').in('report_id', wanted);
+        if (q.error) q = await supabase.from('weekly_report').select('report_id, payload').in('report_id', wanted);
+        if (q.error) throw new Error(q.error.message);
+        res.status(200).json({ ok: true, data: (q.data || []).map(row => ({ key: row.report_id, v: row.updated_at || null, payload: filterPayload(row.report_id, row.payload, employee) })) });
         return;
       }
       // Same pagination approach as db.js's loadDataByPrefix — PostgREST

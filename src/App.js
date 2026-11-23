@@ -41,6 +41,7 @@ import { CouponsTab, couponsContext, couponPresets } from './coupons';
 import { CollectiveGoalBars } from './CollectiveGoalBars';
 import { MaintenanceRequestWidget, MaintenanceSetupTab } from './maintenance';
 import { startPush, stopPush, sendPushNotification, PushSetupTab } from './push';
+import { loadHistoryFast, clearHistoryCache } from './historyLoader';
 import { parseManagerListGrid, planManagerPromotions, PLAN_STATUS_LABELS } from './managerList';
 import { collectiveGoal, goalPace, goalHeat, GIFT_CARD_GOAL_PERIODS, giftCardPeriodFor, giftCardPeriodGoal, periodThrough, periodPace } from './goalProgress';
 import supercutsWordmarkWhite from './assets/branding/supercuts-wordmark-white.png';
@@ -1091,25 +1092,64 @@ function withNewsPdfIds(posts) {
   });
 }
 
-// Re-attaches each PDF's data URL from its stored pieces. A PDF still
-// embedded the old way keeps its inline dataUrl until the next save moves it.
-async function loadNewsWithPdfs(posts) {
-  const res = await loadDataByPrefix(NEWS_PDF_PREFIX);
-  const byKey = new Map((res.data || []).map(r => [r.key, r.payload]));
-  const localOnly = new Set(res.localOnlyKeys || []);
-  return withNewsPdfIds(posts).map(post => {
-    if (!Array.isArray(post.pdfs)) return post;
-    return {
-      ...post,
-      pdfs: post.pdfs.map(p => {
-        if (p.dataUrl || !p.chunks) return p;
-        const keys = Array.from({ length: p.chunks }, (_, i) => `${NEWS_PDF_PREFIX}${p.id}_${i}`);
-        if (!keys.every(k => typeof byKey.get(k) === 'string')) return p;
-        if (res.source === 'supabase' && !keys.some(k => localOnly.has(k))) savedNewsPdfIds.add(p.id);
-        return { ...p, dataUrl: keys.map(k => byKey.get(k)).join('') };
-      }),
-    };
-  });
+// PDFs load only when a post is opened (2026-11-23; they used to all download
+// at every login, ~23 MB). Pieces are fetched one request at a time (each is
+// up to 1.5 MB, so batching them could pass Vercel's 4.5 MB response cap) and
+// kept in memory for the rest of the visit.
+const newsPdfCache = new Map(); // pdf id -> data URL
+async function loadNewsPdf(pdf) {
+  if (pdf.dataUrl) return pdf.dataUrl;
+  if (!pdf.id || !pdf.chunks) return null;
+  if (newsPdfCache.has(pdf.id)) return newsPdfCache.get(pdf.id);
+  const parts = [];
+  for (let i = 0; i < pdf.chunks; i++) {
+    const r = await loadData(`${NEWS_PDF_PREFIX}${pdf.id}_${i}`);
+    if (typeof r.data !== 'string') return null;
+    parts.push(r.data);
+  }
+  const url = parts.join('');
+  newsPdfCache.set(pdf.id, url);
+  return url;
+}
+
+// PDF id -> piece count for every PDF in the last loaded/saved post list.
+// When a save drops a PDF (its post or the PDF was deleted), its pieces are
+// deleted too; before 2026-11-23 they were left behind (12.6 MB of orphans
+// were purged by hand that day).
+const knownNewsPdfs = new Map();
+function rememberNewsPdfs(posts) {
+  knownNewsPdfs.clear();
+  (posts || []).forEach(post => getNewsPdfs(post).forEach(p => { if (p.id && p.chunks) knownNewsPdfs.set(p.id, p.chunks); }));
+}
+async function deleteDroppedNewsPdfs(slim) {
+  const kept = new Set(slim.flatMap(post => getNewsPdfs(post).map(p => p.id)));
+  for (const [id, chunks] of [...knownNewsPdfs]) {
+    if (kept.has(id)) continue;
+    for (let i = 0; i < chunks; i++) await clearData(`${NEWS_PDF_PREFIX}${id}_${i}`);
+    savedNewsPdfIds.delete(id);
+    newsPdfCache.delete(id);
+  }
+  rememberNewsPdfs(slim);
+}
+
+function NewsPdfView({ pdf }) {
+  const [url, setUrl] = useState(() => pdf.dataUrl || newsPdfCache.get(pdf.id) || null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (url) return undefined;
+    let off = false;
+    loadNewsPdf(pdf).then(u => { if (off) return; if (u) setUrl(u); else setFailed(true); });
+    return () => { off = true; };
+  }, [pdf, url]);
+  if (url) {
+    return (
+      <>
+        <iframe className="news-post-pdf-frame" src={url} title={pdf.name} />
+        <a className="news-post-pdf-link" href={url} download={pdf.name}>⬇ Download {pdf.name}</a>
+      </>
+    );
+  }
+  return <p className="news-post-text">📄 {failed ? `${pdf.name} couldn’t be loaded — try refreshing the page.` : `Loading ${pdf.name}…`}</p>;
 }
 
 // Drop-in for saveData('homepage_news', posts): uploads any PDF not yet in
@@ -1142,7 +1182,9 @@ async function saveNewsNow(posts) {
     }
     slim.push({ ...post, pdfs });
   }
-  return saveData('homepage_news', slim);
+  const res = await saveData('homepage_news', slim);
+  if (res.ok) await deleteDroppedNewsPdfs(slim);
+  return res;
 }
 
 function newsPdfBadge(post) {
@@ -2798,14 +2840,7 @@ function NewsPostModal({ post, onClose, hasSignedOff, onSignOff }) {
         )}
         {getNewsPdfs(post).map((pdf, i) => (
           <div key={`${pdf.name}-${i}`} className="news-post-pdf">
-            {pdf.dataUrl ? (
-              <>
-                <iframe className="news-post-pdf-frame" src={pdf.dataUrl} title={pdf.name} />
-                <a className="news-post-pdf-link" href={pdf.dataUrl} download={pdf.name}>⬇ Download {pdf.name}</a>
-              </>
-            ) : (
-              <p className="news-post-text">📄 {pdf.name} couldn’t be loaded — try refreshing the page.</p>
-            )}
+            <NewsPdfView pdf={pdf} />
           </div>
         ))}
         {post.requireSignoff && (
@@ -11282,6 +11317,14 @@ export default function App() {
   // fresh data instead of a stale closure, and importChainRef serializes the
   // two handlers so they never merge+save concurrently off the same base.
   const historyRef = useRef(history);
+  // Background loading (see the startup effect): 'idle' | 'loading' (recent
+  // months not in yet) | 'recent' (older months still loading) | 'done' | 'error'.
+  const [historyStatus, setHistoryStatus] = useState('idle');
+  const [reviewsLoaded, setReviewsLoaded] = useState(true);
+  // Resolve to { ok } once history / reviews have fully loaded; imports that
+  // merge into them wait on these first.
+  const historyReadyRef = useRef(Promise.resolve({ ok: true }));
+  const reviewsReadyRef = useRef(Promise.resolve({ ok: true }));
   useEffect(() => { historyRef.current = history; }, [history]);
   const reviewsRef = useRef(reviews);
   useEffect(() => { reviewsRef.current = reviews; }, [reviews]);
@@ -11389,16 +11432,30 @@ export default function App() {
     // start-date list, review notes/gold combs) is lower-stakes and stays
     // on the direct loadData/loadDataByPrefix path, unchanged.
     const token = currentUser.token;
+    let cancelled = false;
+    // Fast startup (2026-11-23): the dashboard shows as soon as the small
+    // items below arrive. Daily history (~34 MB for the owner) and reviews
+    // (~5 MB) load after, in the background (src/historyLoader.js) — recent
+    // months first, months already on this device skipped. Imports that
+    // merge into history/reviews wait on historyReadyRef/reviewsReadyRef so
+    // they can never save a month over rows that haven't loaded yet.
+    let resolveHistory;
+    let resolveReviews;
+    historyReadyRef.current = new Promise(r => { resolveHistory = r; });
+    reviewsReadyRef.current = new Promise(r => { resolveReviews = r; });
+    setHistoryStatus('loading');
+    setReviewsLoaded(false);
+
     Promise.all([
-      loadScoped('stylist_report', token), loadData('employee_start_dates'), loadScoped('store_goals', token), loadScoped('store_managers', token), loadScoped('milestone_goals', token), loadScoped('reviews', token), loadData('review_notes'), loadData('review_gold_combs'),
+      loadScoped('stylist_report', token), loadData('employee_start_dates'), loadScoped('store_goals', token), loadScoped('store_managers', token), loadScoped('milestone_goals', token), loadData('review_notes'), loadData('review_gold_combs'),
       loadData('homepage_news'), loadData('homepage_events'), loadData('homepage_news_groups'), loadData('homepage_news_reads'), loadData('hsa_signups'), loadScoped('store_leases', token),
-      loadScopedByPrefix('daily_history_', token), loadScopedByPrefix('weekly_history_', token),
-      loadScoped('daily_history', token), loadScoped('weekly_history', token), // legacy single-row format, if anything was saved before chunking
+      loadScopedByPrefix('weekly_history_', token), loadScoped('weekly_history', token), // weekly is small; legacy single row, if anything was saved before chunking
       loadScoped('focus_stylists', token),
       loadScoped('salon_checks', token),
       loadScoped('salon_check_questions', token),
       loadScoped('focus_stores', token),
-    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, newsReadsRes, hsaSignupsRes, leasesRes, dailyChunksRes, weeklyChunksRes, legacyDailyRes, legacyWeeklyRes, focusStylistsRes, salonChecksRes, salonQuestionsRes, focusStoresRes]) => {
+    ]).then(([reportRes, rosterRes, goalsRes, managersRes, milestoneGoalsRes, reviewNotesRes, goldCombsRes, newsRes, eventsRes, newsGroupsRes, newsReadsRes, hsaSignupsRes, leasesRes, weeklyChunksRes, legacyWeeklyRes, focusStylistsRes, salonChecksRes, salonQuestionsRes, focusStoresRes]) => {
+      if (cancelled) return;
       if (focusStoresRes.data) setFocusStores(focusStoresRes.data);
       if (focusStylistsRes.data) setFocusStylists(focusStylistsRes.data);
       if (salonChecksRes.data) setSalonChecks(salonChecksRes.data);
@@ -11408,24 +11465,12 @@ export default function App() {
       if (goalsRes.data) setGoals(goalsRes.data);
       if (managersRes.data) setManagers(managersRes.data);
       if (milestoneGoalsRes.data) setMilestoneGoals(milestoneGoalsRes.data);
-      if (reviewsRes.data) setReviews(reviewsRes.data);
       if (reviewNotesRes.data) setReviewNotes(reviewNotesRes.data);
       if (goldCombsRes.data) setGoldCombs(goldCombsRes.data);
       const loadedNews = newsRes.data || [];
-      if (newsRes.data) {
-        setNews(withNewsPdfIds(loadedNews));
-        // PDF pieces load separately so posts show without waiting on them.
-        // Merged in by PDF id (not by replacing the list) so a post made or
-        // edited in the meantime isn't overwritten.
-        loadNewsWithPdfs(loadedNews).then(hydrated => {
-          const urls = new Map(hydrated.flatMap(n => getNewsPdfs(n)).filter(p => p.dataUrl).map(p => [p.id, p.dataUrl]));
-          setNews(prev => prev.map(n => {
-            const pdfs = getNewsPdfs(n);
-            if (!pdfs.some(p => !p.dataUrl && urls.has(p.id))) return n;
-            return { ...n, pdfs: pdfs.map(p => (p.dataUrl || !urls.has(p.id) ? p : { ...p, dataUrl: urls.get(p.id) })) };
-          }));
-        });
-      }
+      // PDFs are no longer downloaded at startup; each one loads when it's
+      // opened (NewsPdfLink / loadNewsPdf).
+      if (newsRes.data) { setNews(withNewsPdfIds(loadedNews)); rememberNewsPdfs(loadedNews); }
       if (newsReadsRes.data) setNewsReads(newsReadsRes.data);
       if (eventsRes.data) setEvents(eventsRes.data);
       if (hsaSignupsRes.data) setHsaSignups(hsaSignupsRes.data);
@@ -11445,128 +11490,88 @@ export default function App() {
       setNewsGroups(reconciledGroups);
       if (missingGroupNames.length) saveData('homepage_news_groups', reconciledGroups);
 
-      // Postgres gives NO ordering guarantee on an unordered SELECT — so
-      // merging chunks in whatever order the array happens to arrive in
-      // meant that if a month ever had BOTH an old single-chunk row and new
-      // per-store split rows at once (possible if a superseded-format
-      // cleanup delete silently failed — clearData/clearDataByPrefix used to
-      // swallow that error entirely), which one won on a given page load was
-      // a coin flip. That's the "data disappears on refresh" bug reported
-      // after the previous round of fixes. Data for a past month only ever
-      // grows (more stores/employees get added, never removed), so instead
-      // of trusting array order, always apply single-chunk rows FIRST as a
-      // base and per-store split rows SECOND — the split format is only
-      // ever written when a month outgrows the single-chunk threshold, so it
-      // is always the newer/more-complete one whenever both exist.
-      const daySplitPriority = key => (key.includes('__') ? 1 : 0);
-      const mergedDaily = {};
-      const dailyChunks = [...(dailyChunksRes.data || [])].sort((a, b) => daySplitPriority(a.key) - daySplitPriority(b.key));
-      // The pre-chunking single-blob format (if it still exists in Supabase
-      // from before this chunked scheme existed) is the OLDEST possible
-      // source — it must never be allowed to override current chunk data,
-      // so it's applied first as a base, not last (last was backwards: a
-      // stale legacy blob would have clobbered every fresh chunk on every
-      // load).
-      if (legacyDailyRes.data) Object.assign(mergedDaily, legacyDailyRes.data);
-      dailyChunks.forEach(chunk => Object.assign(mergedDaily, chunk.payload));
-      setHistory(mergedDaily);
-
-      // Detect leftover contamination (both formats present for the same
-      // month at once) and heal it now that the merge already resolved it
-      // deterministically in memory — clears the superseded single-chunk
-      // row so future loads don't even need the priority sort as a safety
-      // net, and so the console diagnostics below go clean.
-      {
-        const monthsWithSplit = new Set(dailyChunks.filter(c => c.key.includes('__')).map(c => c.key.replace('daily_history_', '').split('__')[0]));
-        const staleSingleKeys = dailyChunks.filter(c => !c.key.includes('__') && monthsWithSplit.has(c.key.replace('daily_history_', ''))).map(c => c.key);
-        if (staleSingleKeys.length) {
-          console.warn(`[history load] found ${staleSingleKeys.length} stale single-chunk row(s) alongside per-store split data (a prior cleanup delete must have failed) — clearing now: ${staleSingleKeys.join(', ')}`);
-          Promise.all(staleSingleKeys.map(k => clearData(k))).then(results => {
-            const failed = results.filter(r => !r.ok);
-            if (failed.length) console.error('[history load] stale-row cleanup failed, will retry on next load:', failed.map(r => r.error));
-            else console.log('[history load] stale-row cleanup succeeded.');
-          });
-        }
-      }
-
-      // Diagnostic only (console, not user-facing) — this data has silently
-      // gone missing on refresh more than once; logging exactly what came
-      // back on load makes the next repro concrete instead of another round
-      // of guessing. Safe to leave in permanently, it's cheap and inert.
-      {
-        const dailyRecords = Object.values(mergedDaily);
-        const withEmployees = dailyRecords.filter(r => r.employees && Object.keys(r.employees).length).length;
-        console.log(`[history load] ${dailyChunks.length} chunk(s) from Supabase: ${dailyChunks.map(c => c.key).join(', ') || 'none'}`);
-        console.log(`[history load] ${dailyRecords.length} store-day record(s) merged, ${withEmployees} with employee-level detail, ${(dailyChunksRes.localOnlyKeys || []).length} local-only chunk(s) pending Supabase sync${(dailyChunksRes.localOnlyKeys || []).length ? `: ${dailyChunksRes.localOnlyKeys.join(', ')}` : ''}.`);
-        // Temporary diagnostic for a "SS shows 0 everywhere" report — pinpoints
-        // whether signatureS is (a) missing from records entirely (old data,
-        // or the field never made it through parsing/save), (b) present but
-        // genuinely zero (no Signature Service items in the uploaded range),
-        // or (c) present and nonzero somewhere, meaning the issue is really
-        // about which date range a tab is querying, not the underlying data.
-        const hasField = dailyRecords.filter(r => r.signatureS != null);
-        const nonZero = dailyRecords.filter(r => (r.signatureS || 0) > 0);
-        console.log(`[history load] signatureS diagnostic: ${hasField.length}/${dailyRecords.length} records have the signatureS field at all, ${nonZero.length} are > 0.`);
-        if (nonZero.length) {
-          const sample = [...nonZero].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
-          console.log('[history load] most recent nonzero signatureS records:', sample.map(r => ({ code: r.code, date: r.date, signatureS: r.signatureS, signatureSCount: r.signatureSCount })));
-        }
-      }
-
       const mergedWeekly = {};
       if (legacyWeeklyRes.data) Object.assign(mergedWeekly, legacyWeeklyRes.data);
       (weeklyChunksRes.data || []).forEach(chunk => Object.assign(mergedWeekly, chunk.payload));
       setWeeklyHistory(mergedWeekly);
 
       setLoading(false);
-      // Non-scoped keys (roster/news/events) still fall back to a local
-      // mirror on a Supabase outage, same as before. The scoped keys
-      // (report/goals/managers/milestones/reviews/history) go through the
-      // server-enforced endpoint instead, which has no local fallback of
-      // its own — an error there just means the data didn't load, so it
-      // gets its own message rather than the "local data only" one.
       if (isConfigured() && (rosterRes.source === 'local' || newsRes.source === 'local' || eventsRes.source === 'local')) {
         const err = rosterRes.error || newsRes.error || eventsRes.error;
         showToast(`Couldn't reach Supabase (${err || 'unknown error'}) — showing this device's local data only`, 'error');
       } else {
-        const scopedError = reportRes.error || goalsRes.error || managersRes.error || milestoneGoalsRes.error || reviewsRes.error || leasesRes.error || dailyChunksRes.error || weeklyChunksRes.error;
+        const scopedError = reportRes.error || goalsRes.error || managersRes.error || milestoneGoalsRes.error || leasesRes.error || weeklyChunksRes.error;
         if (scopedError) showToast(`Couldn't load some data (${scopedError}) — try refreshing the page.`, 'error');
       }
+    }).catch(() => { if (!cancelled) setLoading(false); });
 
-      // Some chunks can exist only in this device's local backup — e.g. a
-      // prior historical-import save that timed out against Supabase (large
-      // payload) but still wrote to localStorage. Re-push those now so the
-      // gap is healed for every device, not just this one.
-      const recoveredDaily = dailyChunksRes.localOnlyKeys || [];
-      const recoveredWeekly = weeklyChunksRes.localOnlyKeys || [];
-      if (isConfigured() && (recoveredDaily.length || recoveredWeekly.length)) {
-        Promise.all([
-          ...recoveredDaily.map(key => {
-            // Key is either `daily_history_YYYY-MM` (whole month) or
-            // `daily_history_YYYY-MM__STORECODE` (a month split by store
-            // because it was too large for one request) — match accordingly.
-            const [month, code] = key.replace('daily_history_', '').split('__');
-            const chunk = {};
-            Object.entries(mergedDaily).forEach(([k, rec]) => {
-              if (rec.date.slice(0, 7) === month && (!code || rec.code === code)) chunk[k] = rec;
-            });
-            return saveData(key, chunk);
-          }),
-          ...recoveredWeekly.map(key => {
-            const chunk = {};
-            Object.entries(mergedWeekly).forEach(([k, rec]) => { if (`weekly_history_${rec.startDate.slice(0, 7)}` === key) chunk[k] = rec; });
-            return saveData(key, chunk);
-          }),
-        ]).then(results => {
-          const failed = results.filter(r => !r.ok);
-          if (failed.length) {
-            showToast(`Found ${recoveredDaily.length + recoveredWeekly.length} month(s) of history that only existed on this device — some still won't sync to Supabase (${failed[0].error}). Keep using this device for now.`, 'error');
-          } else {
-            showToast(`Recovered and re-synced ${recoveredDaily.length + recoveredWeekly.length} month(s) of history that had failed to sync earlier.`);
-          }
-        });
+    // Reviews, in the background. reviewsRef is set right here (not only via
+    // its useEffect) so a queued reviews import that was waiting on
+    // reviewsReadyRef sees the loaded list, not null.
+    loadScoped('reviews', token).then(res => {
+      if (cancelled) return;
+      if (res.data) { reviewsRef.current = res.data; setReviews(res.data); }
+      setReviewsLoaded(true);
+      if (res.error) showToast(`Couldn't load reviews (${res.error}) — try refreshing the page.`, 'error');
+      resolveReviews(res.error ? { ok: false, error: res.error } : { ok: true });
+    });
+
+    // Daily history, in the background. Rows collect in `chunks`; the merged
+    // history is published once from this device's copy, once when the
+    // recent months are in, and once at the end (not per batch, so the
+    // heavy tabs don't recompute 20+ times while it loads).
+    const chunks = new Map();
+    // Postgres gives NO ordering guarantee, and a month can (rarely) exist
+    // both as one whole-month row and as per-store split rows. The split
+    // format is only written when a month outgrows one row, so it is always
+    // the newer one: apply whole-month rows first, split rows second.
+    const daySplitPriority = key => (key.includes('__') ? 1 : 0);
+    const publish = () => {
+      if (cancelled) return;
+      const merged = {};
+      [...chunks.keys()].sort((a, b) => daySplitPriority(a) - daySplitPriority(b)).forEach(k => Object.assign(merged, chunks.get(k) || {}));
+      historyRef.current = merged;
+      setHistory(merged);
+    };
+    loadHistoryFast({
+      prefix: 'daily_history_', token,
+      onRows: (rows, phase) => { rows.forEach(r => chunks.set(r.key, r.payload || {})); if (phase === 'cache') publish(); },
+      onRecentDone: () => { publish(); if (!cancelled) setHistoryStatus(s => (s === 'loading' ? 'recent' : s)); },
+    }).then(async res => {
+      // Older server without `list`: load everything the old way.
+      if (!res.fallback) return res;
+      const old = await loadScopedByPrefix('daily_history_', token);
+      if (old.error) return { ok: false, error: old.error };
+      (old.data || []).forEach(c => chunks.set(c.key, c.payload || {}));
+      return { ok: true, keys: (old.data || []).map(c => c.key) };
+    }).then(res => {
+      if (cancelled) return;
+      publish();
+      setHistoryStatus(res.ok ? 'done' : 'error');
+      resolveHistory(res.ok ? { ok: true } : { ok: false, error: res.error });
+      if (!res.ok) { showToast(`Couldn't load all sales history (${res.error}) — try refreshing the page.`, 'error'); return; }
+      // A whole-month row left next to that month's split rows (a prior
+      // cleanup delete failed): the merge above already resolved it, so
+      // clear the superseded row.
+      const keys = res.keys || [];
+      const monthsWithSplit = new Set(keys.filter(k => k.includes('__')).map(k => k.replace('daily_history_', '').split('__')[0]));
+      const staleSingleKeys = keys.filter(k => !k.includes('__') && monthsWithSplit.has(k.replace('daily_history_', '')));
+      if (staleSingleKeys.length && currentUser.role === 'owner') {
+        console.warn(`[history load] clearing ${staleSingleKeys.length} stale single-chunk row(s): ${staleSingleKeys.join(', ')}`);
+        Promise.all(staleSingleKeys.map(k => clearData(k)));
       }
-    }).catch(() => setLoading(false));
+      console.log(`[history load] ${chunks.size} chunk(s), ${Object.keys(historyRef.current || {}).length} store-day record(s).`);
+    }).catch(err => {
+      if (cancelled) return;
+      setHistoryStatus('error');
+      resolveHistory({ ok: false, error: err.message });
+    });
+
+    return () => {
+      cancelled = true;
+      resolveHistory({ ok: false, error: 'Logged out' });
+      resolveReviews({ ok: false, error: 'Logged out' });
+    };
   }, [currentUser]);
 
   useEffect(() => {
@@ -11674,6 +11679,9 @@ export default function App() {
       return null;
     });
     clearSession();
+    // Remove the sales history saved on this device, so the next person on a
+    // shared computer never has it (src/historyLoader.js).
+    clearHistoryCache();
     // Disarm presenter mode for whoever logs in next on this device (the
     // owner's own stored preference is kept and re-armed on their next login).
     setPresenting(initPresenterMode(null));
@@ -11764,6 +11772,10 @@ export default function App() {
     setUploadingReviews(true);
     try {
       const parsed = await parseReviews(file);
+      // Let the background reviews load finish first, so it can't land after
+      // this and put the old list back on screen.
+      await reviewsReadyRef.current;
+      reviewsRef.current = parsed;
       setReviews(parsed);
       const result = await saveData('reviews', parsed);
       if (isConfigured() && !result.ok) {
@@ -12649,6 +12661,10 @@ export default function App() {
 
   const handleImportSalesBatch = useCallback(fileList => {
     const task = async () => {
+      // Never merge into (and then save whole months over) history that is
+      // still loading in the background.
+      const ready = await historyReadyRef.current;
+      if (!ready.ok) { const msg = `Sales history didn’t finish loading (${ready.error}), so nothing was imported. Reload the page and try again.`; showToast(msg, 'error'); return [`✗ ${msg}`]; }
       let working = historyRef.current;
       const touchedMonths = new Set();
       const lpMonths = new Set();
@@ -12779,6 +12795,10 @@ export default function App() {
 
   const handleImportAttendanceBatch = useCallback(fileList => {
     const task = async () => {
+      // Never merge into (and then save whole months over) history that is
+      // still loading in the background.
+      const ready = await historyReadyRef.current;
+      if (!ready.ok) { const msg = `Sales history didn’t finish loading (${ready.error}), so nothing was imported. Reload the page and try again.`; showToast(msg, 'error'); return [`✗ ${msg}`]; }
       let working = historyRef.current;
       const touchedMonths = new Set();
       const lpMonths = new Set();
@@ -12946,6 +12966,8 @@ export default function App() {
   // snapshot mid-save.
   const handleImportReviewsBatch = useCallback(fileList => {
     const task = async () => {
+      const ready = await reviewsReadyRef.current;
+      if (!ready.ok) { const msg = `Reviews didn’t finish loading (${ready.error}), so nothing was imported. Reload the page and try again.`; showToast(msg, 'error'); return [`✗ ${msg}`]; }
       let working = reviewsRef.current;
       const lines = [];
       for (const file of fileList) {
@@ -13208,7 +13230,7 @@ export default function App() {
   // exact same tables via each tab's own current-month fallback (see
   // getCurrentMonthRange). Only actually block on "nothing at all yet".
   const hasHistoricalData = Object.keys(history || {}).length > 0 || Object.keys(weeklyHistory || {}).length > 0;
-  const needsReport = !report && !hasHistoricalData && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'My Numbers' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases' && tab !== 'Gift Cards' && tab !== 'Loss Prevention' && tab !== 'Coupons' && tab !== 'Focus Stylist' && tab !== 'Shear Check' && tab !== 'Focus Stores' && tab !== 'Scheduling';
+  const needsReport = !report && !hasHistoricalData && (historyStatus === 'done' || historyStatus === 'error') && tab !== 'Setup' && tab !== 'Reviews' && tab !== 'Weekly' && tab !== 'Homepage' && tab !== 'My Numbers' && tab !== 'News' && tab !== 'HSA' && tab !== 'Goals' && tab !== 'Leases' && tab !== 'Gift Cards' && tab !== 'Loss Prevention' && tab !== 'Coupons' && tab !== 'Focus Stylist' && tab !== 'Shear Check' && tab !== 'Focus Stores' && tab !== 'Scheduling';
 
   const d = viewing ? { ...viewScope, news: presenterData ? presenterData.news : news, employeeRoster: presenterData ? presenterData.employeeRoster : employeeRoster, reviewNotes: presenterData ? presenterData.reviewNotes : reviewNotes, goldCombs: presenterData ? presenterData.goldCombs : goldCombs, hsaSignups: presenterData ? presenterData.hsaSignups : hsaSignups, newsReads: presenterData ? presenterData.newsReads : newsReads, pointsSummary: presenterData ? presenterData.pointsSummary : pointsSummary }
     : presenterData
@@ -13286,6 +13308,12 @@ export default function App() {
 
       <TabMenu key={currentUser.token} userKey={currentUser.name} token={currentUser.token} tabs={visibleTabs} tab={tab} onPick={setTab} onSaveError={msg => showToast(`Couldn't save your favorite tabs (${msg})`, 'error')} />
       <main className="app-main" key={`${presenting ? 'main-presenting' : 'main-live'}-${viewing ? viewAs.name : ''}`}>
+        {(historyStatus === 'loading' || historyStatus === 'recent' || !reviewsLoaded) && (
+          <div className="bg-load-note" role="status">
+            <span className="spinner small" />
+            {historyStatus === 'loading' ? 'Loading sales history… numbers will fill in shortly.' : historyStatus === 'recent' ? 'Loading older sales history… recent weeks are ready; year-over-year and older dates are still filling in.' : 'Loading reviews…'}
+          </div>
+        )}
         {needsReport && <div className="empty-state"><p className="empty-title">No data yet</p><p>Go to the Setup tab and either upload this week's Stylist Report, or run a Sales-Accrual/Attendance historical import.</p></div>}
         {tab === 'Homepage' && (
           <HomepageTab report={d.report} history={d.history} weeklyHistory={d.weeklyHistory} fallbackEmployeesByStore={d.fallbackEmployeesByStore} news={d.news} events={events} reviews={d.reviews} onOpenNews={handleOpenNews}

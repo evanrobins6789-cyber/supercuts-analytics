@@ -1964,3 +1964,6 @@
 .push-status-ok { color: #1f7a3d; }
 .push-status-warn { color: #9a6700; }
 .push-status-error { color: #b42318; }
+
+/* Background-loading notice (history/reviews still arriving after the dashboard shows) */
+.bg-load-note { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; background: #EEF3F9; color: #142A4A; font-size: 13px; }
