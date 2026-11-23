@@ -7685,6 +7685,20 @@ function ReviewCard({ review, employeeMatch, notes, onAddNote, goldComb, onToggl
 }
 
 const GOLD_CELEBRATION_STARS = ['⭐', '🌟', '⭐', '🌟', '⭐'];
+// Round "back to top" button, shown once the page is scrolled well down
+// (Overview/Employees run 15+ phone screens). Styles: .back-to-top.
+function BackToTop() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setShow(window.scrollY > window.innerHeight * 1.5);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+  if (!show) return null;
+  return <button type="button" className="back-to-top" aria-label="Back to top" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>↑</button>;
+}
+
 function GoldCombCelebration() {
   return (
     <div className="gold-celebration" role="status">
@@ -13292,6 +13306,7 @@ export default function App() {
       {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
       {idleWarning && <div className="toast toast-error">You've been idle — you'll be signed out in under a minute. Move the mouse or tap anywhere to stay signed in.</div>}
       {celebrate && <GoldCombCelebration />}
+      <BackToTop />
 
       <header className="app-header">
         <div className="header-center">

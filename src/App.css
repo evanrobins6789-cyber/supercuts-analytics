@@ -1963,3 +1963,102 @@
 
 /* Background-loading notice (history/reviews still arriving after the dashboard shows) */
 .bg-load-note { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; background: #EEF3F9; color: #142A4A; font-size: 13px; }
+
+/* ═══ Phone + iPhone app layout pass (2026-11-23) ═══════════════════════
+   Everything phone-only lives here, after the rest, so it wins without
+   !important. Desktop is untouched. */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { -webkit-tap-highlight-color: rgba(20,42,74,0.12); }
+
+/* Notch / home bar (the app and Safari with viewport-fit=cover). env() is 0
+   where there's nothing to avoid, so these are no-ops on desktop. */
+.app-header { padding-top: max(12px, env(safe-area-inset-top)); padding-left: max(20px, env(safe-area-inset-left)); padding-right: max(20px, env(safe-area-inset-right)); }
+.app-main { padding-bottom: calc(40px + env(safe-area-inset-bottom)); }
+.toast { top: max(14px, env(safe-area-inset-top)); }
+
+/* Back to top (long pages). */
+.back-to-top {
+  position: fixed; right: max(16px, env(safe-area-inset-right)); bottom: calc(18px + env(safe-area-inset-bottom)); z-index: 45;
+  width: 46px; height: 46px; border-radius: 50%; border: none; background: var(--navy); color: #fff;
+  font-size: 20px; line-height: 1; cursor: pointer; box-shadow: 0 4px 14px rgba(10,16,26,0.28); opacity: 0.92;
+}
+.back-to-top:hover { opacity: 1; }
+
+@media (max-width: 640px) {
+  /* iPhone zooms the whole page into any text box under 16px; 16px stops it. */
+  /* !important: many inputs set their own smaller size; any one under 16px
+     zooms the page, so this has to win everywhere. */
+  input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea { font-size: 16px !important; }
+  select { min-height: 40px; }
+
+  /* Header: one short row (logo left, name + Log Out right) instead of three. */
+  .app-header {
+    grid-template-columns: auto minmax(0, 1fr); justify-items: stretch; gap: 10px;
+    padding-top: max(8px, env(safe-area-inset-top)); padding-bottom: 8px; padding-left: max(14px, env(safe-area-inset-left)); padding-right: max(14px, env(safe-area-inset-right));
+  }
+  .header-center { grid-column: 1; justify-self: start; }
+  .app-header .header-right { grid-column: 2; justify-self: end; justify-content: flex-end; padding-top: 0; min-width: 0; gap: 8px; }
+  .header-logo-img { height: 22px; }
+  .header-user { font-size: 11.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.85; }
+  .app-header .btn-ghost { padding: 8px 12px; flex: none; }
+  /* View-as / presenter pills get their own full row under the logo. */
+  .app-header .presenter-pill { order: -1; flex-basis: 100%; min-height: 36px; }
+  .app-header .header-right:has(.presenter-pill) { flex-wrap: wrap; }
+
+  .tab-nav { padding: 6px 10px; }
+  .tab-menu-btn { min-height: 42px; }
+  .app-main { padding: 12px 12px calc(32px + env(safe-area-inset-bottom)); }
+  .tab-content { gap: 12px; }
+  .section-hint, .date-range-note { font-size: 12px; line-height: 1.45; }
+
+  /* Date range: the two dates side by side, quick buttons on the row below. */
+  .date-range-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; padding: 10px 12px; }
+  .date-range-label { grid-column: 1 / -1; }
+  .date-range-input { width: 100%; min-width: 0; min-height: 40px; padding: 6px 8px; }
+  .date-range-bar > button, .date-range-bar > .date-range-quick-btn, .date-range-clear { grid-column: 1 / -1; min-height: 40px; }
+  .date-range-bar > .date-range-to { text-align: center; }
+  .date-range-bar > .date-range-note { grid-column: 1 / -1; }
+
+  /* Equal-width tiles (long numbers were stretching one column). */
+  .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .summary-tile { padding: 10px 12px; min-width: 0; }
+  .summary-tile-value { font-size: 18px; white-space: nowrap; }
+
+  /* Store / DL cards: 4 stats fit on one row instead of 3 + 1 alone. */
+  .dl-card-stats:has(> :nth-child(4):last-child) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .dl-card-stats { gap: 6px 8px; }
+
+  /* Homepage welcome + pay card: drop the desktop side padding so the card
+     uses the whole width; the two post buttons sit side by side. */
+  .homepage-hero { padding: 14px; }
+  .homepage-hero-left { width: 100%; }
+  .homepage-hero-actions { gap: 8px; margin: 8px 0; }
+  .homepage-hero-action { flex: 1 1 0; min-height: 42px; padding: 9px 12px; }
+  .pay-tracker { flex-basis: 100%; }
+  .homepage-section { padding: 14px; }
+  /* Goal label and "BONUS" collided on a narrow bar; pin BONUS to the right. */
+  .tsth-bar-labels .tsth-bar-label-bonus { left: auto !important; right: 0; transform: none; }
+
+  /* Pay period picker: the select takes the room left between the arrows. */
+  .pay-period-picker select { flex: 1 1 0; min-width: 0; }
+  .pay-period-note { flex-basis: 100%; }
+
+  /* Tables: momentum scrolling sideways, a little tighter. */
+  .ledger-scroll, .sched-table-wrap { -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+  .ledger-table th, .ledger-table td { padding: 6px 8px; }
+
+  /* Tap targets. */
+  .tab-btn, .date-range-quick-btn, .btn-ghost { min-height: 40px; }
+
+  /* Shear Check: the sticky score bar covered a third of the screen. */
+  .sc-footer { padding: 8px 12px; gap: 6px 10px; }
+  .sc-footer-pct { font-size: 26px; }
+  .sc-footer-counts { font-size: 11.5px; }
+  .sc-footer-btns { gap: 8px; flex-wrap: nowrap; width: 100%; }
+  .sc-footer-btns > * { flex: 1 1 auto; min-height: 40px; padding-left: 8px; padding-right: 8px; }
+  .sc-footer-hint { font-size: 11.5px; }
+
+  .back-to-top { width: 44px; height: 44px; }
+}
+/* Shear Check's sticky score bar holds Save buttons at the bottom-right. */
+.app:has(.sc-footer) .back-to-top { display: none; }
