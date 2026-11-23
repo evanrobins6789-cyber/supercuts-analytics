@@ -3,7 +3,7 @@
   "appName": "Supercuts Dashboard",
   "webDir": "native-shell",
   "server": {
-    "url": "https://supercuts-analytics.vercel.app",
+    "url": "https://supercuts-analytics-llxh.vercel.app",
     "errorPath": "index.html"
   },
   "ios": {

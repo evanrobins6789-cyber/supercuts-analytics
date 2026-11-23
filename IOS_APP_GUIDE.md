@@ -1,7 +1,7 @@
 # iPhone app: setup guide
 
 The iPhone app is a native shell (Capacitor, in `ios/`) that opens
-https://supercuts-analytics.vercel.app. Website changes show up in the app
+https://supercuts-analytics-llxh.vercel.app. Website changes show up in the app
 right away. You only rebuild the app for native changes (name, icon, plugins).
 
 - App name: **Supercuts Dashboard** (App Store listing; `capacitor.config.json` → `appName`). Home-screen label: **SC Dashboard** (`CFBundleDisplayName` in `ios/App/App/Info.plist`)
