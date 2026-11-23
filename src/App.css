@@ -51,13 +51,6 @@
   font-family: 'Inter', sans-serif; font-size: 12px; padding: 7px 14px; border-radius: 20px; cursor: pointer;
 }
 .btn-ghost:hover { border-color: var(--red); background: rgba(194,59,59,0.2); }
-/* Big link to the separate Recruitment Tracker site, left of Log Out. */
-.recruit-btn {
-  background: #F2B705; color: #142A4A; border: 2px solid #F2B705; border-radius: 24px;
-  font-family: 'Inter', sans-serif; font-size: 15px; font-weight: 700; padding: 9px 20px;
-  text-decoration: none; white-space: nowrap; cursor: pointer;
-}
-.recruit-btn:hover { background: #ffd23f; border-color: #ffd23f; }
 @media (max-width: 640px) { .header-right { flex-wrap: wrap; justify-content: center; } }
 
 /* ─── Upload ─────────────────────────────────────────────────────────── */
@@ -121,6 +114,9 @@
   position: absolute; top: 0; right: 0; bottom: 0; width: 38px; padding: 0; border: 0; background: transparent; cursor: pointer;
   color: var(--ink-soft); font-size: 17px; line-height: 1;
 }
+/* Outside-site links in the menu (Recruitment Tracker): a tab button that's an <a>. */
+.tab-menu-items .tab-link { display: flex; align-items: center; box-sizing: border-box; text-decoration: none; }
+.tab-link-icon { margin-left: auto; color: var(--gold); }
 .tab-star:hover { color: var(--gold); }
 .tab-star--on { color: var(--gold); }
 .tab-star--active:not(.tab-star--on) { color: #fff; }

@@ -35,7 +35,10 @@ function saveFavorites(userKey, favorites) {
   try { window.localStorage.setItem(favoritesKey(userKey), JSON.stringify(favorites)); } catch { /* storage blocked */ }
 }
 
-export function TabMenu({ tabs, tab, onPick, userKey, token, onSaveError }) {
+// `links` ({ label, href }) are outside sites, listed at the end of the Home
+// group. They open in a new browser tab so the dashboard stays logged in, and
+// can't be starred (favorites are tab names only).
+export function TabMenu({ tabs, tab, onPick, userKey, token, onSaveError, links = [] }) {
   const [open, setOpen] = useState(false);
   const [favorites, setFavorites] = useState(() => loadFavorites(userKey));
   // Skip any saved tab this login can't see (or that no longer exists).
@@ -133,6 +136,13 @@ export function TabMenu({ tabs, tab, onPick, userKey, token, onSaveError }) {
                         </div>
                       );
                     })}
+                    {g.title === 'Home' && links.map(l => (
+                      <div key={l.href} className="tab-menu-item">
+                        <a className="tab-btn tab-link" href={l.href} target="_blank" rel="noopener noreferrer" onClick={() => setOpen(false)}>
+                          {l.label} <span className="tab-link-icon" aria-hidden="true">↗</span>
+                        </a>
+                      </div>
+                    ))}
                   </div>
                 </section>
               ))}
